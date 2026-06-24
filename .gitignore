@@ -1,0 +1,22 @@
+# React Native
+node_modules/
+.expo/
+.expo-shared/
+
+# Django
+venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# Database
+db.sqlite3
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
