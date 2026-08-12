@@ -1,17 +1,21 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, Image } from 'react-native';
+import React, { useEffect, useState, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, useWindowDimensions } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { apiClient } from '../api/client';
-import { syncOfflineData } from '../utils/offlineStorage';
-import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
+import { useTranslation } from '../context/LanguageContext';
+import { repositoryProvider } from '../repositories';
+import { syncManager } from '../utils/syncManager';
+import { formatNumber } from '../utils/formatters';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { Alert } from 'react-native';
 
 export const EmployeeDashboardScreen = ({ navigation }: any) => {
-  const { theme } = useTheme();
-  const { userName, userImage, userRole } = useAuth();
+  const { theme, isDarkMode } = useTheme();
+  const { userName, userImage } = useAuth();
+  const { t } = useTranslation();
+  const { width } = useWindowDimensions();
+
+  const isTablet = width > 600;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [employeeData, setEmployeeData] = useState<any>(null);
@@ -19,165 +23,44 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
     lotsCount: 0,
     tasksCount: 0,
     todayProduction: 0,
-    performance: 0,
+    pendingRequests: 0,
   });
   const [reminders, setReminders] = useState<any[]>([]);
-  const [recentActions, setRecentActions] = useState<any[]>([]);
+  const [recentRequests, setRecentRequests] = useState<any[]>([]);
 
   const fetchDashboardData = async () => {
     try {
-      await syncOfflineData(apiClient);
-
-      // On récupère les données de l'employé connecté
-      const empRes = await apiClient.get('/employees/me/');
-      const employee = empRes.data;
-      setEmployeeData(employee);
-
-      const [prodRes, tasksRes, remindersRes, logsRes, movementsRes] = await Promise.all([
-        apiClient.get('/productions/').catch(() => ({ data: [] })),
-        apiClient.get('/tasks/').catch(() => ({ data: [] })),
-        apiClient.get('/reminders/').catch(() => ({ data: [] })),
-        apiClient.get('/activity-logs/').catch(err => {
-          if (err.response?.status === 403) return { data: null };
-          return { data: [] };
-        }),
-        apiClient.get('/movements/').catch(() => ({ data: [] })),
+      await syncManager.syncAll();
+      const emptyEmpStats = { summary: { farms_count: 0, lots_count: 0, total_chickens: 0, today_production: 0, revenues: 0, expenses: 0, alerts_count: 0, performance: 0, total_bonuses: 0, employees_with_bonuses: 0 } };
+      const [empRes, statsRes] = await Promise.all([
+        repositoryProvider.api.get('/employees/me/').catch(() => ({ data: null })),
+        repositoryProvider.api.get('/farms/statistics/').catch(() => ({ data: emptyEmpStats }))
       ]);
 
-      const productions = Array.isArray(prodRes.data) ? prodRes.data : [];
+      const employee = empRes.data;
+      setEmployeeData(employee);
+      const backendSummary = statsRes.data.summary;
+
+      const [tasksRes, remindersRes, requestsRes] = await Promise.all([
+        repositoryProvider.api.get('/tasks/').catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/reminders/').catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/employee-requests/').catch(() => ({ data: [] })),
+      ]);
+
       const tasks = Array.isArray(tasksRes.data) ? tasksRes.data : [];
-      const allReminders = Array.isArray(remindersRes.data) ? remindersRes.data : [];
-      const movements = Array.isArray(movementsRes.data) ? movementsRes.data : [];
-      const logs = logsRes.data;
+      const requests = Array.isArray(requestsRes.data) ? requestsRes.data : [];
 
-      const upcomingReminders = allReminders
-        .filter((r: any) => r.status === 'PENDING')
-        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
-        .slice(0, 3);
-
-      setReminders(upcomingReminders);
-
-      let filteredLogs = [];
-      if (logs) {
-        filteredLogs = logs.filter((log: any) => log.user_name === userName);
-      } else {
-        // FALLBACK: Reconstruction de l'activité si /activity-logs/ est interdit (403)
-        const combined: any[] = [];
-
-        productions
-          .filter((p: any) => p.created_by_name === userName)
-          .forEach((p: any) => combined.push({
-            module: 'Production',
-            action: 'Saisie Production',
-            description: `${p.casiers_produits} casiers collectés`,
-            date: p.date
-          }));
-
-        const feedRes = await apiClient.get('/feeds/').catch(() => ({ data: [] }));
-        if (Array.isArray(feedRes.data)) {
-          feedRes.data
-            .filter((f: any) => f.created_by_name === userName)
-            .forEach((f: any) => combined.push({
-              module: 'Alimentation',
-              action: 'Distribution Aliment',
-              description: `${f.quantity}kg de ${f.feed_type}`,
-              date: f.date
-            }));
-        }
-
-        const healthRes = await apiClient.get('/health-records/').catch(() => ({ data: [] }));
-        if (Array.isArray(healthRes.data)) {
-          healthRes.data
-            .filter((h: any) => h.created_by_name === userName)
-            .forEach((h: any) => combined.push({
-              module: 'Santé',
-              action: 'Soin / Traitement',
-              description: h.treatment_type,
-              date: h.date
-            }));
-        }
-
-        filteredLogs = combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      }
-      setRecentActions(filteredLogs.slice(0, 2));
-
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayProduction = productions
-        .filter((p: any) => {
-          const prodDate = new Date(p.date);
-          prodDate.setHours(0, 0, 0, 0);
-          return prodDate.getTime() === today.getTime() && (userRole === 'EMPLOYE' ? p.created_by_name === userName : true);
-        })
-        .reduce((sum: number, p: any) => sum + (p.casiers_produits || 0), 0);
-
-      // Performance moyenne pour les lots assignés
-      let avgPerf = 0;
-      if (employee?.lots?.length > 0) {
-        let totalPerf = 0;
-        employee.lots.forEach((lot: any) => {
-          const lotProds = productions.filter((p: any) => p.lot === lot.id);
-          const recentProds = lotProds.filter((p: any) => {
-            const pDate = new Date(p.date);
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-            return pDate >= sevenDaysAgo;
-          });
-          const recentEggs = recentProds.reduce((sum: number, p: any) => sum + (p.casiers_produits * 30), 0);
-          const daysWithData = new Set(recentProds.map(p => p.date)).size || 1;
-
-          const lotMovements = movements.filter((m: any) => m.lot === lot.id);
-          const totalSick = lotMovements.filter((m: any) => m.type === 'MALADE').reduce((sum: number, m: any) => sum + m.quantity, 0);
-          const recovered = lotMovements.filter((m: any) => m.type === 'GUERI').reduce((sum: number, m: any) => sum + m.quantity, 0);
-          const currentSick = Math.max(0, totalSick - recovered);
-
-          totalPerf += calculatePerformance(
-            lot.initial_quantity,
-            lot.current_quantity,
-            currentSick,
-            recentEggs,
-            daysWithData
-          );
-        });
-        avgPerf = Math.round(totalPerf / employee.lots.length);
-      }
+      setReminders((remindersRes.data || []).filter((r: any) => r.status === 'PENDING').slice(0, 3));
+      setRecentRequests(requests.filter((r: any) => r.status === 'PENDING').slice(0, 2));
 
       setStats({
         lotsCount: employee?.lots?.length || 0,
         tasksCount: tasks.filter((t: any) => t.status !== 'TERMINE').length,
-        todayProduction,
-        performance: avgPerf,
+        todayProduction: backendSummary.today_production,
+        pendingRequests: requests.filter((r: any) => r.status === 'PENDING').length,
       });
-
     } catch (error) {
-      console.log('Erreur de chargement du dashboard employé', error);
-      // Fallback if /employees/me/ fails
-      try {
-          const [farmsRes, lotsRes, prodRes, tasksRes] = await Promise.all([
-            apiClient.get('/farms/'),
-            apiClient.get('/lots/'),
-            apiClient.get('/productions/'),
-            apiClient.get('/tasks/'),
-          ]);
-
-          const today = new Date();
-          today.setHours(0, 0, 0, 0);
-          const todayProduction = prodRes.data
-            .filter((p: any) => {
-              const prodDate = new Date(p.date);
-              prodDate.setHours(0, 0, 0, 0);
-              return prodDate.getTime() === today.getTime();
-            })
-            .reduce((sum: number, p: any) => sum + (p.casiers_produits || 0), 0);
-
-          setStats({
-            lotsCount: lotsRes.data.length,
-            tasksCount: tasksRes.data.filter((t: any) => t.status !== 'TERMINE').length,
-            todayProduction,
-          });
-      } catch (e) {
-          console.log('Fallback failed too');
-      }
+      console.log('Error loading dashboard', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -185,40 +68,48 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
   };
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    const unsubscribe = navigation.addListener('focus', fetchDashboardData);
+    return unsubscribe;
+  }, [navigation]);
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchDashboardData();
   };
 
-  const getLogIcon = (module: string) => {
-    switch (module) {
-      case 'Production': return 'egg';
-      case 'Vente': return 'shopping-cart';
-      case 'Alimentation': return 'restaurant';
-      case 'Santé': return 'medication';
-      case 'Mouvement': return 'sync-alt';
-      case 'Rappel': return 'notifications';
-      default: return 'history';
-    }
-  };
+  const styles = useMemo(() => createStyles(theme, isTablet, isDarkMode), [theme, isTablet, isDarkMode]);
 
-  const getLogColor = (module: string) => {
-    switch (module) {
-      case 'Production': return '#FBC02D';
-      case 'Vente': return '#4CAF50';
-      case 'Alimentation': return '#03A9F4';
-      case 'Santé': return '#E91E63';
-      case 'Mouvement': return '#FF5722';
-      default: return theme.colors.primary;
-    }
-  };
+  const StatCard = ({ title, value, icon, color, badge, onPress, isCommunityIcon }: any) => (
+    <TouchableOpacity style={styles.statCard} onPress={onPress} activeOpacity={0.7}>
+      <View style={styles.statHeader}>
+        <View style={[styles.statIconContainer, { backgroundColor: color + '15' }]}>
+          {isCommunityIcon ? (
+            <MaterialCommunityIcons name={icon as any} size={20} color={color} />
+          ) : (
+            <MaterialIcons name={icon as any} size={20} color={color} />
+          )}
+        </View>
+        {badge && <View style={styles.statBadge} />}
+      </View>
+      <View style={styles.statInfo}>
+        <Text style={styles.statValue}>{value}</Text>
+        <Text style={styles.statLabel}>{title}</Text>
+      </View>
+    </TouchableOpacity>
+  );
 
-  const styles = createStyles(theme);
-
-  const farmTabName = (userRole === 'EMPLOYE' || !userRole) ? 'Ma Ferme' : 'Fermes';
+  const ActionItem = ({ label, icon, color, onPress, isCommunityIcon }: any) => (
+    <TouchableOpacity style={styles.actionItem} onPress={onPress} activeOpacity={0.6}>
+      <View style={[styles.actionIconWrapper, { backgroundColor: color + '10', borderColor: color + '30' }]}>
+        {isCommunityIcon ? (
+          <MaterialCommunityIcons name={icon as any} size={24} color={color} />
+        ) : (
+          <MaterialIcons name={icon as any} size={24} color={color} />
+        )}
+      </View>
+      <Text style={styles.actionLabel} numberOfLines={1}>{label}</Text>
+    </TouchableOpacity>
+  );
 
   if (loading) {
     return (
@@ -230,438 +121,236 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+      {/* --- HEADER (Cliquable vers Profil) --- */}
+      <TouchableOpacity
+        style={styles.header}
+        onPress={() => navigation.getParent()?.navigate('Profile')}
+        activeOpacity={0.7}
+      >
         <View>
-          <Text style={styles.welcomeText}>Bonjour, {userName.split(' ')[0]} 👋</Text>
-          <Text style={styles.dateText}>{new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</Text>
+          <Text style={styles.dateText}>{new Date().toLocaleDateString(t('common.dateLocale'), { weekday: 'long', day: 'numeric', month: 'long' })}</Text>
+          <Text style={styles.welcomeText}>{t('profile.greeting')} {userName?.split(' ')[0]}</Text>
         </View>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.avatarContainer}>
+        <View style={styles.avatarWrapper}>
            {userImage ? (
              <Image source={{ uri: userImage }} style={styles.avatarImage} />
            ) : (
              <View style={styles.avatarPlaceholder}>
-                <Text style={styles.avatarInitial}>{userName.charAt(0)}</Text>
+                <Text style={styles.avatarInitial}>{userName?.charAt(0)}</Text>
              </View>
            )}
-        </TouchableOpacity>
-      </View>
+        </View>
+      </TouchableOpacity>
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
         showsVerticalScrollIndicator={false}
       >
-        <TouchableOpacity onPress={() => navigation.navigate('Profile')} activeOpacity={0.9}>
+        {/* --- BANDEAU POSTE (Cliquable vers Profil) --- */}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => navigation.getParent()?.navigate('Profile')}
+        >
           <Card style={styles.workplaceCard}>
-             <View style={styles.workplaceIcon}>
-                <MaterialIcons name="business" size={24} color={theme.colors.text} />
+             <View style={styles.workplaceRow}>
+               <View style={styles.workplaceIcon}>
+                  <MaterialIcons name="business" size={20} color={theme.colors.primary} />
+               </View>
+               <View style={styles.workplaceInfo}>
+                  <Text style={styles.workplaceName}>{employeeData?.farm_name || t('profile.noFarm')}</Text>
+                  <Text style={styles.positionText}>{employeeData?.position || t('profile.employee')}</Text>
+               </View>
+               <View style={[styles.statusBadge, { backgroundColor: theme.colors.success + '20' }]}>
+                  <View style={[styles.statusDot, { backgroundColor: theme.colors.success }]} />
+                  <Text style={[styles.statusText, { color: theme.colors.success }]}>
+                    {employeeData?.status ? t(`status.${employeeData.status.toLowerCase()}`) : t('status.active')}
+                  </Text>
+               </View>
              </View>
-             <View style={styles.workplaceInfo}>
-                <Text style={styles.workplaceLabel}>Espace de travail</Text>
-                <Text style={styles.workplaceName}>{employeeData?.farm_name || 'Ma Ferme'}</Text>
-                <View style={styles.positionBadge}>
-                   <MaterialIcons name="verified-user" size={12} color={theme.colors.primary} />
-                   <Text style={styles.positionText}>{employeeData?.position || 'Employé'}</Text>
-                </View>
-             </View>
-             <MaterialIcons name="chevron-right" size={24} color="rgba(255,255,255,0.5)" />
           </Card>
         </TouchableOpacity>
 
-        <View style={styles.grid}>
-          <TouchableOpacity
-            style={[styles.statCard, { backgroundColor: '#E3F2FD' }]}
-            onPress={() => navigation.navigate(farmTabName)}
-          >
-            <View style={styles.statIconBox}>
-               <MaterialCommunityIcons name="layers-triple" size={22} color="#1E88E5" />
-            </View>
-            <View>
-               <Text style={styles.statValue}>{stats.lotsCount}</Text>
-               <Text style={styles.statLabel}>Mes Lots</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.statCard, { backgroundColor: '#E8F5E9' }]}
-            onPress={() => navigation.navigate('Statistics')}
-          >
-            <View style={styles.statIconBox}>
-               <MaterialIcons name="speed" size={22} color={getPerformanceLabel(stats.performance).color} />
-            </View>
-            <View>
-               <Text style={[styles.statValue, { color: getPerformanceLabel(stats.performance).color }]}>{stats.performance}%</Text>
-               <Text style={styles.statLabel}>Performance</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.statCard, { backgroundColor: '#F3E5F5' }]}
-            onPress={() => navigation.navigate('Tasks')}
-          >
-            <View style={styles.statIconBox}>
-               <MaterialIcons name="playlist-add-check" size={22} color="#8E24AA" />
-            </View>
-            <View>
-               <Text style={styles.statValue}>{stats.tasksCount}</Text>
-               <Text style={styles.statLabel}>Tâches</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.statCard, { backgroundColor: '#FFF8E1' }]}
-            onPress={() => {
-              const lot = employeeData?.lots?.[0];
-              if (lot) {
-                navigation.navigate(farmTabName, { screen: 'LotHistory', params: { lotId: lot.id, lotName: lot.name } });
-              } else {
-                navigation.navigate(farmTabName);
-              }
-            }}
-          >
-            <View style={styles.statIconBox}>
-               <MaterialIcons name="egg" size={22} color="#FBC02D" />
-            </View>
-            <View>
-               <Text style={styles.statValue}>{stats.todayProduction}</Text>
-               <Text style={styles.statLabel}>Prod. Jour</Text>
-            </View>
-          </TouchableOpacity>
+        {/* --- STATISTIQUES --- */}
+        <View style={styles.statsGrid}>
+          <StatCard
+            title={t('profile.myLots')}
+            value={stats.lotsCount}
+            icon="layers"
+            color="#3498db"
+            onPress={() => navigation.navigate('Farms')}
+          />
+          <StatCard
+            title={t('tasks.title')}
+            value={stats.tasksCount}
+            icon="assignment"
+            color="#9b59b6"
+            badge={stats.tasksCount > 0}
+            onPress={() => navigation.getParent()?.navigate('Tasks')}
+          />
+          <StatCard
+            title={t('requests.shortTitle')}
+            value={stats.pendingRequests}
+            icon="send"
+            color="#e67e22"
+            badge={stats.pendingRequests > 0}
+            onPress={() => navigation.getParent()?.navigate('Requests')}
+          />
+          <StatCard
+            title={t('profile.dayProd')}
+            value={formatNumber(stats.todayProduction)}
+            icon="egg"
+            color="#f1c40f"
+            onPress={() => navigation.navigate('Farms')}
+            isCommunityIcon
+          />
         </View>
 
+        {/* --- ACTIONS RAPIDES --- */}
         <View style={styles.sectionHeader}>
-           <Text style={styles.sectionTitle}>Actions Rapides</Text>
+           <Text style={styles.sectionTitle}>{t('dashboard.quickActions')}</Text>
         </View>
-        <View style={styles.quickActionsGrid}>
-           <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate(farmTabName, { screen: 'ActionProduction' })}>
-              <View style={[styles.actionIcon, { backgroundColor: '#FFF9C4' }]}>
-                 <MaterialIcons name="egg" size={30} color="#FBC02D" />
-              </View>
-              <Text style={styles.actionLabel}>Production</Text>
-           </TouchableOpacity>
-
-           <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate(farmTabName, { screen: 'ActionAlimentation' })}>
-              <View style={[styles.actionIcon, { backgroundColor: '#E1F5FE' }]}>
-                 <MaterialCommunityIcons name="food-apple" size={30} color="#039BE5" />
-              </View>
-              <Text style={styles.actionLabel}>Alimentation</Text>
-           </TouchableOpacity>
-
-           <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate(farmTabName, { screen: 'ActionSante' })}>
-              <View style={[styles.actionIcon, { backgroundColor: '#E8F5E9' }]}>
-                 <MaterialIcons name="health-and-safety" size={30} color="#2E7D32" />
-              </View>
-              <Text style={styles.actionLabel}>Santé</Text>
-           </TouchableOpacity>
-
-           <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate(farmTabName, { screen: 'ActionMouvement' })}>
-              <View style={[styles.actionIcon, { backgroundColor: '#FFEBEE' }]}>
-                 <MaterialCommunityIcons name="emoticon-dead" size={30} color="#C62828" />
-              </View>
-              <Text style={styles.actionLabel}>Mortalité</Text>
-           </TouchableOpacity>
+        <View style={styles.actionsGrid}>
+           <ActionItem label={t('attendance.shortTitle')} icon="access-time" color="#00897B" onPress={() => navigation.getParent()?.navigate('Attendance')} />
+           <ActionItem label={t('actions.production')} icon="egg" color="#FBC02D" onPress={() => navigation.navigate('Farms')} isCommunityIcon />
+           <ActionItem label={t('actions.feed')} icon="grass" color="#039BE5" onPress={() => navigation.navigate('Farms')} />
+           <ActionItem label={t('actions.health')} icon="medication" color="#E91E63" onPress={() => navigation.navigate('Farms')} />
+           <ActionItem label={t('actions.movement')} icon="sync-alt" color="#FF5722" onPress={() => navigation.navigate('Farms')} />
+           <ActionItem label={t('profile.stats.payments')} icon="payments" color="#8E24AA" onPress={() => navigation.getParent()?.navigate('Payroll')} />
         </View>
 
-        {recentActions.length > 0 && (
-          <View style={styles.historySection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Mon activité récente</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('GlobalHistory')}>
-                 <Text style={styles.seeAllText}>Tout voir</Text>
-              </TouchableOpacity>
+        {/* --- LISTES DYNAMIQUES --- */}
+        <View style={styles.bottomSection}>
+          {recentRequests.length > 0 && (
+            <View style={styles.listSection}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{t('requests.title')}</Text>
+              </View>
+              {recentRequests.map((req, i) => (
+                <TouchableOpacity key={i} style={styles.listItem} onPress={() => navigation.getParent()?.navigate('Requests')}>
+                  <View style={[styles.listIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+                    <MaterialIcons name="mail-outline" size={20} color={theme.colors.primary} />
+                  </View>
+                  <View style={styles.listContent}>
+                    <Text style={styles.listTitle}>{t(`requests.types.${req.type}`)}</Text>
+                    <Text style={styles.listSub} numberOfLines={1}>{req.description}</Text>
+                  </View>
+                  <MaterialIcons name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              ))}
             </View>
-            {recentActions.map((act: any, i: number) => (
-              <Card key={i} style={styles.logCard}>
-                <View style={[styles.logIconBox, { backgroundColor: getLogColor(act.module) + '15' }]}>
-                  <MaterialIcons name={getLogIcon(act.module) as any} size={20} color={getLogColor(act.module)} />
-                </View>
-                <View style={styles.logInfo}>
-                  <Text style={styles.logAction}>{act.action}</Text>
-                  <Text style={styles.logDesc} numberOfLines={1}>{act.description}</Text>
-                  <Text style={styles.logDate}>{new Date(act.date).toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</Text>
-                </View>
-              </Card>
-            ))}
-          </View>
-        )}
+          )}
 
-        {reminders.length > 0 && (
-          <View style={styles.remindersSection}>
-            <Text style={styles.sectionTitle}>Rappels prioritaires</Text>
-            {reminders.map((reminder) => (
-              <TouchableOpacity key={reminder.id} onPress={() => navigation.navigate('Reminders')}>
-                <Card style={styles.reminderItem}>
-                  <View style={styles.reminderIconBox}>
-                    <MaterialIcons name="notifications-active" size={20} color={theme.colors.primary} />
+          {reminders.length > 0 && (
+            <View style={styles.listSection}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{t('profile.priorityReminders')}</Text>
+              </View>
+              {reminders.map((r, i) => (
+                <TouchableOpacity key={i} style={styles.listItem} onPress={() => navigation.getParent()?.navigate('Reminders')}>
+                  <View style={[styles.listIcon, { backgroundColor: '#FFEBEE' }]}>
+                    <MaterialIcons name="notifications-none" size={20} color={theme.colors.danger} />
                   </View>
-                  <View style={styles.reminderInfo}>
-                    <Text style={styles.reminderTitle}>{reminder.title}</Text>
-                    <Text style={styles.reminderDate}>
-                      {new Date(reminder.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}
-                    </Text>
+                  <View style={styles.listContent}>
+                    <Text style={styles.listTitle}>{r.title}</Text>
+                    <Text style={styles.listSub}>{new Date(r.date).toLocaleDateString(t('common.dateLocale'))}</Text>
                   </View>
-                  <View style={styles.typeBadge}>
-                    <Text style={styles.typeText}>{reminder.type}</Text>
-                  </View>
-                </Card>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
+                  <MaterialIcons name="chevron-right" size={20} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    paddingBottom: theme.spacing.s,
+    paddingHorizontal: 20,
+    paddingTop: 55,
+    paddingBottom: 15,
   },
-  welcomeText: { fontSize: 22, fontWeight: '900', color: theme.colors.text },
-  dateText: { fontSize: 13, color: theme.colors.textSecondary, textTransform: 'capitalize' },
-  avatarContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    overflow: 'hidden',
-  },
-  avatarPlaceholder: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarInitial: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#000',
-  },
-  avatarImage: {
-    width: '100%',
-    height: '100%',
-  },
-  scroll: { padding: theme.spacing.m, paddingBottom: 40 },
-  workplaceCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.xl,
-    marginBottom: theme.spacing.l,
-    ...theme.shadows.medium,
-  },
-  workplaceIcon: {
+  dateText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+  welcomeText: { fontSize: 24, fontWeight: '900', color: theme.colors.text, marginTop: 2 },
+  avatarWrapper: {
     width: 48,
     height: 48,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+    padding: 2,
+    ...theme.shadows.light,
   },
-  workplaceInfo: {
-    flex: 1,
+  avatarImage: { width: '100%', height: '100%', borderRadius: 22 },
+  avatarPlaceholder: { width: '100%', height: '100%', borderRadius: 22, backgroundColor: theme.colors.primary, justifyContent: 'center', alignItems: 'center' },
+  avatarInitial: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF' },
+
+  scroll: { paddingHorizontal: 20, paddingBottom: 40 },
+
+  workplaceCard: {
+    padding: 15,
+    borderRadius: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
   },
-  workplaceLabel: {
-    fontSize: 11,
-    color: theme.colors.text,
-    opacity: 0.8,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  workplaceName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginVertical: 2,
-  },
-  positionBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    alignSelf: 'flex-start',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-    marginTop: 2,
-  },
-  positionText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: theme.colors.primary,
-    marginLeft: 4,
-  },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: theme.spacing.s,
-  },
+  workplaceRow: { flexDirection: 'row', alignItems: 'center' },
+  workplaceIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: theme.colors.primary + '20', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  workplaceInfo: { flex: 1 },
+  workplaceName: { fontSize: 16, fontWeight: '800', color: theme.colors.text },
+  positionText: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2, fontWeight: '600' },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20 },
+  statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  statusText: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase' },
+
+  statsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 20 },
   statCard: {
     width: '48%',
-    padding: theme.spacing.m,
-    paddingVertical: theme.spacing.l,
-    borderRadius: theme.borderRadius.xl,
-    justifyContent: 'space-between',
-    marginBottom: theme.spacing.m,
-    ...theme.shadows.light,
-  },
-  statIconBox: {
-    marginBottom: 8,
-  },
-  statLabel: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-  statValue: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: theme.colors.text,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: theme.spacing.m,
-  },
-  seeAllText: {
-    fontSize: 13,
-    color: theme.colors.primary,
-    fontWeight: '700',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  quickActionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    marginBottom: theme.spacing.l,
-  },
-  actionItem: {
-    width: '48%',
     backgroundColor: theme.colors.surface,
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-    alignItems: 'center',
-    marginBottom: theme.spacing.m,
+    borderRadius: 20,
+    padding: 15,
+    marginBottom: 15,
     borderWidth: 1,
-    borderColor: theme.colors.border + '30',
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
   },
-  actionIcon: {
-    width: 54,
-    height: 54,
-    borderRadius: 18,
-    justifyContent: 'center',
+  statHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  statIconContainer: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  statBadge: { width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.danger, position: 'absolute', top: -4, right: 0, borderWidth: 2, borderColor: theme.colors.surface },
+  statInfo: {},
+  statValue: { fontSize: 22, fontWeight: '900', color: theme.colors.text },
+  statLabel: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600', marginTop: 2 },
+
+  sectionHeader: { marginBottom: 15, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle: { fontSize: 18, fontWeight: '800', color: theme.colors.text },
+
+  actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginBottom: 25 },
+  actionItem: { width: '31%', alignItems: 'center', marginBottom: 20 },
+  actionIconWrapper: { width: 60, height: 60, borderRadius: 18, justifyContent: 'center', alignItems: 'center', marginBottom: 8, borderWidth: 1 },
+  actionLabel: { fontSize: 11, fontWeight: '700', color: theme.colors.text },
+
+  bottomSection: { marginTop: 10 },
+  listSection: { marginBottom: 25 },
+  listItem: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    padding: 12,
+    borderRadius: 16,
     marginBottom: 10,
-  },
-  actionLabel: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  historySection: {
-    marginTop: theme.spacing.s,
-    marginBottom: theme.spacing.l,
-  },
-  logCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    marginBottom: theme.spacing.s,
-    borderRadius: theme.borderRadius.l,
     borderWidth: 1,
-    borderColor: theme.colors.border + '40',
-    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.border,
   },
-  logIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  logInfo: {
-    flex: 1,
-  },
-  logAction: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  logDesc: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginVertical: 2,
-  },
-  logDate: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    alignSelf: 'flex-end',
-  },
-  remindersSection: {
-    marginTop: theme.spacing.s,
-  },
-  reminderItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    marginBottom: theme.spacing.s,
-    borderRadius: theme.borderRadius.l,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
-  },
-  reminderIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: theme.colors.primary + '15',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  reminderInfo: {
-    flex: 1,
-  },
-  reminderTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  reminderDate: {
-    fontSize: 11,
-    color: theme.colors.textSecondary,
-  },
-  typeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: theme.colors.primary + '10',
-    borderRadius: 8,
-  },
-  typeText: {
-    fontSize: 9,
-    fontWeight: 'bold',
-    color: theme.colors.primary,
-  },
+  listIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
+  listContent: { flex: 1 },
+  listTitle: { fontSize: 14, fontWeight: '700', color: theme.colors.text },
+  listSub: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },
 });

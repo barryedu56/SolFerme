@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
+import { useTranslation } from '../context/LanguageContext';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface DatePickerProps {
@@ -11,6 +12,7 @@ interface DatePickerProps {
 
 export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }) => {
   const { theme } = useTheme();
+  const { t } = useTranslation();
   const [showModal, setShowModal] = useState(false);
 
   // Parse current value or use today
@@ -18,8 +20,14 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
   const [viewDate, setViewDate] = useState(new Date(currentDate));
 
   const months = [
-    'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
-    'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'
+    t('months.jan'), t('months.feb'), t('months.mar'), t('months.apr'),
+    t('months.may'), t('months.jun'), t('months.jul'), t('months.aug'),
+    t('months.sep'), t('months.oct'), t('months.nov'), t('months.dec')
+  ];
+
+  const weekDays = [
+    t('days.sun'), t('days.mon'), t('days.tue'), t('days.wed'),
+    t('days.thu'), t('days.fri'), t('days.sat')
   ];
 
   const daysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
@@ -31,8 +39,6 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
     const daysCount = daysInMonth(year, month);
     const firstDay = firstDayOfMonth(year, month);
 
-    // Adjust for Monday start if needed, but standard getDay() is 0=Sun, 1=Mon...
-    // We'll use 0 as Sunday.
     const days = [];
     for (let i = 0; i < firstDay; i++) {
       days.push(null); // Empty slots
@@ -88,6 +94,12 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
     );
   };
 
+  const formatDate = (dateStr: string) => {
+    if (!dateStr) return t('common.noData');
+    const d = new Date(dateStr);
+    return d.toLocaleDateString(t('common.dateLocale'));
+  };
+
   return (
     <View style={styles.container}>
       {label && <Text style={[styles.label, { color: theme.colors.textSecondary }]}>{label}</Text>}
@@ -100,7 +112,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
         }}
       >
         <Text style={[styles.valueText, { color: theme.colors.text }]}>
-          {value || 'Choisir une date'}
+          {value ? formatDate(value) : t('common.chooseDate')}
         </Text>
         <MaterialIcons name="calendar-today" size={20} color={theme.colors.primary} />
       </TouchableOpacity>
@@ -133,7 +145,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
             </View>
 
             <View style={styles.weekDays}>
-              {['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'].map(d => (
+              {weekDays.map(d => (
                 <Text key={d} style={[styles.weekDayText, { color: theme.colors.textSecondary }]}>{d}</Text>
               ))}
             </View>
@@ -151,7 +163,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
               style={[styles.closeButton, { backgroundColor: theme.colors.background }]}
               onPress={() => setShowModal(false)}
             >
-              <Text style={{ color: theme.colors.text, fontWeight: 'bold' }}>Fermer</Text>
+              <Text style={{ color: theme.colors.text, fontWeight: 'bold' }}>{t('common.back')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -169,7 +181,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 14,
     borderRadius: 12,
-    borderWidth: 1,
+    borderWidth: 0.8,
   },
   valueText: { fontSize: 16 },
   modalOverlay: {

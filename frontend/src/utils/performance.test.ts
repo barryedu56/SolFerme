@@ -1,4 +1,4 @@
-import { calculatePerformance } from './performance.ts';
+import { calculatePerformance } from './performance';
 
 /**
  * Test Lot:

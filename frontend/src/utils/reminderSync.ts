@@ -24,8 +24,11 @@ export async function syncReminders(reminders: any[]) {
           rDate.setHours(8, 0, 0, 0);
         }
 
-        // Si c'est dans le futur et pas encore programmé
-        if (rDate > new Date() && !isScheduled) {
+        // On autorise la planification si c'est dans le futur ou si c'est tout récent (moins d'une minute)
+        // pour permettre le déclenchement immédiat de test
+        const isRecentOrFuture = rDate.getTime() > new Date().getTime() - 60000;
+
+        if (isRecentOrFuture && !isScheduled) {
           const notifId = await scheduleReminderNotification(r);
           if (notifId) {
             scheduledIds[r.id] = notifId;
@@ -43,14 +46,38 @@ export async function syncReminders(reminders: any[]) {
       }
     }
 
-    // 2. Nettoyer les notifications pour les rappels qui n'existent plus dans la liste (supprimés)
-    const currentReminderIds = reminders.map(r => r.id.toString());
+    // 2. Nettoyer les notifications pour les rappels qui n'existent plus dans la liste
+    //    (supprimés, passés, ou ré-attribués d'un ID négatif → positif au sync).
+    const currentReminderIds = new Set(reminders.map(r => r.id.toString()));
+
+    // 2a. Via la map scheduled_reminder_ids.
     for (const rid in scheduledIds) {
-      if (!currentReminderIds.includes(rid)) {
+      if (!currentReminderIds.has(rid)) {
         await cancelNotification(scheduledIds[rid]);
         delete scheduledIds[rid];
         await AsyncStorage.removeItem(`notif_reminder_${rid}`);
       }
+    }
+
+    // 2b. Via les clés notif_reminder_* non enregistrées dans la map. C'est le cas des
+    //     rappels planifiés uniquement par ReminderScreen (création/édition) — en
+    //     particulier les rappels créés HORS-LIGNE sous un ID négatif, qui deviennent
+    //     orphelins une fois l'ID ré-attribué à un positif. Sans ce balayage, leur
+    //     notification était conservée et doublonnait celle planifiée sous le nouvel ID.
+    try {
+      const allKeys = await AsyncStorage.getAllKeys();
+      const notifKeys = allKeys.filter((k: string) => k.startsWith('notif_reminder_'));
+      for (const key of notifKeys) {
+        const rid = key.replace('notif_reminder_', '');
+        if (rid && !currentReminderIds.has(rid)) {
+          const orphanNotifId = await AsyncStorage.getItem(key).catch(() => null);
+          if (orphanNotifId) await cancelNotification(orphanNotifId);
+          delete scheduledIds[rid];
+          await AsyncStorage.removeItem(key);
+        }
+      }
+    } catch (e) {
+      console.warn('syncReminders: balayage des clés notif_reminder_* ajourné', e);
     }
 
     await AsyncStorage.setItem('scheduled_reminder_ids', JSON.stringify(scheduledIds));

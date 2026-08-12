@@ -1,186 +1,141 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
-import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { exportProductionData } from '../utils/reportGenerator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatNumber, formatCurrency } from '../utils/formatters';
-
+import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
+import { getErrorMessage } from '../utils/errors';
+import { useAutoRefreshData } from '../hooks/useDataChange';
 
 export const LotDetailScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const { lotName, lotId, farmId, farmName } = route.params;
+  const { userRole } = useAuth();
+  const { lotName, lotId, farmId, farmName } = route.params || {};
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lotData, setLotData] = useState<any>(null);
-  const [allProductions, setAllProductions] = useState<any[]>([]);
   const [performance, setPerformance] = useState(0);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [recentLogs, setRecentLogs] = useState<any[]>([]);
+  const [allProductions, setAllProductions] = useState<any[]>([]);
+  const [conversions, setConversions] = useState<any[]>([]);
 
   const fetchLotData = async () => {
+    if (!lotId) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
-      const role = await AsyncStorage.getItem('user_role');
-      setUserRole(role);
-      const [lotRes, prodRes, salesRes, feedsRes, healthRes, movementsRes, feedPurchasesRes, healthPurchasesRes] = await Promise.all([
-        apiClient.get(`/lots/${lotId}/`),
-        apiClient.get('/productions/'),
-        apiClient.get('/sales/'),
-        apiClient.get('/feeds/'),
-        apiClient.get('/health-records/'),
-        apiClient.get('/movements/'),
-        apiClient.get('/feed-purchases/'),
-        apiClient.get('/health-purchases/'),
+      const emptyStats = {
+        info: { id: lotId, farm_id: farmId, farm: farmId, name: lotName, animal_type: 'Pondeuses', status: 'ACTIF', breed: '', purchase_date: new Date().toISOString(), current_quantity: 0, initial_quantity: 0, supplier: '' },
+        total_casiers: 0, total_oeufs: 0, total_oeufs_casses: 0, total_casiers_vendables: 0,
+        available_stock: 0, available_casses: 0, revenues: 0, expenses: 0, profit: 0,
+        dead_count: 0, current_sick: 0, recovered_count: 0, total_sick: 0,
+        total_feed_consumed: 0, last_feed_date: null, last_preparation_date: null,
+        raw_materials_detail: [], prepared_feeds_detail: [],
+        health_stock: 0, health_detail: [], total_treatments: 0, last_health_record: null,
+        performance: 0, prod_today: 0, prod_week: 0, feed_stock: 0, raw_material_stock: 0,
+        production_by_period: [], sales_by_period: [],
+      };
+
+      const [statsRes, logsRes, remindersRes, productionsRes, conversionsRes] = await Promise.all([
+        repositoryProvider.api.get(`/lots/${lotId}/statistics/`).catch(() => ({ data: emptyStats })),
+        repositoryProvider.api.get(`/activity-logs/?lot=${lotId}&limit=20`).catch(() => ({ data: { results: [] } })),
+        repositoryProvider.api.get(`/reminders/?lot=${lotId}`).catch(() => ({ data: { results: [] } })),
+        repositoryProvider.api.get(`/productions/?lot=${lotId}&limit=1000`).catch(() => ({ data: { results: [] } })),
+        repositoryProvider.api.get(`/egg-conversions/?lot=${lotId}`).catch(() => ({ data: { results: [] } })),
       ]);
 
-      const lotInfo = lotRes.data;
+      const stats = statsRes.data;
+      const lotInfo = stats.info;
+      const logs = Array.isArray(logsRes.data) ? logsRes.data : (logsRes.data?.results || []);
+      const productions = Array.isArray(productionsRes.data) ? productionsRes.data : (productionsRes.data?.results || []);
+      const reminders = Array.isArray(remindersRes.data) ? remindersRes.data : (remindersRes.data?.results || []);
+      const conversions = Array.isArray(conversionsRes.data) ? conversionsRes.data : (conversionsRes.data?.results || []);
+      const lotReminders = reminders
+        .filter((r: any) => r.lot === lotId && r.status === 'PENDING')
+        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-      const lotProds = prodRes.data.filter((p: any) => p.lot === lotId);
-      setAllProductions(lotProds);
-      const lotSales = salesRes.data.filter((s: any) => s.lot === lotId);
-      const lotFeeds = feedsRes.data.filter((f: any) => f.lot === lotId);
-      const lotHealth = healthRes.data.filter((h: any) => h.lot === lotId);
-      const lotMovements = movementsRes.data.filter((m: any) => m.lot === lotId);
+      const isEmployee = userRole === 'EMPLOYE';
 
-      // Filterm purchases by lot if they are linked
-      const lotFeedPurchases = feedPurchasesRes.data.filter((fp: any) => fp.lot === lotId);
-      const lotHealthPurchases = healthPurchasesRes.data.filter((hp: any) => hp.lot === lotId);
+      const mappedLogs = logs.map((log: any) => {
+        let description = log.description;
+        if (isEmployee && (log.module === 'Vente' || log.module === 'Finance' || log.action.includes('Achat'))) {
+          description = description.replace(/(\d[\d\s]*\s*GNF|\d[\d\s]*\s*FG)/gi, '*** GNF');
+        }
 
-      const totalCasiers = lotProds.reduce((sum: number, p: any) => sum + (p.casiers_produits || 0), 0);
-      const totalOeufsCassesProduced = lotProds.reduce((sum: number, p: any) => sum + (p.oeufs_casses || 0), 0);
-      const totalCasiersVendables = lotProds.reduce((sum: number, p: any) => sum + (p.casiers_vendables || 0), 0);
+        return {
+          ...log,
+          description,
+          // Pour LotDetailScreen, on mappe module sur type si besoin par le composant
+          type: log.module === 'Production' ? t('actions.production') :
+                log.module === 'Vente' ? t('actions.sale') :
+                log.module === 'Alimentation' ? t('actions.nutrition') :
+                log.module === 'Santé' ? t('actions.health') :
+                log.module === 'Mouvement' ? t('actions.movement') : log.module
+        };
+      });
 
-      const totalSoldNormaux = lotSales
-        .filter((s: any) => s.product_type === 'Œufs Normaux' || s.product_type === 'Oeufs')
-        .reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
+      // 🔧 Ne dédupliquer que les doublons exacts (même id), pas toutes les actions liées au même entity/related_id.
+      // Cela permet de conserver l'historique complet des opérations sur un même lot.
+      const seenLogs = new Map<number, any>();
+      for (const log of mappedLogs) {
+        const existing = seenLogs.get(log.id);
+        if (!existing) {
+          seenLogs.set(log.id, log);
+        } else if (new Date(log.date).getTime() === new Date(existing.date).getTime()) {
+          if (log.id > 0 && existing.id < 0) {
+            seenLogs.set(log.id, log);
+          }
+        }
+      }
+      const dedupLogs = Array.from(seenLogs.values()).slice(0, 5);
 
-      const totalSoldCasses = lotSales
-        .filter((s: any) => s.product_type === 'Œufs Cassés')
-        .reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
-
-      const availableStock = totalCasiersVendables - totalSoldNormaux;
-      const availableCasses = (totalOeufsCassesProduced / 30) - totalSoldCasses;
-
-      const totalRevenues = lotSales.reduce((sum: number, s: any) => sum + parseFloat(s.amount_paid || 0), 0);
-
-      // Somme des achats réels (nouvelle logique) + anciens enregistrements qui auraient un coût
-      const feedCosts = lotFeedPurchases.reduce((sum: number, fp: any) => sum + parseFloat(fp.total_price || 0), 0) +
-                        lotFeeds.reduce((sum: number, f: any) => sum + parseFloat(f.cost || 0), 0);
-
-      const healthCosts = lotHealthPurchases.reduce((sum: number, hp: any) => sum + parseFloat(hp.total_price || 0), 0) +
-                          lotHealth.reduce((sum: number, h: any) => sum + parseFloat(h.cost || 0), 0);
-
-      const deadCount = lotMovements.filter((m: any) => m.type === 'MORT').reduce((sum: number, m: any) => sum + m.quantity, 0);
-      const totalSick = lotMovements.filter((m: any) => m.type === 'MALADE').reduce((sum: number, m: any) => sum + m.quantity, 0);
-      const recoveredCount = lotMovements.filter((m: any) => m.type === 'GUERI').reduce((sum: number, m: any) => sum + m.quantity, 0);
-      const currentSick = Math.max(0, totalSick - recoveredCount);
-
-      // Calculate Performance
-      const recentProds = lotProds
-        .filter((p: any) => {
-          const pDate = new Date(p.date);
-          const sevenDaysAgo = new Date();
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-          return pDate >= sevenDaysAgo;
-        });
-
-      const recentProductionEggs = recentProds.reduce((sum: number, p: any) => sum + (p.casiers_produits * 30), 0);
-      const daysWithData = new Set(recentProds.map(p => p.date)).size || 1;
-
-      const perf = calculatePerformance(
-        lotInfo.initial_quantity,
-        lotInfo.current_quantity,
-        currentSick,
-        recentProductionEggs,
-        daysWithData
-      );
-      setPerformance(perf);
-
-      const lotPurchasePrice = parseFloat(lotInfo.purchase_price || 0);
-      const totalLotExpenses = feedCosts + healthCosts + lotPurchasePrice;
+      setPerformance(stats.performance);
+      setAllProductions(productions);
+      setConversions(conversions);
+      setRecentLogs(dedupLogs);
 
       setLotData({
         info: lotInfo,
-        totalCasiers,
-        totalOeufsCasses: totalOeufsCassesProduced,
-        totalCasiersVendables,
-        revenues: totalRevenues,
-        expenses: totalLotExpenses,
-        profit: totalRevenues - totalLotExpenses,
-        deadCount,
-        currentSick,
-        recoveredCount,
-        availableStock,
-        availableCasses,
-        recentActions: [
-          ...lotProds.map((p: any) => ({
-            id: p.id,
-            type: t('actions.production'),
-            screen: 'ActionProduction',
-            date: p.date,
-            desc: `${p.casiers_vendables}/${p.casiers_produits} ${t('production.trays')}`,
-            color: theme.colors.primary,
-            params: { lotId, lotName, item: p }
-          })),
-          ...lotSales.map((s: any) => ({
-            id: s.id,
-            type: t('actions.sale'),
-            screen: 'ActionVente',
-            date: s.date,
-            desc: `+${formatCurrency(s.amount_paid)}`,
-            color: theme.colors.success,
-            params: { lotId, lotName, item: s }
-          })),
-          ...lotFeeds.map((f: any) => ({
-            id: f.id,
-            type: t('actions.feed'),
-            screen: 'ActionAlimentation',
-            date: f.date,
-            desc: `${formatNumber(f.quantity_kg)} kg`,
-            color: theme.colors.warning,
-            params: { lotId, lotName, farmId, item: f, activeTab: 'distribution' }
-          })),
-          ...lotFeedPurchases.map((fp: any) => ({
-            id: fp.id,
-            type: "Achat Aliment",
-            screen: 'ActionAlimentation',
-            date: fp.date,
-            desc: `+${formatNumber(fp.quantity_kg)} kg`,
-            color: theme.colors.success,
-            params: { lotId, lotName, farmId, item: fp, activeTab: 'purchase' }
-          })),
-          ...lotHealth.map((h: any) => ({
-            id: h.id,
-            type: t('actions.health'),
-            screen: 'ActionSante',
-            date: h.date,
-            desc: h.product_name,
-            color: theme.colors.info || '#2196F3',
-            params: { lotId, lotName, farmId, item: h, activeTab: 'treatment' }
-          })),
-          ...lotHealthPurchases.map((hp: any) => ({
-            id: hp.id,
-            type: "Achat Santé",
-            screen: 'ActionSante',
-            date: hp.date,
-            desc: `+${formatNumber(hp.quantity)}`,
-            color: theme.colors.success,
-            params: { lotId, lotName, farmId, item: hp, activeTab: 'purchase' }
-          })),
-          ...(userRole !== 'EMPLOYE' ? lotMovements.map((m: any) => ({
-            id: m.id,
-            type: t('actions.movement'),
-            screen: 'ActionMouvement',
-            date: m.date,
-            desc: `${m.quantity} ${m.type}`,
-            color: theme.colors.danger,
-            params: { lotId, lotName, farmId, item: m }
-          })) : [])
-        ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 3)
+        totalCasiers: stats.total_casiers,
+        totalOeufs: stats.total_oeufs,
+        totalOeufsCasses: stats.total_oeufs_casses,
+        totalCasiersVendables: stats.total_casiers_vendables,
+        revenues: isEmployee ? 0 : stats.revenues,
+        expenses: isEmployee ? 0 : stats.expenses,
+        profit: isEmployee ? 0 : stats.profit,
+        deadCount: stats.dead_count,
+        currentSick: stats.current_sick,
+        recoveredCount: stats.recovered_count,
+        totalSick: stats.total_sick,
+        availableStock: stats.available_stock,
+        availableCasses: stats.available_casses,
+        prodToday: stats.prod_today,
+        prodWeek: stats.prod_week,
+        feedStock: stats.feed_stock,
+        rawMaterialStock: stats.raw_material_stock,
+        rawMaterialsDetail: stats.raw_materials_detail || [],
+        preparedFeedsDetail: stats.prepared_feeds_detail || [],
+        lastPreparationDate: stats.last_preparation_date,
+        totalFeedConsumed: stats.total_feed_consumed,
+        lastFeedDate: stats.last_feed_date,
+        healthStock: stats.health_stock,
+        health_detail: stats.health_detail || [],
+        totalTreatments: stats.total_treatments,
+        lastHealthRecord: stats.last_health_record,
+        reminders: lotReminders,
+        recentActions: mappedLogs
       });
 
     } catch (error) {
@@ -190,6 +145,23 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       setRefreshing(false);
     }
   };
+
+  const getStockStatus = (quantity: number, type: 'raw' | 'prep' | 'health') => {
+    let lowThreshold = 50; // default for kg
+    if (type === 'health') {
+        lowThreshold = 5;
+    }
+
+    if (quantity <= 0) return { label: 'Rupture', color: theme.colors.danger };
+    if (quantity < lowThreshold) return { label: 'Stock faible', color: theme.colors.warning };
+    return { label: 'Stock normal', color: theme.colors.success };
+  };
+
+  useAutoRefreshData(
+    ['lots', 'activity_logs', 'reminders', 'productions', 'egg_conversions'],
+    fetchLotData,
+    200
+  );
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
@@ -203,20 +175,237 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
     fetchLotData();
   };
 
+  const handleDeleteLot = () => {
+    Alert.alert(
+      t('common.delete') || 'Supprimer',
+      t('lots.deleteConfirm'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('common.delete'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await repositoryProvider.api.delete(`/lots/${lotId}/`);
+              toast.success(t('common.success'), t('lots.deleteSuccess'));
+              navigation.goBack();
+            } catch (error: any) {
+              toast.error(t('common.error'), getErrorMessage(error, t('lots.deleteError')));
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleArchiveLot = () => {
+    Alert.alert(
+      'Archiver le lot',
+      'Voulez-vous vraiment archiver ce lot ? Les données seront conservées mais le lot ne sera plus actif.',
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: 'Archiver',
+          style: 'default',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await repositoryProvider.api.post(`/lots/${lotId}/archive/`);
+              toast.success(t('common.success') || 'Succès', t('lots.archiveSuccess') || 'Le lot a été archivé avec succès.');
+              fetchLotData();
+            } catch (error: any) {
+              toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de l\'archivage du lot.'));
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleReactivateLot = () => {
+    Alert.alert(
+      'Réactiver le lot',
+      'Voulez-vous vraiment réactiver ce lot ? Les actions métier redeviendront disponibles.',
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: 'Réactiver',
+          style: 'default',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              await repositoryProvider.api.post(`/lots/${lotId}/reactivate/`);
+              toast.success(t('common.success') || 'Succès', t('lots.reactivateSuccess') || 'Le lot a été réactivé avec succès.');
+              fetchLotData();
+            } catch (error: any) {
+              toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de la réactivation du lot.'));
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleExportProduction = async () => {
     if (allProductions.length === 0) {
-      Alert.alert(t('common.info') || 'Info', t('lots.exportNoData'));
+      toast.info(t('common.info') || 'Info', t('lots.exportNoData'));
       return;
     }
     try {
-      await exportProductionData(allProductions, lotName);
+      await exportProductionData(allProductions, lotName, t);
     } catch (error) {
-      Alert.alert(t('common.error'), t('lots.exportError'));
+      toast.error(t('common.error'), t('lots.exportError'));
     }
+  };
+
+  const handleCancelAction = (item: any) => {
+    Alert.alert(
+      t('finance.confirmCancelTitle'),
+      t('finance.confirmCancelMsg'),
+      [
+        { text: t('common.no'), style: 'cancel' },
+        {
+          text: t('finance.yesCancel'),
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              let endpoint = '';
+              const module = item.module;
+              const relatedId = item.related_id || item.id;
+
+              if (module === 'Production') endpoint = `/productions/${relatedId}/`;
+              else if (module === 'Vente') endpoint = `/sales/${relatedId}/`;
+              else if (module === 'Alimentation') {
+                 if (item.action.includes('Achat')) endpoint = `/feed-purchases/${relatedId}/`;
+                 else if (item.action.includes('PREPARATION')) endpoint = `/feed-preparations/${relatedId}/`;
+                 else endpoint = `/feeds/${relatedId}/`;
+              }
+              else if (module === 'Santé') {
+                 if (item.action.includes('Achat')) endpoint = `/health-purchases/${relatedId}/`;
+                 else endpoint = `/health-records/${relatedId}/`;
+              }
+              else if (module === 'Mouvement') endpoint = `/movements/${relatedId}/`;
+              else if (module === 'Finance') endpoint = `/expenses/${relatedId}/`;
+
+              if (endpoint) {
+                await repositoryProvider.api.delete(endpoint);
+                toast.success(t('common.success'), t('common.cancelSuccess'));
+                fetchLotData();
+              } else {
+                toast.error(t('common.error'), t('common.actionImpossible'));
+              }
+            } catch (error: any) {
+              toast.error(t('common.actionImpossible'), getErrorMessage(error, t('common.cancelError')));
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleEditAction = async (item: any) => {
+    try {
+      setLoading(true);
+      let endpoint = '';
+      let screen = '';
+      const module = item.module;
+      const relatedId = item.related_id || item.id;
+
+      if (module === 'Production') {
+        endpoint = `/productions/${relatedId}/`;
+        screen = 'ActionProduction';
+      } else if (module === 'Vente') {
+        endpoint = `/sales/${relatedId}/`;
+        screen = 'ActionVente';
+      } else if (module === 'Alimentation') {
+        if (item.action.includes('Achat')) {
+          endpoint = `/feed-purchases/${relatedId}/`;
+          screen = 'Purchase';
+        } else if (item.action.includes('PREPARATION')) {
+          endpoint = `/feed-preparations/${relatedId}/`;
+          screen = 'ActionPreparation';
+        } else {
+          endpoint = `/feeds/${relatedId}/`;
+          screen = 'ActionAlimentation';
+        }
+      } else if (module === 'Santé') {
+        if (item.action.includes('Achat')) {
+          endpoint = `/health-purchases/${relatedId}/`;
+          screen = 'Purchase';
+        } else {
+          endpoint = `/health-records/${relatedId}/`;
+          screen = 'ActionSante';
+        }
+      } else if (module === 'Mouvement') {
+        endpoint = `/movements/${relatedId}/`;
+        screen = 'ActionMouvement';
+      } else if (module === 'Finance') {
+        endpoint = `/expenses/${relatedId}/`;
+        screen = 'AddExpense';
+      }
+
+      if (!endpoint || !screen) {
+        setLoading(false);
+        toast.info(t('common.info'), "La modification de ce type d'action n'est pas encore supportée.");
+        return;
+      }
+
+      const response = await repositoryProvider.api.get(endpoint);
+      const originalItem = response.data;
+      
+      // Ajustement dynamique de l'écran pour les ventes de poules
+      let finalScreen = screen;
+      if (module === 'Vente' && originalItem.product_type === 'CHICKEN') {
+        finalScreen = 'ActionVentePoules';
+      }
+
+      navigation.navigate(finalScreen, {
+        item: originalItem,
+        lotId,
+        lotName,
+        farmId: item.farm || originalItem.farm || farmId,
+        category: item.action.includes('Achat') ? (module === 'Santé' ? 'health' : 'feed') : undefined
+      });
+      
+    } catch (error: any) {
+      console.log('Erreur modification:', error);
+      toast.error(t('common.error'), "Impossible de récupérer les détails de l'action.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleActionPress = (item: any) => {
+    if (item.action.toLowerCase().includes('annul')) {
+      toast.info(t('common.info'), t('common.actionImpossible'));
+      return;
+    }
+
+    Alert.alert(
+      t('common.info'),
+      t('common.chooseAction') || "Options",
+      [
+        { text: t('common.cancel'), style: "cancel" },
+        { 
+          text: t('common.edit'),
+          onPress: () => handleEditAction(item) 
+        },
+        {
+          text: t('common.delete'),
+          style: 'destructive',
+          onPress: () => handleCancelAction(item)
+        }
+      ]
+    );
   };
 
   const allActions = [
     { title: t('actions.sale'), screen: 'ActionVente', icon: 'add-shopping-cart', iconType: 'MaterialIcons', ownerOnly: true },
+    { title: "Vente Poules", screen: 'ActionVentePoules', icon: 'shopping-basket', iconType: 'MaterialIcons', ownerOnly: true },
     { title: t('actions.production'), screen: 'ActionProduction', icon: 'egg', iconType: 'MaterialCommunityIcons', ownerOnly: false },
     { title: t('actions.feed'), screen: 'ActionAlimentation', icon: 'restaurant', iconType: 'MaterialIcons', ownerOnly: false },
     { title: t('actions.health'), screen: 'ActionSante', icon: 'medication', iconType: 'MaterialIcons', ownerOnly: false },
@@ -226,7 +415,85 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
 
   const actions = allActions.filter(a => !a.ownerOnly || userRole !== 'EMPLOYE');
 
-  const styles = createStyles(theme);
+  const isArchived = lotData?.info?.status === 'ARCHIVE';
+
+  // ─── Conversions d'œufs : agrégats par production (EN_ATTENTE → VENDABLE) ───
+  // Les valeurs sont TOUJOURS calculées (jamais stockées) :
+  //   En attente actuel  = max(0, produits − vendables initiaux − ∑conversions EN_ATTENTE→…)
+  //   Vendables actuels  = vendables initiaux + ∑conversions → VENDABLE
+  const productionsWithConv = useMemo(() => {
+    return allProductions
+      .filter((p: any) => p.status === 'ACTIF')
+      .map((p: any) => {
+        const pId = Number(p.id);
+        const prodConvs = conversions.filter((c: any) =>
+          Number(c.production || c.production_id) === pId && String(c.status || 'ACTIF').toUpperCase() !== 'ANNULEE'
+        );
+        const fromPending = prodConvs
+          .filter((c: any) => (c.from_state || '').toUpperCase() === 'EN_ATTENTE')
+          .reduce((s: number, c: any) => s + (Number(c.quantity) || 0), 0);
+        const converted = prodConvs
+          .filter((c: any) => (c.to_state || '').toUpperCase() === 'VENDABLE')
+          .reduce((s: number, c: any) => s + (Number(c.quantity) || 0), 0);
+        const casiersProduits = Number(p.casiers_produits) || 0;
+        const casiersVendables = Number(p.casiers_vendables) || 0;
+        const enAttenteInitial = Math.max(0, casiersProduits - casiersVendables);
+        const enAttenteActuel = Math.max(0, enAttenteInitial - fromPending);
+        const vendablesActuels = casiersVendables + converted;
+        return {
+          production: p,
+          casiersProduits,
+          casiersVendables,
+          enAttenteInitial,
+          enAttenteActuel,
+          vendablesActuels,
+          history: [...prodConvs].sort(
+            (a: any, b: any) =>
+              new Date(b.conversion_date || b.date || 0).getTime() -
+              new Date(a.conversion_date || a.date || 0).getTime()
+          ),
+        };
+      })
+      .filter((item: any) => item.casiersProduits > 0 || item.history.length > 0);
+  }, [allProductions, conversions]);
+
+  const goToConvert = (item: any) => {
+    navigation.navigate('ProductionConvert', {
+      lotId,
+      lotName,
+      production: item.production,
+      // en-attente ACTUEL (déduit des conversions déjà effectuées) pour piloter la limite UI
+      pendingActual: item.enAttenteActuel,
+    });
+  };
+
+  // ─── Vue agrégée : UNE seule carte pour toutes les productions du lot ───
+  // La section n'apparaît QUE s'il reste des casiers "En attente" à convertir.
+  const convertibleProductions = productionsWithConv.filter((it: any) => it.enAttenteActuel > 0);
+  const hasPending = convertibleProductions.length > 0;
+
+  const totals = productionsWithConv.reduce(
+    (acc: any, it: any) => {
+      acc.produits += it.casiersProduits;
+      acc.vendablesInit += it.casiersVendables;
+      acc.enAttente += it.enAttenteActuel;
+      acc.vendablesActuels += it.vendablesActuels;
+      return acc;
+    },
+    { produits: 0, vendablesInit: 0, enAttente: 0, vendablesActuels: 0 }
+  );
+
+  const allConversionHistory = productionsWithConv
+    .flatMap((it: any) => it.history)
+    .sort(
+      (a: any, b: any) =>
+        new Date(b.conversion_date || b.date || 0).getTime() -
+        new Date(a.conversion_date || a.date || 0).getTime()
+    );
+
+  const isConvertibleUser = !isArchived && userRole !== 'EMPLOYE';
+
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   if (loading && !refreshing) {
     return (
@@ -235,6 +502,19 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       </View>
     );
   }
+
+  const getModuleLabel = (module: string) => {
+    switch (module) {
+      case 'Production': return t('actions.production');
+      case 'Vente': return t('actions.sale');
+      case 'Alimentation': return t('actions.nutrition') || 'Alimentation';
+      case 'Santé': return t('actions.health') || 'Santé';
+      case 'Mouvement': return t('actions.movement');
+      case 'Finance': return t('actions.finance') || 'Finance';
+      case 'Rappel': return t('actions.reminder');
+      default: return module;
+    }
+  };
 
   const calculateAge = (purchaseDate: string) => {
     const diffTime = Math.abs(new Date().getTime() - new Date(purchaseDate).getTime());
@@ -250,20 +530,18 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
 
   const getStatusLabel = (status: string) => {
     switch (status) {
-      case 'EN_PREPARATION': return 'En préparation';
-      case 'EN_PRODUCTION': return 'En production';
-      case 'TERMINE': return 'Terminé';
-      case 'VENDU': return 'Vendu';
+      case 'ACTIF': return t('lots.status.active') || 'Actif';
+      case 'TERMINE': return t('lots.status.finished') || 'Terminé';
+      case 'ARCHIVE': return t('lots.status.archived') || 'Archivé';
       default: return status;
     }
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'EN_PREPARATION': return theme.colors.warning;
-      case 'EN_PRODUCTION': return theme.colors.success;
-      case 'TERMINE': return theme.colors.danger;
-      case 'VENDU': return theme.colors.info || '#2196F3';
+      case 'ACTIF': return theme.colors.success;
+      case 'TERMINE': return theme.colors.warning;
+      case 'ARCHIVE': return theme.colors.danger;
       default: return theme.colors.primary;
     }
   };
@@ -277,26 +555,53 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
         <View style={styles.headerTitleContainer}>
           <Text style={styles.title}>{lotName}</Text>
           <View style={styles.badgeContainer}>
-             <View style={[styles.statusDot, { backgroundColor: lotData ? getStatusColor(lotData.info.status) : theme.colors.border }]} />
+             <View style={[styles.statusDot, { backgroundColor: lotData?.info ? getStatusColor(lotData.info.status) : theme.colors.border }]} />
              <Text style={styles.subtitle}>
-               {lotData ? getStatusLabel(lotData.info.status) : '...'}
-               {lotData && ` • ${t(calculateAge(lotData.info.purchase_date).unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: calculateAge(lotData.info.purchase_date).value })}`}
+               {lotData?.info ? getStatusLabel(lotData.info.status) : '...'}
+               {lotData?.info && ` • ${t(calculateAge(lotData.info.purchase_date).unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: calculateAge(lotData.info.purchase_date).value })}`}
              </Text>
           </View>
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           {userRole !== 'EMPLOYE' && lotData && (
-            <TouchableOpacity
-              style={[styles.headerActionBtn, { marginRight: 10 }]}
-              onPress={() => navigation.navigate('CreateLot', { farmId, farmName, lot: lotData.info })}
-            >
-              <MaterialIcons name="edit" size={22} color={theme.colors.text} />
+            <>
+              {!isArchived && (
+                <TouchableOpacity
+                  style={[styles.headerActionBtn, { marginRight: 10 }]}
+                  onPress={() => navigation.navigate('CreateLot', { farmId, farmName, lot: lotData.info, lotId })}
+                >
+                  <MaterialIcons name="edit" size={22} color={theme.colors.text} />
+                </TouchableOpacity>
+              )}
+              {isArchived ? (
+                <TouchableOpacity
+                  style={[styles.headerActionBtn, { marginRight: 10 }]}
+                  onPress={handleReactivateLot}
+                >
+                  <MaterialIcons name="restore" size={22} color={theme.colors.success} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.headerActionBtn, { marginRight: 10 }]}
+                  onPress={handleArchiveLot}
+                >
+                  <MaterialIcons name="archive" size={22} color={theme.colors.warning} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.headerActionBtn, { marginRight: 10 }]}
+                onPress={handleDeleteLot}
+              >
+                <MaterialIcons name="delete" size={22} color={theme.colors.danger} />
+              </TouchableOpacity>
+            </>
+          )}
+          {userRole === 'PROPRIETAIRE' && (
+            <TouchableOpacity style={styles.headerActionBtn} onPress={handleExportProduction}>
+               <MaterialIcons name="file-download" size={22} color={theme.colors.text} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.headerActionBtn} onPress={handleExportProduction}>
-             <MaterialIcons name="file-download" size={22} color={theme.colors.text} />
-          </TouchableOpacity>
         </View>
       </View>
       
@@ -306,164 +611,669 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       >
         {lotData && (
           <>
-          <Card style={styles.infoDetailsCard}>
-            <View style={styles.infoRow}>
-               <View style={styles.infoCol}>
-                  <Text style={styles.infoLabel}>Souche</Text>
-                  <Text style={styles.infoValue}>{lotData.info.breed}</Text>
-               </View>
-               <View style={styles.infoCol}>
-                  <Text style={styles.infoLabel}>Fournisseur</Text>
-                  <Text style={styles.infoValue}>{lotData.info.supplier || '-'}</Text>
-               </View>
-            </View>
-            <View style={styles.infoRow}>
-               <View style={styles.infoCol}>
-                  <Text style={styles.infoLabel}>Date création</Text>
-                  <Text style={styles.infoValue}>{new Date(lotData.info.purchase_date).toLocaleDateString('fr-FR')}</Text>
-               </View>
-               {userRole !== 'EMPLOYE' && (
+          {userRole === 'EMPLOYE' ? (
+            <>
+            <Card style={styles.infoDetailsCard}>
+              <View style={styles.infoRow}>
                  <View style={styles.infoCol}>
-                    <Text style={styles.infoLabel}>Investissement</Text>
-                    <Text style={styles.infoValue}>{formatCurrency(lotData.info.purchase_price)}</Text>
+                    <Text style={styles.infoLabel}>{t('lots.breed')}</Text>
+                    <Text style={styles.infoValue}>{lotData.info.breed}</Text>
                  </View>
-               )}
-            </View>
-            <View style={styles.infoRow}>
-               <View style={styles.infoCol}>
-                  <Text style={styles.infoLabel}>Qté initiale</Text>
-                  <Text style={styles.infoValue}>{formatNumber(lotData.info.initial_quantity)} têtes</Text>
-               </View>
-               <View style={styles.infoCol}>
-                  <Text style={styles.infoLabel}>Qté actuelle</Text>
-                  <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: 'bold' }]}>{formatNumber(lotData.info.current_quantity)} têtes</Text>
-               </View>
-            </View>
-          </Card>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.statusLabel')}</Text>
+                    <Text style={[styles.infoValue, { color: getStatusColor(lotData.info.status) }]}>
+                      {getStatusLabel(lotData.info.status)}
+                      {lotData.info.status === 'TERMINE' && lotData.info.motif_fin && ` (${lotData.info.motif_fin})`}
+                    </Text>
+                 </View>
+              </View>
+              <View style={styles.infoRow}>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.age')}</Text>
+                    <Text style={styles.infoValue}>{t(calculateAge(lotData.info.purchase_date).unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: calculateAge(lotData.info.purchase_date).value })}</Text>
+                 </View>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.alive')}</Text>
+                    <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: 'bold' }]}>{formatNumber(lotData.info.current_quantity)} {t('lots.heads')}</Text>
+                 </View>
+              </View>
+            </Card>
 
-          <View style={styles.kpiGrid}>
-            <Card style={styles.kpiItem}>
-               <MaterialIcons name="groups" size={24} color={theme.colors.primary} />
-               <Text style={styles.kpiValue}>{formatNumber(lotData.info.current_quantity)}</Text>
-               <Text style={styles.kpiLabel}>{t('lots.birds')}</Text>
-            </Card>
-            <Card style={styles.kpiItem}>
-               <MaterialCommunityIcons name="egg" size={24} color={theme.colors.primary} />
-               <Text style={styles.kpiValue}>{formatNumber(lotData.totalCasiers)}</Text>
-               <Text style={styles.kpiLabel}>{t('lots.traysProduced')}</Text>
-            </Card>
-            <Card style={styles.kpiItem}>
-               <MaterialIcons name="inventory" size={24} color={theme.colors.primary} />
-               <Text style={styles.kpiValue}>{formatNumber(lotData.availableStock)}</Text>
-               <Text style={styles.kpiLabel}>Casiers Vendables</Text>
-            </Card>
-            <Card style={styles.kpiItem}>
-               <MaterialIcons name="shopping-basket" size={24} color={theme.colors.warning} />
-               <Text style={styles.kpiValue}>{formatNumber(lotData.availableCasses)}</Text>
-               <Text style={styles.kpiLabel}>Casiers Cassés Disp.</Text>
-            </Card>
-            <Card style={styles.kpiItem}>
-               <MaterialIcons name="heart-broken" size={24} color={theme.colors.danger} />
-               <Text style={[styles.kpiValue, {color: theme.colors.danger}]}>{formatNumber(lotData.deadCount)}</Text>
-               <Text style={styles.kpiLabel}>{t('lots.mortality')}</Text>
-
-               <View style={styles.healthStatsMini}>
-                  <View style={styles.healthStatMiniItem}>
-                     <MaterialCommunityIcons name="emoticon-sick-outline" size={14} color={theme.colors.warning} />
-                     <Text style={[styles.miniStatText, { color: theme.colors.warning, fontWeight: 'bold' }]}>{lotData.currentSick}</Text>
-                     <Text style={styles.miniStatLabel}> Mal.</Text>
+            <View style={styles.statsContainer}>
+              {/* Bloc Production */}
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialCommunityIcons name="egg-outline" size={20} color={theme.colors.primary} />
+                  <Text style={styles.statsTitle}>{t('lots.statsProduction')}</Text>
+                </View>
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.eggsProduced')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalOeufs)}</Text>
                   </View>
-                  <View style={styles.healthStatMiniDivider} />
-                  <View style={styles.healthStatMiniItem}>
-                     <MaterialCommunityIcons name="heart-pulse" size={14} color={theme.colors.success} />
-                     <Text style={[styles.miniStatText, { color: theme.colors.success, fontWeight: 'bold' }]}>{lotData.recoveredCount}</Text>
-                     <Text style={styles.miniStatLabel}> Gué.</Text>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersProduced')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalCasiers)}</Text>
                   </View>
-               </View>
-            </Card>
-            <Card style={styles.kpiItem}>
-               <MaterialIcons name={performance >= 90 ? "trending-up" : performance >= 70 ? "trending-flat" : "trending-down"} size={24} color={getPerformanceLabel(performance).color} />
-               <Text style={[styles.kpiValue, {color: getPerformanceLabel(performance).color}]}>
-                  {performance}%
-               </Text>
-               <Text style={styles.kpiLabel}>{t('lots.performance')}</Text>
-               <Text style={{ fontSize: 9, color: theme.colors.textSecondary, marginTop: 4 }}>{getPerformanceLabel(performance).label}</Text>
-            </Card>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersVendables')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(lotData.availableStock)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersCasses')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.warning }]}>{formatNumber(lotData.availableCasses)}</Text>
+                  </View>
+                </View>
+              </Card>
 
+            {/* ALIMENTATION */}
+            <View style={styles.section}>
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialCommunityIcons name="food-apple" size={20} color={theme.colors.primary} />
+                  <Text style={styles.statsTitle}>Alimentation</Text>
+                </View>
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Matières premières</Text>
+                  {lotData.rawMaterialsDetail.length > 0 && (
+                    <View style={[styles.totalBadge, { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: theme.colors.primary + '20' }]}>
+                      <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: 'bold' }}>
+                        {formatNumber(lotData.rawMaterialsDetail.reduce((s: number, i: any) => s + (i.total || 0), 0))} kg
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.rawMaterialsDetail.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.rawMaterialsDetail.map((item: any, idx: number) => (
+                      <View key={`raw-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.feed_type}: <Text style={styles.ingredientQty}>{formatNumber(item.total)}kg</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucune matière première enregistrée</Text>
+                )}
+
+                <View style={{ height: 12 }} />
+
+                {/* Aliment préparé */}
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Aliment préparé</Text>
+                  {lotData.preparedFeedsDetail?.length > 0 && (
+                    <View style={[{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: theme.colors.warning + '30' }]}>
+                      <Text style={{ color: theme.colors.warning, fontSize: 12, fontWeight: 'bold' }}>
+                        {formatNumber(lotData.preparedFeedsDetail.reduce((s: number, i: any) => s + (i.total || 0), 0))} kg
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.preparedFeedsDetail?.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.preparedFeedsDetail.map((item: any, idx: number) => (
+                      <View key={`prep-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.feed_name}: <Text style={styles.ingredientQty}>{formatNumber(item.total)}kg</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucun aliment préparé enregistré</Text>
+                )}
+
+                <View style={{ height: 12, borderTopWidth: 0.8, borderTopColor: '#00000010', marginTop: 8 }} />
+
+                {/* Stats consommation */}
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.consommationAliment')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalFeedConsumed)} kg</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.derniereDistribution')}</Text>
+                    <Text style={styles.statsValue}>
+                      {lotData.lastFeedDate ? new Date(lotData.lastFeedDate).toLocaleDateString(t('common.dateLocale')) : '-'}
+                    </Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.dernierePreparation')}</Text>
+                    <Text style={styles.statsValue}>
+                      {lotData.lastPreparationDate ? new Date(lotData.lastPreparationDate).toLocaleDateString(t('common.dateLocale')) : '-'}
+                    </Text>
+                  </View>
+                </View>
+              </Card>
+            </View>
+
+            {/* SANTÉ */}
+            <View style={styles.section}>
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialIcons name="medical-services" size={20} color="#E91E63" />
+                  <Text style={[styles.statsTitle, { color: '#E91E63' }]}>Santé</Text>
+                </View>
+                {/* Stock médicaments */}
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Stock médicaments</Text>
+                  {lotData.health_detail?.length > 0 && (
+                    <View style={[{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: '#E91E6320' }]}>
+                      <Text style={{ color: '#E91E63', fontSize: 12, fontWeight: 'bold' }}>
+                        {lotData.health_detail.reduce((s: number, i: any) => s + (i.quantity || 0), 0)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.health_detail?.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.health_detail.map((item: any, idx: number) => (
+                      <View key={`health-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.product_name}
+                        </Text>
+                        <Text style={[styles.ingredientQty, { color: theme.colors.primary }]}>
+                          {formatNumber(item.quantity)} {item.unit}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucun médicament enregistré</Text>
+                )}
+
+                <View style={{ height: 12, borderTopWidth: 0.8, borderTopColor: '#00000010', marginTop: 8 }} />
+
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesMalades')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.warning }]}>{formatNumber(lotData.currentSick)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesGueries')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(lotData.recoveredCount)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesMortes')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.danger }]}>{formatNumber(lotData.deadCount)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.traitementsEffectues')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalTreatments)}</Text>
+                  </View>
+                </View>
+              </Card>
+            </View>
+
+            {/* COÛT D'ACQUISITION (Ne pas afficher pour les employés) */}
             {userRole !== 'EMPLOYE' && (
+              <View style={styles.section}>
+                <Card style={styles.statsCard}>
+                  <View style={styles.statsHeader}>
+                    <MaterialIcons name="account-balance-wallet" size={20} color={theme.colors.primary} />
+                    <Text style={[styles.statsTitle, { color: theme.colors.primary }]}>Coût d'acquisition</Text>
+                  </View>
+                  <View style={styles.statsGrid}>
+                    <View style={styles.statsItem}>
+                      <Text style={styles.statsLabel}>Prix unitaire</Text>
+                      <Text style={styles.statsValue}>{formatNumber(lotData.info?.unit_price || 0)} GNF</Text>
+                    </View>
+                    <View style={styles.statsItem}>
+                      <Text style={styles.statsLabel}>Frais supp.</Text>
+                      <Text style={styles.statsValue}>{formatNumber(lotData.info?.extra_expenses || 0)} GNF</Text>
+                    </View>
+                    <View style={styles.statsItem}>
+                      <Text style={styles.statsLabel}>Coût Total</Text>
+                      <Text style={[styles.statsValue, { color: theme.colors.primary }]}>{formatNumber(lotData.info?.purchase_price || 0)} GNF</Text>
+                    </View>
+                    <View style={styles.statsItem}>
+                      <Text style={styles.statsLabel}>Coût / Sujet</Text>
+                      <Text style={[styles.statsValue, { color: theme.colors.primary }]}>{formatNumber(lotData.info?.real_cost_per_subject || 0)} GNF</Text>
+                    </View>
+                  </View>
+                </Card>
+              </View>
+            )}
+
+              {/* Performance */}
+              <Card style={styles.perfCardCompact}>
+                <View style={styles.perfHeader}>
+                   <MaterialIcons name={performance >= 90 ? "trending-up" : performance >= 70 ? "trending-flat" : "trending-down"} size={24} color={getPerformanceLabel(performance, t).color} />
+                   <View style={{ marginLeft: 12, flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={styles.perfLabel}>{t('lots.lotPerformance')}</Text>
+                      <Text style={[styles.perfValueCompact, {color: getPerformanceLabel(performance, t).color}]}>{performance}%</Text>
+                   </View>
+                </View>
+              </Card>
+            </View>
+
+            {lotData.reminders.length > 0 && (
               <>
-                <Card style={styles.kpiItem}>
-                   <MaterialIcons name="payments" size={24} color={theme.colors.success} />
-                   <Text style={[styles.kpiValue, {color: theme.colors.success}]}>{formatNumber(lotData.revenues)}</Text>
-                   <Text style={styles.kpiLabel}>{t('finance.income')}</Text>
+              <Text style={styles.sectionTitle}>{t('lots.lotReminders')}</Text>
+              {lotData.reminders.slice(0, 3).map((reminder: any, index: number) => (
+                <Card key={index} style={styles.reminderCard}>
+                  <MaterialIcons name="notifications-active" size={20} color={theme.colors.warning} />
+                  <View style={{ marginLeft: 12, flex: 1 }}>
+                    <Text style={styles.reminderText}>{reminder.title}</Text>
+                    <Text style={styles.reminderDate}>
+                      {new Date(reminder.date).toLocaleDateString(t('common.dateLocale'))} {reminder.time || ''}
+                    </Text>
+                  </View>
                 </Card>
-                <Card style={styles.kpiItem}>
-                   <MaterialIcons name="shopping-cart-checkout" size={24} color={theme.colors.danger} />
-                   <Text style={[styles.kpiValue, {color: theme.colors.danger}]}>{formatNumber(lotData.expenses)}</Text>
-                   <Text style={styles.kpiLabel}>{t('finance.expenses')}</Text>
-                </Card>
-                <Card style={[styles.kpiItem, { width: '100%', marginTop: theme.spacing.s }]}>
-                   <MaterialIcons name="account-balance" size={24} color={lotData.profit >= 0 ? theme.colors.success : lotData.profit < 0 ? theme.colors.danger : theme.colors.text} />
-                   <Text style={[styles.kpiValue, { color: lotData.profit >= 0 ? theme.colors.success : theme.colors.danger }]}>
-                      {formatCurrency(lotData.profit)}
-                   </Text>
-                   <Text style={styles.kpiLabel}>{t('dashboard.finance')}</Text>
-                </Card>
+              ))}
               </>
             )}
-          </View>
+            </>
+          ) : (
+            <>
+            <Card style={styles.infoDetailsCard}>
+              <View style={styles.infoRow}>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.strain')}</Text>
+                    <Text style={styles.infoValue}>{lotData.info.breed}</Text>
+                 </View>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.supplier')}</Text>
+                    <Text style={styles.infoValue}>{lotData.info.supplier || '-'}</Text>
+                 </View>
+              </View>
+              <View style={styles.infoRow}>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.creationDate')}</Text>
+                    <Text style={styles.infoValue}>{new Date(lotData.info.purchase_date).toLocaleDateString(t('common.dateLocale'))}</Text>
+                 </View>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.statusLabel')}</Text>
+                    <Text style={[styles.infoValue, { color: getStatusColor(lotData.info.status) }]}>
+                      {getStatusLabel(lotData.info.status)}
+                      {lotData.info.status === 'TERMINE' && lotData.info.motif_fin && ` (${lotData.info.motif_fin})`}
+                    </Text>
+                 </View>
+              </View>
+              <View style={styles.infoRow}>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.age')}</Text>
+                    <Text style={styles.infoValue}>{t(calculateAge(lotData.info.purchase_date).unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: calculateAge(lotData.info.purchase_date).value })}</Text>
+                 </View>
+                 <View style={styles.infoCol}>
+                    <Text style={styles.infoLabel}>{t('lots.alive')}</Text>
+                    <Text style={[styles.infoValue, { color: theme.colors.primary, fontWeight: 'bold' }]}>{formatNumber(lotData.info.current_quantity)} {t('lots.heads')}</Text>
+                 </View>
+              </View>
+            </Card>
+
+            <View style={styles.statsContainer}>
+              {/* Bloc Production */}
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialCommunityIcons name="egg-outline" size={20} color={theme.colors.primary} />
+                  <Text style={styles.statsTitle}>{t('lots.statsProduction')}</Text>
+                </View>
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.eggsProduced')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalOeufs)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersProduced')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalCasiers)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersVendables')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(lotData.availableStock)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.casiersCasses')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.warning }]}>{formatNumber(lotData.availableCasses)}</Text>
+                  </View>
+                </View>
+              </Card>
+
+            {/* ALIMENTATION */}
+            <View style={styles.section}>
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialCommunityIcons name="food-apple" size={20} color={theme.colors.primary} />
+                  <Text style={styles.statsTitle}>Alimentation</Text>
+                </View>
+                {/* Matières premières */}
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Matières premières</Text>
+                  {lotData.rawMaterialsDetail.length > 0 && (
+                    <View style={[{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: theme.colors.primary + '20' }]}>
+                      <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: 'bold' }}>
+                        {formatNumber(lotData.rawMaterialsDetail.reduce((s: number, i: any) => s + (i.total || 0), 0))} kg
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.rawMaterialsDetail.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.rawMaterialsDetail.map((item: any, idx: number) => (
+                      <View key={`raw-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.feed_type}: <Text style={styles.ingredientQty}>{formatNumber(item.total)}kg</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucune matière première enregistrée</Text>
+                )}
+
+                <View style={{ height: 12 }} />
+
+                {/* Aliment préparé */}
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Aliment préparé</Text>
+                  {lotData.preparedFeedsDetail?.length > 0 && (
+                    <View style={[{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: theme.colors.warning + '30' }]}>
+                      <Text style={{ color: theme.colors.warning, fontSize: 12, fontWeight: 'bold' }}>
+                        {formatNumber(lotData.preparedFeedsDetail.reduce((s: number, i: any) => s + (i.total || 0), 0))} kg
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.preparedFeedsDetail?.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.preparedFeedsDetail.map((item: any, idx: number) => (
+                      <View key={`prep-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.feed_name}: <Text style={styles.ingredientQty}>{formatNumber(item.total)}kg</Text>
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucun aliment préparé enregistré</Text>
+                )}
+
+                <View style={{ height: 12, borderTopWidth: 0.8, borderTopColor: '#00000010', marginTop: 8 }} />
+
+                {/* Stats consommation */}
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.consommationAliment')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalFeedConsumed)} kg</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.derniereDistribution')}</Text>
+                    <Text style={styles.statsValue}>
+                      {lotData.lastFeedDate ? new Date(lotData.lastFeedDate).toLocaleDateString(t('common.dateLocale')) : '-'}
+                    </Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.dernierePreparation')}</Text>
+                    <Text style={styles.statsValue}>
+                      {lotData.lastPreparationDate ? new Date(lotData.lastPreparationDate).toLocaleDateString(t('common.dateLocale')) : '-'}
+                    </Text>
+                  </View>
+                </View>
+              </Card>
+            </View>
+
+            {/* SANTÉ */}
+            <View style={styles.section}>
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <MaterialIcons name="medical-services" size={20} color="#E91E63" />
+                  <Text style={[styles.statsTitle, { color: '#E91E63' }]}>Santé</Text>
+                </View>
+                {/* Stock médicaments */}
+                <View style={styles.subHeader}>
+                  <Text style={styles.subTitle}>Stock médicaments</Text>
+                  {lotData.health_detail?.length > 0 && (
+                    <View style={[{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: '#E91E6320' }]}>
+                      <Text style={{ color: '#E91E63', fontSize: 12, fontWeight: 'bold' }}>
+                        {lotData.health_detail.reduce((s: number, i: any) => s + (i.quantity || 0), 0)}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+                {lotData.health_detail?.length > 0 ? (
+                  <View style={styles.ingredientGrid}>
+                    {lotData.health_detail.map((item: any, idx: number) => (
+                      <View key={`health-${idx}`} style={styles.ingredientItem}>
+                        <Text style={styles.ingredientName}>
+                          {item.product_name}
+                        </Text>
+                        <Text style={[styles.ingredientQty, { color: theme.colors.primary }]}>
+                          {formatNumber(item.quantity)} {item.unit}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={styles.noDataText}>Aucun médicament enregistré</Text>
+                )}
+
+                <View style={{ height: 12, borderTopWidth: 0.8, borderTopColor: '#00000010', marginTop: 8 }} />
+
+                <View style={styles.statsGrid}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesMalades')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.warning }]}>{formatNumber(lotData.currentSick)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesGueries')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(lotData.recoveredCount)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.poulesMortes')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.danger }]}>{formatNumber(lotData.deadCount)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('lots.traitementsEffectues')}</Text>
+                    <Text style={styles.statsValue}>{formatNumber(lotData.totalTreatments)}</Text>
+                  </View>
+                </View>
+              </Card>
+            </View>
+
+              {/* Finance Compact */}
+              <Card style={styles.statsCard}>
+                <View style={styles.statsHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <MaterialIcons name="account-balance" size={20} color={theme.colors.success} />
+                    <Text style={styles.statsTitle}>Bénéfice Net</Text>
+                  </View>
+                  <Text style={[styles.statsValue, { color: lotData.profit >= 0 ? theme.colors.success : theme.colors.danger, fontSize: 18 }]}>
+                    {formatNumber(lotData.profit)}
+                  </Text>
+                </View>
+                <View style={[styles.statsGrid, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.colors.border + '20' }]}>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('finance.income')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.success, fontSize: 14 }]}>{formatNumber(lotData.revenues)}</Text>
+                  </View>
+                  <View style={styles.statsItem}>
+                    <Text style={styles.statsLabel}>{t('finance.expenses')}</Text>
+                    <Text style={[styles.statsValue, { color: theme.colors.danger, fontSize: 14 }]}>{formatNumber(lotData.expenses)}</Text>
+                  </View>
+                </View>
+              </Card>
+
+              {/* Performance Compact */}
+              <Card style={styles.perfCardCompact}>
+                <View style={styles.perfHeader}>
+                   <MaterialIcons name={performance >= 90 ? "trending-up" : performance >= 70 ? "trending-flat" : "trending-down"} size={24} color={getPerformanceLabel(performance, t).color} />
+                   <View style={{ marginLeft: 12, flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={styles.perfLabel}>{t('lots.lotPerformance')}</Text>
+                      <Text style={[styles.perfValueCompact, {color: getPerformanceLabel(performance, t).color}]}>{performance}%</Text>
+                   </View>
+                </View>
+              </Card>
+            </View>
+            </>
+          )}
           </>
         )}
 
-        <Text style={styles.sectionTitle}>{t('lots.quickActions')}</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.actionRow}>
-          {actions.map((action, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.actionCircle}
-              onPress={() => navigation.navigate(action.screen, {
-                lotId,
-                lotName,
-                farmId,
-                lotPurchaseDate: lotData?.info?.purchase_date
-              })}
-            >
-              <View style={styles.iconContainer}>
-                {action.iconType === 'MaterialCommunityIcons' ? (
-                  <MaterialCommunityIcons name={action.icon as any} size={26} color={theme.colors.text} />
-                ) : (
-                  <MaterialIcons name={action.icon as any} size={26} color={theme.colors.text} />
-                )}
+        {hasPending && !loading && (
+          <View style={styles.historySection}>
+            <Text style={styles.sectionTitle}>{t('production.conversionsTitle') || t('conversion.title')}</Text>
+            <Card style={styles.infoDetailsCard}>
+              <View style={styles.statsGrid}>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsLabel}>{t('production.stats.produced')}</Text>
+                  <Text style={styles.statsValue}>{formatNumber(totals.produits)}</Text>
+                </View>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsLabel}>{t('production.initialSalable')}</Text>
+                  <Text style={styles.statsValue}>{formatNumber(totals.vendablesInit)}</Text>
+                </View>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsLabel}>{t('production.pendingCrates')}</Text>
+                  <Text style={[styles.statsValue, { color: theme.colors.warning }]}>{formatNumber(totals.enAttente)}</Text>
+                </View>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsLabel}>{t('production.currentSalable')}</Text>
+                  <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(totals.vendablesActuels)}</Text>
+                </View>
               </View>
-              <Text style={styles.actionLabel}>{action.title}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+
+              {/* Productions ayant encore des casiers en attente → conversion possible */}
+              {isConvertibleUser && convertibleProductions.length > 0 && (
+                <View style={{ marginTop: 8, borderTopWidth: 0.8, borderTopColor: theme.colors.border + '30', paddingTop: 8 }}>
+                  {convertibleProductions.map((it: any) => (
+                    <View key={`conv-${it.production.id}`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 }}>
+                      <Text style={[styles.historyDate, { flex: 1, marginRight: 8 }]} numberOfLines={1}>
+                        {it.production.date ? new Date(it.production.date).toLocaleDateString(t('common.dateLocale')) : '-'}
+                        {'  ·  '}{formatNumber(it.enAttenteActuel)} en attente
+                      </Text>
+                      <TouchableOpacity
+                        style={[styles.headerActionBtn, { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '18' }]}
+                        onPress={() => goToConvert(it)}
+                      >
+                        <MaterialIcons name="swap-vert" size={16} color={theme.colors.primary} />
+                        <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700', marginLeft: 4 }}>
+                          {t('conversion.convertAction')}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {allConversionHistory.length > 0 && (
+                <View style={{ marginTop: 8, borderTopWidth: 0.8, borderTopColor: theme.colors.border + '30', paddingTop: 8 }}>
+                  <Text style={styles.stockSectionTitle}>{t('production.conversionHistory')}</Text>
+                  {allConversionHistory.map((h: any, hIdx: number) => (
+                    <View key={`ch-${hIdx}`} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 2 }}>
+                      <Text style={styles.historyDate}>
+                        {h.conversion_date || h.date ? new Date(h.conversion_date || h.date).toLocaleDateString(t('common.dateLocale')) : '-'}
+                        {' · '}{String(h.from_state || 'EN_ATTENTE')} → {String(h.to_state || 'VENDABLE')}
+                      </Text>
+                      <Text style={[styles.historyDesc, { color: theme.colors.success }]}>+{formatNumber(Number(h.quantity) || 0)}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </Card>
+          </View>
+        )}
+
+        {!isArchived && (
+          <>
+            <Text style={styles.sectionTitle}>{t('lots.quickActions')}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.actionRow}>
+              {actions.map((action, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={styles.actionCircle}
+                  onPress={() => navigation.navigate(action.screen, {
+                    lotId,
+                    lotName,
+                    farmId,
+                    lotPurchaseDate: lotData?.info?.purchase_date,
+                    currentQuantity: lotData?.info?.current_quantity
+                  })}
+                >
+                  <View style={styles.iconContainer}>
+                    {action.iconType === 'MaterialCommunityIcons' ? (
+                      <MaterialCommunityIcons name={action.icon as any} size={26} color="#000000" />
+                    ) : (
+                      <MaterialIcons name={action.icon as any} size={26} color="#000000" />
+                    )}
+                  </View>
+                  <Text style={styles.actionLabel}>{action.title}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </>
+        )}
+
+        {isArchived && (
+          <Card style={[styles.statsCard, { backgroundColor: theme.colors.danger + '10', borderColor: theme.colors.danger, borderWidth: 1, marginTop: 10 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <MaterialIcons name="info-outline" size={24} color={theme.colors.danger} />
+              <Text style={{ marginLeft: 10, color: theme.colors.danger, fontWeight: 'bold', flex: 1 }}>
+                Ce lot est ARCHIVÉ. Aucune nouvelle donnée ne peut être ajoutée.
+              </Text>
+            </View>
+          </Card>
+        )}
 
         {lotData && lotData.recentActions.length > 0 && (
           <View style={styles.historySection}>
             <View style={styles.historyHeader}>
               <Text style={styles.sectionTitle}>{t('lots.history')}</Text>
-              {lotData.recentActions.length >= 3 && (
+              {lotData.recentActions.length > 3 && (
                 <TouchableOpacity onPress={() => navigation.navigate('LotHistory', { lotId, lotName })}>
                   <Text style={styles.seeAll}>{t('lots.seeAll')}</Text>
                 </TouchableOpacity>
               )}
             </View>
-            {lotData.recentActions.map((act: any, i: number) => (
-              <TouchableOpacity
-                key={i}
-                onPress={() => navigation.navigate(act.screen, act.params)}
-              >
-                <Card style={styles.historyCard}>
-                  <View style={styles.historyLeft}>
-                    <Text style={styles.historyType}>{act.type}</Text>
-                    <Text style={styles.historyDate}>{new Date(act.date).toLocaleDateString('fr-FR')}</Text>
-                  </View>
-                  <Text style={[styles.historyDesc, { color: act.color }]}>{act.desc}</Text>
-                </Card>
-              </TouchableOpacity>
-            ))}
+            {lotData.recentActions.slice(0, 3).map((act: any, i: number) => {
+              const isCancelled = act.action.toLowerCase().includes('annul') || act.action.toLowerCase().includes('suppression');
+              return (
+                <View key={i}>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (userRole === 'PROPRIETAIRE') {
+                      handleActionPress(act);
+                    }
+                  }}
+                  disabled={userRole === 'EMPLOYE' || isCancelled}
+                  style={{ opacity: isCancelled ? 0.6 : 1 }}
+                >
+                  <Card style={[styles.historyCard, isCancelled && { borderColor: theme.colors.textSecondary + '40' }]}>
+                    <View style={styles.historyLeft}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text
+                          style={[styles.historyType, isCancelled && { textDecorationLine: 'line-through' }]}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
+                        >
+                          {getModuleLabel(act.module)} • {act.action}
+                        </Text>
+                        <Text style={styles.historyUser} numberOfLines={1} ellipsizeMode="tail"> • {act.user_name}</Text>
+                        {isCancelled && (
+                          <View style={{ marginLeft: 8, backgroundColor: theme.colors.danger + '20', paddingHorizontal: 6, borderRadius: 4 }}>
+                            <Text style={{ fontSize: 10, color: theme.colors.danger, fontWeight: 'bold' }}>{t('common.cancelled')}</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.historyDate}>{new Date(act.date).toLocaleDateString(t('common.dateLocale'))} {new Date(act.date).toLocaleTimeString(t('common.dateLocale'), { hour: '2-digit', minute: '2-digit' })}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '40%', justifyContent: 'flex-end' }}>
+                      <Text
+                        style={[styles.historyDesc, isCancelled && { textDecorationLine: 'line-through' }]}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
+                        {act.description}
+                      </Text>
+                      {!isCancelled && userRole === 'PROPRIETAIRE' && (
+                        <MaterialIcons name="undo" size={20} color={theme.colors.warning} style={{ marginLeft: 8 }} />
+                      )}
+                    </View>
+                  </Card>
+                </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -526,15 +1336,44 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   kpiItem: {
     width: '48%',
-    padding: theme.spacing.m,
+    padding: theme.spacing.s,
     alignItems: 'center',
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderRadius: theme.borderRadius.l,
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
+    marginBottom: theme.spacing.s,
   },
   kpiValue: { fontSize: 22, fontWeight: 'bold', color: theme.colors.text, marginVertical: 4 },
   kpiLabel: { fontSize: 11, color: theme.colors.textSecondary, textTransform: 'uppercase', fontWeight: '600' },
   sectionTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text, marginBottom: theme.spacing.m, marginTop: theme.spacing.s },
+  section: { marginBottom: theme.spacing.l },
+  mainSectionHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.m, borderBottomWidth: 1, borderBottomColor: theme.colors.border + '40', paddingBottom: 8 },
+  mainSectionTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.primary, marginLeft: 8 },
+  stockSectionTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: theme.colors.textSecondary,
+    marginBottom: theme.spacing.s,
+    textTransform: 'uppercase',
+  },
+  itemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: theme.spacing.m,
+    marginBottom: theme.spacing.s,
+    borderRadius: theme.borderRadius.l,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+  },
+  itemInfo: { flex: 1 },
+  itemName: { fontSize: 15, fontWeight: 'bold', color: theme.colors.text },
+  itemMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 4, flexWrap: 'wrap' },
+  statusBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  statusText: { fontSize: 10, fontWeight: 'bold' },
+  itemValueContainer: { alignItems: 'flex-end' },
+  itemValue: { fontSize: 18, fontWeight: '800' },
+  itemUnit: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
   actionRow: { marginBottom: theme.spacing.xl, marginHorizontal: -theme.spacing.m, paddingLeft: theme.spacing.m },
   actionCircle: { alignItems: 'center', marginRight: 16, width: 85 },
   iconContainer: {
@@ -557,18 +1396,19 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     padding: theme.spacing.m,
     marginBottom: theme.spacing.s,
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderRadius: theme.borderRadius.l,
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   historyLeft: { flex: 1 },
   historyType: { fontSize: 15, fontWeight: 'bold', color: theme.colors.text },
+  historyUser: { fontSize: 12, color: theme.colors.textSecondary },
   historyDate: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },
   historyDesc: { fontSize: 15, fontWeight: 'bold' },
   healthStatsMini: {
     marginTop: 8,
     paddingTop: 8,
-    borderTopWidth: 1,
+    borderTopWidth: 0.8,
     borderTopColor: theme.colors.border + '15',
     flexDirection: 'row',
     justifyContent: 'center',
@@ -581,7 +1421,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: 4,
   },
   healthStatMiniDivider: {
-    width: 1,
+    width: 0.8,
     height: 12,
     backgroundColor: theme.colors.border + '20',
     marginHorizontal: 4,
@@ -599,6 +1439,66 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginBottom: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.surface,
+  },
+  statsContainer: {
+    width: '100%',
+  },
+  statsCard: {
+    padding: theme.spacing.m,
+    borderRadius: theme.borderRadius.xl,
+    marginBottom: theme.spacing.m,
+    backgroundColor: theme.colors.surface,
+  },
+  statsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  statsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
+    color: theme.colors.text,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  statsItem: {
+    width: '48%',
+    marginBottom: 12,
+  },
+  statsLabel: {
+    fontSize: 11,
+    color: theme.colors.textSecondary,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  statsValue: {
+    fontSize: 16,
+    color: theme.colors.text,
+    fontWeight: '700',
+  },
+  subSection: { marginTop: 4 },
+  subHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  subTitle: { fontSize: 13, fontWeight: '600', color: theme.colors.textSecondary },
+  totalBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12, backgroundColor: theme.colors.primary + '20', color: theme.colors.primary, fontSize: 12, fontWeight: 'bold' },
+  ingredientGrid: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 4 },
+  ingredientItem: { width: '50%', marginBottom: 4 },
+  ingredientName: { fontSize: 11, color: theme.colors.text },
+  ingredientQty: { fontWeight: 'bold' },
+  noDataText: { fontSize: 11, color: theme.colors.textSecondary, fontStyle: 'italic' },
+  perfCardCompact: {
+    padding: theme.spacing.m,
+    borderRadius: theme.borderRadius.xl,
+    marginBottom: theme.spacing.m,
+    backgroundColor: theme.colors.surface,
+  },
+  perfValueCompact: {
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   infoRow: {
     flexDirection: 'row',
@@ -618,5 +1518,77 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 14,
     color: theme.colors.text,
     fontWeight: '600',
+  },
+  healthDetailCard: {
+    padding: theme.spacing.m,
+    borderRadius: theme.borderRadius.xl,
+    marginBottom: theme.spacing.m,
+    backgroundColor: theme.colors.surface,
+  },
+  healthHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  healthTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginLeft: 8,
+    color: theme.colors.text,
+  },
+  healthContent: {
+    paddingLeft: 32,
+  },
+  healthRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  healthLabel: {
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+    width: 80,
+  },
+  healthValue: {
+    fontSize: 14,
+    color: theme.colors.text,
+    fontWeight: '500',
+  },
+  perfCard: {
+    padding: theme.spacing.m,
+    borderRadius: theme.borderRadius.xl,
+    marginBottom: theme.spacing.m,
+    backgroundColor: theme.colors.surface,
+  },
+  perfHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  perfValue: {
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  perfLabel: {
+    fontSize: 14,
+    color: theme.colors.textSecondary,
+  },
+  reminderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: theme.spacing.m,
+    marginBottom: theme.spacing.s,
+    borderRadius: theme.borderRadius.xl,
+    backgroundColor: theme.colors.surface,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.warning,
+  },
+  reminderText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: theme.colors.text,
+  },
+  reminderDate: {
+    fontSize: 12,
+    color: theme.colors.textSecondary,
+    marginTop: 2,
   }
 });

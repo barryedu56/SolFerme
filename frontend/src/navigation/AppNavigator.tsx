@@ -1,9 +1,11 @@
+import 'react-native-gesture-handler';
 import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
@@ -35,9 +37,11 @@ import { AttendanceScreen } from '../screens/AttendanceScreen';
 import { AttendanceHistoryScreen } from '../screens/AttendanceHistoryScreen';
 import { PayrollScreen } from '../screens/PayrollScreen';
 import { CreatePayrollScreen } from '../screens/CreatePayrollScreen';
+import { CreateBonusScreen } from '../screens/CreateBonusScreen';
 import { ActionProductionScreen } from '../screens/actions/ProductionScreen';
 import { ProductionConvertScreen } from '../screens/actions/ProductionConvertScreen';
 import { ActionVenteScreen } from '../screens/actions/VenteScreen';
+import { ActionVentePoulesScreen } from '../screens/actions/ActionVentePoules';
 import { ActionAlimentationScreen } from '../screens/actions/AlimentationScreen';
 import { ActionSanteScreen } from '../screens/actions/SanteScreen';
 import { ActionMouvementScreen } from '../screens/actions/MouvementScreen';
@@ -46,13 +50,19 @@ import { PurchaseScreen } from '../screens/actions/PurchaseScreen';
 import { RemindersScreen } from '../screens/RemindersScreen';
 import { ActionReminderScreen } from '../screens/actions/ReminderScreen';
 import { AddExpenseScreen } from '../screens/actions/AddExpenseScreen';
+import { PreparationScreen } from '../screens/actions/PreparationScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { HelpScreen } from '../screens/HelpScreen';
 import { GlobalHistoryScreen } from '../screens/GlobalHistoryScreen';
+import { HealthAlertDetailScreen } from '../screens/HealthAlertDetailScreen';
+import { InventoryScreen } from '../screens/InventoryScreen';
+import { EmployeeRequestsScreen } from '../screens/EmployeeRequestsScreen';
+import { EmployeePayrollScreen } from '../screens/EmployeePayrollScreen';
 
 import { View, Text, StyleSheet, Image } from 'react-native';
-
+import * as Notifications from 'expo-notifications';
 import { useAuth } from '../context/AuthContext';
+import { useTranslation } from '../context/LanguageContext';
 
 const Stack = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
@@ -72,6 +82,7 @@ function EmployeesNavigator() {
       <EmployeesStack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} />
       <EmployeesStack.Screen name="Payroll" component={PayrollScreen} />
       <EmployeesStack.Screen name="CreatePayroll" component={CreatePayrollScreen} />
+      <EmployeesStack.Screen name="CreateBonus" component={CreateBonusScreen} />
       <EmployeesStack.Screen name="Tasks" component={TasksScreen} />
       <EmployeesStack.Screen name="CreateTask" component={CreateTaskScreen} />
     </EmployeesStack.Navigator>
@@ -81,6 +92,7 @@ function EmployeesNavigator() {
 function CustomDrawerContent({ userRole, ...props }: any) {
   const { userName, userImage, logout } = useAuth();
   const { theme } = useTheme();
+  const { t } = useTranslation();
 
   return (
     <DrawerContentScrollView {...props} style={{ backgroundColor: theme.colors.surface }}>
@@ -92,13 +104,14 @@ function CustomDrawerContent({ userRole, ...props }: any) {
             <MaterialIcons name="person" size={40} color={theme.colors.primary} />
           )}
         </View>
-        <Text style={[styles.userName, { color: theme.colors.text }]}>{userName || 'Utilisateur'}</Text>
-        <Text style={[styles.userRole, { color: theme.colors.textSecondary }]}>{userRole === 'EMPLOYE' ? 'Employé' : 'Propriétaire'}</Text>
+        <Text style={[styles.userName, { color: theme.colors.text }]}>{userName || t('common.anonymous')}</Text>
+        <Text style={[styles.userRole, { color: theme.colors.textSecondary }]}>{userRole === 'EMPLOYE' ? t('profile.employee') : t('profile.owner')}</Text>
       </View>
       <DrawerItemList {...props} />
+
       <View style={[styles.drawerDivider, { backgroundColor: theme.colors.border }]} />
       <DrawerItem
-        label="Déconnexion" 
+        label={t('common.logout')}
         onPress={async () => {
           await logout();
         }}
@@ -120,8 +133,10 @@ function FarmsNavigator() {
       <FarmsStack.Screen name="ActionProduction" component={ActionProductionScreen} />
       <FarmsStack.Screen name="ProductionConvert" component={ProductionConvertScreen} />
       <FarmsStack.Screen name="ActionVente" component={ActionVenteScreen} />
+      <FarmsStack.Screen name="ActionVentePoules" component={ActionVentePoulesScreen} />
       <FarmsStack.Screen name="ActionAlimentation" component={ActionAlimentationScreen} />
       <FarmsStack.Screen name="ActionSante" component={ActionSanteScreen} />
+      <FarmsStack.Screen name="ActionPreparation" component={PreparationScreen} />
       <FarmsStack.Screen name="ActionMouvement" component={ActionMouvementScreen} />
       <FarmsStack.Screen name="ActionEtatPoules" component={ActionEtatPoulesScreen} />
       <FarmsStack.Screen name="ActionReminder" component={ActionReminderScreen} />
@@ -132,6 +147,7 @@ function FarmsNavigator() {
 
 function MainTabNavigator({ userRole }: { userRole: string | null }) {
   const { theme } = useTheme();
+  const { t } = useTranslation();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -145,11 +161,11 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
           paddingBottom: 8,
         },
         tabBarIcon: ({ color, size }) => {
-          if (route.name === 'Fermes' || route.name === 'Ma Ferme') {
+          if (route.name === 'Farms') {
             return <MaterialCommunityIcons name="egg" size={size} color={color} />;
           }
           let iconName: any;
-          if (route.name === 'Accueil') iconName = 'home';
+          if (route.name === 'Dashboard') iconName = 'home';
           else if (route.name === 'Finance') iconName = 'account-balance-wallet';
           else if (route.name === 'Plus' || route.name === 'Activités') iconName = 'menu';
           return <MaterialIcons name={iconName} size={size} color={color} />;
@@ -157,21 +173,23 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
       })}
     >
       <Tab.Screen
-        name="Accueil"
+        name="Dashboard"
         component={userRole === 'EMPLOYE' ? EmployeeDashboardScreen : DashboardScreen}
+        options={{ title: t('dashboard.title') }}
       />
       <Tab.Screen
-        name={userRole === 'EMPLOYE' ? "Ma Ferme" : "Fermes"}
+        name="Farms"
         component={FarmsNavigator}
+        options={{ title: userRole === 'EMPLOYE' ? t('profile.myFarm') : t('farms.title') }}
       />
       {userRole !== 'EMPLOYE' ? (
         <>
-          <Tab.Screen name="Finance" component={FinanceScreen} />
+          <Tab.Screen name="Finance" component={FinanceScreen} options={{ title: t('finance.title') }} />
           <Tab.Screen
             name="Plus"
             component={View}
-            listeners={({ navigation }) => ({
-              tabPress: (e) => {
+            listeners={({ navigation }: any) => ({
+              tabPress: (e: any) => {
                 e.preventDefault();
                 navigation.openDrawer();
               },
@@ -182,8 +200,8 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
         <Tab.Screen
           name="Activités"
           component={View}
-          listeners={({ navigation }) => ({
-            tabPress: (e) => {
+          listeners={({ navigation }: any) => ({
+            tabPress: (e: any) => {
               e.preventDefault();
               navigation.openDrawer();
             },
@@ -196,6 +214,7 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
 
 function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
   const { theme } = useTheme();
+  const { t } = useTranslation();
   return (
     <Drawer.Navigator 
       drawerContent={(props) => <CustomDrawerContent {...props} userRole={userRole} />}
@@ -210,7 +229,7 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
       <Drawer.Screen
         name="MainTabs"
         options={{
-          title: 'Tableau de bord',
+          title: t('dashboard.title'),
           drawerIcon: ({ color, size }) => <MaterialIcons name="dashboard" color={color} size={size} />
         }}
       >
@@ -220,14 +239,14 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
         name="Reminders"
         component={RemindersScreen}
         options={{
-          title: 'Mes Rappels',
+          title: t('reminders.title'),
           drawerIcon: ({ color, size }) => <MaterialIcons name="notifications-active" color={color} size={size} />
         }}
       />
       <Drawer.Screen
         name="Profile"
         options={{
-          title: 'Mon Profil',
+          title: t('profile.title'),
           drawerIcon: ({ color, size }) => <MaterialIcons name="person" color={color} size={size} />
         }}
       >
@@ -236,46 +255,70 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
       {userRole === 'EMPLOYE' && (
         <>
           <Drawer.Screen
-            name="GlobalHistory"
-            component={GlobalHistoryScreen}
-            options={{
-              title: "Mon historique d'actions",
-              drawerIcon: ({ color, size }) => <MaterialIcons name="history" color={color} size={size} />
-            }}
-          />
-          <Drawer.Screen
             name="Tasks"
             component={TasksScreen}
             options={{
-              title: 'Mes Tâches',
+              title: t('tasks.title'),
               drawerIcon: ({ color, size }) => <MaterialIcons name="assignment" color={color} size={size} />
+            }}
+          />
+          <Drawer.Screen
+            name="Attendance"
+            component={AttendanceScreen}
+            options={{
+              title: t('attendance.title'),
+              drawerIcon: ({ color, size }) => <MaterialIcons name="access-time" color={color} size={size} />
+            }}
+          />
+          <Drawer.Screen
+            name="Payroll"
+            component={EmployeePayrollScreen}
+            options={{
+              title: t('payroll.mgtTitle'),
+              drawerIcon: ({ color, size }) => <MaterialIcons name="payments" color={color} size={size} />
             }}
           />
         </>
       )}
+      <Drawer.Screen
+        name="Requests"
+        component={EmployeeRequestsScreen}
+        options={{
+          title: userRole === 'EMPLOYE' ? t('requests.title') : t('requests.shortTitle'),
+          drawerIcon: ({ color, size }) => <MaterialIcons name="send" color={color} size={size} />,
+          drawerItemStyle: userRole !== 'EMPLOYE' ? { display: 'none' } : {}
+        }}
+      />
+      <Drawer.Screen
+        name="Statistics"
+        component={StatisticsScreen}
+        options={{
+          title: t('statistics.title'),
+          drawerIcon: ({ color, size }) => <MaterialIcons name="insert-chart" color={color} size={size} />
+        }}
+      />
       {userRole !== 'EMPLOYE' && (
         <>
           <Drawer.Screen
             name="Employees"
             component={EmployeesNavigator}
             options={{
-              title: 'Employés',
+              title: t('employees.title'),
               drawerIcon: ({ color, size }) => <MaterialIcons name="people" color={color} size={size} />
             }}
-          />
-          <Drawer.Screen
-            name="Statistics"
-            component={StatisticsScreen}
-            options={{
-              title: 'Statistiques',
-              drawerIcon: ({ color, size }) => <MaterialIcons name="insert-chart" color={color} size={size} />
-            }}
+            listeners={({ navigation }: any) => ({
+              drawerItemPress: (e: any) => {
+                e.preventDefault();
+                // S'assure que le navigateur d'employés revient à sa racine
+                navigation.navigate('Employees', { screen: 'EmployeesList' });
+              },
+            })}
           />
           <Drawer.Screen
             name="GlobalHistory"
             component={GlobalHistoryScreen}
             options={{
-              title: "Journal d'activités",
+              title: t('history.globalTitle'),
               drawerIcon: ({ color, size }) => <MaterialIcons name="history" color={color} size={size} />
             }}
           />
@@ -293,7 +336,7 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
         name="Settings"
         component={SettingsScreen}
         options={{
-          title: 'Paramètres',
+          title: t('settings.title'),
           drawerIcon: ({ color, size }) => <MaterialIcons name="settings" color={color} size={size} />
         }}
       />
@@ -301,7 +344,7 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
         name="Help"
         component={HelpScreen}
         options={{
-          title: 'Aide & Support',
+          title: t('settings.help'),
           drawerIcon: ({ color, size }) => <MaterialIcons name="help" color={color} size={size} />
         }}
       />
@@ -310,7 +353,7 @@ function RootDrawerNavigator({ userRole }: { userRole: string | null }) {
         component={ActionReminderScreen}
         options={{
           drawerItemStyle: { display: 'none' },
-          title: 'Rappel'
+          title: t('reminders.title')
         }}
       />
     </Drawer.Navigator>
@@ -330,11 +373,32 @@ function AuthNavigator() {
 
 export const AppNavigator = () => {
   const { userToken, userRole, isLoading } = useAuth();
+  const navigationRef = React.useRef<any>(null);
+
+  useEffect(() => {
+    // expo-notifications n'est pas supporté dans Expo Go (SDK 53+).
+    // On ne l'active que dans les development builds ou apps standalone.
+    if (Constants.appOwnership === 'expo') return;
+
+    // Écouteur pour le clic sur la notification
+    try {
+      const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+        const { screen } = response.notification.request.content.data;
+        if (screen === 'Reminders' && navigationRef.current) {
+          navigationRef.current.navigate('Reminders');
+        }
+      });
+
+      return () => subscription.remove();
+    } catch {
+      // Silencieux — les notifications ne sont pas disponibles
+    }
+  }, []);
 
   if (isLoading) return null;
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!userToken ? (
           <Stack.Screen name="Auth" component={AuthNavigator} />
@@ -346,6 +410,10 @@ export const AppNavigator = () => {
             <Stack.Screen name="TransactionsHistory" component={TransactionsHistoryScreen} />
             <Stack.Screen name="AddExpense" component={AddExpenseScreen} />
             <Stack.Screen name="Purchase" component={PurchaseScreen} />
+            <Stack.Screen name="HealthAlertDetail" component={HealthAlertDetailScreen} />
+            <Stack.Screen name="Inventory" component={InventoryScreen} />
+            <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} />
+            <Stack.Screen name="EmployeeRequests" component={EmployeeRequestsScreen} />
           </>
         )}
       </Stack.Navigator>
@@ -366,7 +434,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16, // theme.spacing.m
-    borderWidth: 2,
+    borderWidth: 0.8,
     overflow: 'hidden',
   },
   drawerAvatar: {
@@ -381,7 +449,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   drawerDivider: {
-    height: 1,
+    height: 0.8,
     marginVertical: 16, // theme.spacing.m
     marginHorizontal: 16, // theme.spacing.m
   }

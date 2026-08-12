@@ -5,13 +5,16 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { DatePicker } from '../components/DatePicker';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 
 export const CreateEmployeeScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { userRole } = useAuth();
+  const isOwner = userRole === 'PROPRIETAIRE';
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { farms: initialFarms } = route.params || { farms: [] };
   
@@ -20,6 +23,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [position, setPosition] = useState('Ouvrier');
   const [salary, setSalary] = useState('');
   const [paymentFrequency, setPaymentFrequency] = useState('MENSUEL');
@@ -57,7 +61,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchFarms = async () => {
     try {
-      const res = await apiClient.get('/farms/');
+      const res = await repositoryProvider.api.get('/farms/');
       setFarms(res.data);
       if (res.data.length > 0) {
         setSelectedFarm(res.data[0].id.toString());
@@ -75,7 +79,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchLots = async (farmId: string) => {
     try {
-      const res = await apiClient.get(`/lots/?farm=${farmId}`);
+      const res = await repositoryProvider.api.get(`/lots/?farm=${farmId}`);
       setAvailableLots(res.data);
       setSelectedLots([]); // Reset selection when farm changes
     } catch (error) {
@@ -92,14 +96,30 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
   };
 
   const handleCreate = async () => {
-    if (!name || !email || !password || !selectedFarm) {
+    if (!name || !email || !password || !confirmPassword || !selectedFarm) {
       Alert.alert(t('common.error'), t('employees.messages.fillRequired'));
+      return;
+    }
+
+    const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>])[A-Za-z\d!@#$%^&*(),.?":{}|<>]{8,}$/;
+    if (!passwordRegex.test(password)) {
+      Alert.alert(
+        t('common.error'),
+        t('auth.passwordComplexity', {
+          defaultValue: 'Le mot de passe doit contenir au moins 8 caractères, une majuscule, une minuscule, un chiffre et un caractère spécial.'
+        })
+      );
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      Alert.alert(t('common.error'), t('auth.passwordMismatch', { defaultValue: 'Les mots de passe ne correspondent pas.' }));
       return;
     }
 
     setLoading(true);
     try {
-      const userRes = await apiClient.post('/users/', {
+      const userRes = await repositoryProvider.api.post('/users/', {
         name,
         email,
         phone,
@@ -109,12 +129,13 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
       const userId = userRes.data.id;
 
-      await apiClient.post('/employees/', {
+      const cleanSalary = salary.toString().replace(/\s/g, '');
+      await repositoryProvider.api.post('/employees/', {
         user: userId,
         farm: parseInt(selectedFarm),
         lots: selectedLots,
         position: position,
-        salary: parseFloat(salary) || 0,
+        salary: parseFloat(cleanSalary) || 0,
         payment_frequency: paymentFrequency,
         address: address,
         hired_at: hiredAt,
@@ -141,6 +162,32 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
     const farm = farms.find((f: any) => f.id.toString() === selectedFarm);
     return farm ? farm.name : t('payroll.selectEmployee');
   };
+
+  if (!isOwner) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>{t('employees.createTitle')}</Text>
+          <View style={{ width: 40 }} />
+        </View>
+        <View style={styles.center}>
+          <MaterialIcons name="lock" size={64} color={theme.colors.textSecondary} style={{ marginBottom: 20 }} />
+          <Text style={[styles.sectionTitle, { textAlign: 'center' }]}>Accès Restreint</Text>
+          <Text style={[styles.filterText, { textAlign: 'center', marginTop: 10 }]}>
+            Cette section est réservée aux propriétaires de la ferme.
+          </Text>
+          <Button
+            title="Retour"
+            onPress={() => navigation.goBack()}
+            style={{ marginTop: 30, width: '100%' }}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -181,7 +228,8 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
                   placeholder={t('employees.form.phonePlaceholder')}
                   value={phone}
                   onChangeText={setPhone}
-                  keyboardType="phone-pad"
+                  isPhone
+                  maxLength={9}
                   style={styles.fieldInput}
                 />
             </View>
@@ -214,6 +262,20 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
                     style={styles.fieldInput}
                   />
                 </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+                <View style={styles.labelRow}>
+                  <MaterialIcons name="lock-outline" size={18} color={theme.colors.primary} />
+                  <Text style={styles.label}>{t('auth.confirmPassword', { defaultValue: 'Confirmer le mot de passe' })}</Text>
+                </View>
+                <Input
+                  placeholder="********"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  secureTextEntry
+                  style={styles.fieldInput}
+                />
             </View>
           </Card>
 
@@ -382,6 +444,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
 const createStyles = (theme: any) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -399,6 +462,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     ...theme.shadows.light,
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
+  filterText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
   sectionTitle: {
     fontSize: 16,
@@ -437,8 +501,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.colors.background + '40',
     padding: 12,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   pickerButtonText: {
     fontSize: 14,
@@ -448,14 +512,14 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginTop: 4,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
   },
   pickerOption: {
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border + '10',
+    borderBottomWidth: 0.8,
+    borderBottomColor: theme.colors.border,
   },
   pickerOptionText: {
     fontSize: 14,
@@ -479,8 +543,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   lotChipSelected: {
     borderColor: theme.colors.primary,

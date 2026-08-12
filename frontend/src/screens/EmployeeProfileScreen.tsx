@@ -1,17 +1,19 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, TextInput, Alert, Switch } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from '../context/LanguageContext';
 import { useWindowDimensions } from 'react-native';
 import Constants from 'expo-constants';
 import { getProfileImageUrl } from '../utils/media';
+import { formatNumber } from '../utils/formatters';
 
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -42,10 +44,13 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
     newPassword: '',
     confirmPassword: ''
   });
+  const [showOldPassword, setShowOldPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const fetchProfile = async () => {
     try {
-      const response = await apiClient.get('/employees/me/');
+      const response = await repositoryProvider.api.get('/employees/me/');
       setEmployeeData(response.data);
       setEditData({
         name: response.data.user_name || '',
@@ -56,7 +61,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
       await AsyncStorage.setItem('employee_data', JSON.stringify(response.data));
 
       // Récupération des paiements
-      const payRes = await apiClient.get('/payrolls/').catch(err => {
+      const payRes = await repositoryProvider.api.get('/payrolls/').catch(err => {
           if (err.response?.status === 403) return { data: [] };
           return { data: [] };
       });
@@ -102,7 +107,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('profile.cameraPermissionError', { defaultValue: 'Permissions requises pour accéder aux photos.' }));
+      Alert.alert(t('common.error'), t('profile.cameraPermissionError'));
       return;
     }
 
@@ -133,47 +138,79 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
         type: type,
       });
 
-      await apiClient.patch('/auth/user/', formData, {
+      await repositoryProvider.api.patch('/auth/user/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
       await fetchProfile();
       await updateUser();
-      Alert.alert(t('common.success'), t('profile.updatePhotoSuccess'));
+      toast.success(t('common.success'), t('profile.updatePhotoSuccess'));
     } catch (e) {
       console.error('Upload error:', e);
-      Alert.alert(t('common.error'), t('profile.updatePhotoError'));
+      toast.error(t('common.error'), t('profile.updatePhotoError'));
     } finally {
       setUpdating(false);
     }
   };
 
+  const handleRemoveImage = async () => {
+    try {
+      setUpdating(true);
+      await repositoryProvider.api.patch('/auth/user/', { profile_image: null });
+      await fetchProfile();
+      await updateUser();
+      toast.success(t('common.success'), t('profile.removePhotoSuccess'));
+    } catch (e) {
+      console.error('Remove error:', e);
+      toast.error(t('common.error'), t('profile.removePhotoError'));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const showImageOptions = () => {
+    if (!employeeData?.user_image) {
+      pickImage();
+      return;
+    }
+
+    Alert.alert(
+      t('profile.photoTitle'),
+      t('profile.photoOption'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('profile.removePhoto'), onPress: handleRemoveImage, style: 'destructive' },
+        { text: t('profile.changePhoto'), onPress: pickImage }
+      ]
+    );
+  };
+
   const handleUpdateProfile = async () => {
     if (!editData.name || !editData.email) {
-      Alert.alert(t('common.error'), t('profile.fillRequired', { defaultValue: 'Le nom et l\'email sont obligatoires.' }));
+      toast.error(t('common.error'), t('profile.fillRequired'));
       return;
     }
 
     setUpdating(true);
     try {
       // 1. Update user info
-      await apiClient.patch('/auth/user/', {
+      await repositoryProvider.api.patch('/auth/user/', {
         name: editData.name,
         email: editData.email,
         phone: editData.phone
       });
 
       // 2. Update employee address
-      await apiClient.patch(`/employees/${employeeData.id}/`, {
+      await repositoryProvider.api.patch(`/employees/${employeeData.id}/`, {
         address: editData.address
       });
 
       await fetchProfile();
       await updateUser();
       setIsEditing(false);
-      Alert.alert(t('common.success'), t('profile.saveChangesSuccess', { defaultValue: 'Profil mis à jour.' }));
+      toast.success(t('common.success'), t('profile.saveChangesSuccess'));
     } catch (e) {
-      Alert.alert(t('common.error'), t('profile.updateError', { defaultValue: 'Échec de la mise à jour.' }));
+      toast.error(t('common.error'), t('profile.updateError'));
     } finally {
       setUpdating(false);
     }
@@ -181,28 +218,28 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
 
   const handleChangePassword = async () => {
     if (!passwordData.oldPassword || !passwordData.newPassword) {
-      Alert.alert(t('common.error'), t('profile.fillAllFields', { defaultValue: 'Veuillez remplir tous les champs.' }));
+      toast.error(t('common.error'), t('profile.fillAllFields'));
       return;
     }
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      Alert.alert(t('common.error'), t('profile.passwordMismatch', { defaultValue: 'Les mots de passe ne correspondent pas.' }));
+      toast.error(t('common.error'), t('profile.passwordMismatch'));
       return;
     }
 
     setUpdating(true);
     try {
-      await apiClient.post('/auth/change-password/', {
+      await repositoryProvider.api.post('/auth/change-password/', {
         old_password: passwordData.oldPassword,
         new_password: passwordData.newPassword
       });
 
       setPasswordData({ oldPassword: '', newPassword: '', confirmPassword: '' });
       setIsChangingPassword(false);
-      Alert.alert(t('common.success'), t('profile.passwordSuccess'));
+      toast.success(t('common.success'), t('profile.passwordSuccess'));
     } catch (e: any) {
       const errorMsg = e.response?.data?.error || t('profile.passwordError');
-      Alert.alert(t('common.error'), errorMsg);
+      toast.error(t('common.error'), errorMsg);
     } finally {
       setUpdating(false);
     }
@@ -271,7 +308,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                      </View>
                    )}
                 </View>
-                <TouchableOpacity style={styles.cameraBadge} onPress={pickImage}>
+                <TouchableOpacity style={styles.cameraBadge} onPress={showImageOptions}>
                    <MaterialIcons name="photo-camera" size={16} color="#FFF" />
                 </TouchableOpacity>
              </View>
@@ -287,11 +324,11 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
           </View>
         </LinearGradient>
 
-        <div style={[styles.contentOverlap, isTablet && styles.tabletContent]}>
+        <View style={[styles.contentOverlap, isTablet && styles.tabletContent]}>
             {isEditing ? (
             <Card style={styles.mainCard}>
                <Text style={[styles.cardTitle, { color: theme.colors.text }]}>{t('profile.editInfo')}</Text>
-               <div style={styles.editForm}>
+               <View style={styles.editForm}>
                   <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5', borderColor: theme.colors.border }]}>
                     <MaterialIcons name="person" size={20} color={theme.colors.primary} style={styles.inputIcon} />
                     <TextInput
@@ -308,6 +345,8 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                       style={[styles.input, { color: theme.colors.text }]}
                       placeholder={t('profile.phone')}
                       placeholderTextColor={theme.colors.textSecondary}
+                      keyboardType="phone-pad"
+                      maxLength={9}
                       value={editData.phone}
                       onChangeText={(v) => setEditData({...editData, phone: v})}
                     />
@@ -324,36 +363,54 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                     />
                   </View>
                   <Button title={t('profile.saveChanges')} onPress={handleUpdateProfile} loading={updating} />
-               </div>
+               </View>
             </Card>
           ) : isChangingPassword ? (
             <Card style={styles.mainCard}>
                <Text style={[styles.cardTitle, { color: theme.colors.text }]}>{t('profile.changePassword')}</Text>
-               <div style={styles.editForm}>
-                  <TextInput
-                    style={[styles.inputSimple, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5' }]}
-                    placeholder={t('profile.oldPassword')}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    secureTextEntry
-                    value={passwordData.oldPassword}
-                    onChangeText={(v) => setPasswordData({...passwordData, oldPassword: v})}
-                  />
-                  <TextInput
-                    style={[styles.inputSimple, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5' }]}
-                    placeholder={t('profile.newPassword')}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    secureTextEntry
-                    value={passwordData.newPassword}
-                    onChangeText={(v) => setPasswordData({...passwordData, newPassword: v})}
-                  />
-                  <TextInput
-                    style={[styles.inputSimple, { color: theme.colors.text, borderColor: theme.colors.border, backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5' }]}
-                    placeholder={t('profile.confirmPassword')}
-                    placeholderTextColor={theme.colors.textSecondary}
-                    secureTextEntry
-                    value={passwordData.confirmPassword}
-                    onChangeText={(v) => setPasswordData({...passwordData, confirmPassword: v})}
-                  />
+               <View style={styles.editForm}>
+                  <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5', borderColor: theme.colors.border }]}>
+                    <TextInput
+                      style={[styles.input, { color: theme.colors.text }]}
+                      placeholder={t('profile.oldPassword')}
+                      placeholderTextColor={theme.colors.textSecondary}
+                      secureTextEntry={!showOldPassword}
+                      value={passwordData.oldPassword}
+                      onChangeText={(v) => setPasswordData({...passwordData, oldPassword: v})}
+                    />
+                    <TouchableOpacity onPress={() => setShowOldPassword(!showOldPassword)}>
+                      <MaterialIcons name={showOldPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5', borderColor: theme.colors.border }]}>
+                    <TextInput
+                      style={[styles.input, { color: theme.colors.text }]}
+                      placeholder={t('profile.newPassword')}
+                      placeholderTextColor={theme.colors.textSecondary}
+                      secureTextEntry={!showNewPassword}
+                      value={passwordData.newPassword}
+                      onChangeText={(v) => setPasswordData({...passwordData, newPassword: v})}
+                    />
+                    <TouchableOpacity onPress={() => setShowNewPassword(!showNewPassword)}>
+                      <MaterialIcons name={showNewPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : '#F5F5F5', borderColor: theme.colors.border }]}>
+                    <TextInput
+                      style={[styles.input, { color: theme.colors.text }]}
+                      placeholder={t('profile.confirmPassword')}
+                      placeholderTextColor={theme.colors.textSecondary}
+                      secureTextEntry={!showConfirmPassword}
+                      value={passwordData.confirmPassword}
+                      onChangeText={(v) => setPasswordData({...passwordData, confirmPassword: v})}
+                    />
+                    <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)}>
+                      <MaterialIcons name={showConfirmPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  </View>
+
                   <Button title={t('profile.changePassword')} onPress={handleChangePassword} loading={updating} />
                   <TouchableOpacity
                       style={{ marginTop: 15, alignItems: 'center' }}
@@ -361,12 +418,12 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                   >
                       <Text style={{ color: theme.colors.textSecondary }}>{t('common.cancel')}</Text>
                   </TouchableOpacity>
-               </div>
+               </View>
             </Card>
           ) : (
             <>
               <Card style={styles.mainCard}>
-                <div style={styles.statsRow}>
+                <View style={styles.statsRow}>
                     <View style={styles.statItem}>
                        <View style={[styles.statIconBox, { backgroundColor: theme.colors.primary + '15' }]}>
                           <MaterialIcons name="payments" size={24} color={theme.colors.primary} />
@@ -396,7 +453,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                       </Text>
                       <Text style={styles.statLabel}>{t('profile.stats.status')}</Text>
                     </View>
-                </div>
+                </View>
               </Card>
 
               <SectionHeader title={t('profile.personalInfo')} />
@@ -421,21 +478,21 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
               <Card style={styles.sectionCard}>
                  {payrolls.length > 0 ? (
                    payrolls.map((pay, index) => (
-                     <div key={pay.id}>
+                     <View key={pay.id}>
                        <View style={styles.paymentRow}>
                           <View style={styles.paymentInfo}>
                             <Text style={[styles.paymentPeriod, { color: theme.colors.text }]}>{t('profile.period')}: {pay.month || pay.date}</Text>
                             <Text style={[styles.paymentDate, { color: theme.colors.textSecondary }]}>{t('profile.paidOn')} {new Date(pay.date || pay.created_at).toLocaleDateString()}</Text>
                           </View>
                           <View style={styles.paymentAmountBox}>
-                            <Text style={styles.paymentAmount}>{parseFloat(pay.amount_paid).toLocaleString()} FCFA</Text>
+                            <Text style={styles.paymentAmount}>{formatNumber(pay.amount_paid)} FCFA</Text>
                             <View style={styles.statusBadge}>
                                <Text style={styles.statusText}>{pay.status === 'PAID' ? t('profile.paidStatus') : t('profile.pendingStatus')}</Text>
                             </View>
                           </View>
                        </View>
                        {index !== payrolls.length - 1 && <View style={styles.divider} />}
-                     </div>
+                     </View>
                    ))
                  ) : (
                    <Text style={{ textAlign: 'center', color: theme.colors.textSecondary, padding: 20 }}>{t('profile.noPayments')}</Text>
@@ -464,7 +521,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
 
               <SectionHeader title={t('profile.settings')} />
               <Card style={styles.sectionCard}>
-                <div style={styles.compactSettingsRow}>
+                <View style={styles.compactSettingsRow}>
                   <TouchableOpacity
                     style={styles.compactBtn}
                     onPress={() => {
@@ -495,8 +552,8 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                         t('profile.chooseLanguage'),
                         "",
                         [
-                          { text: "Français", onPress: () => setLanguage('fr') },
-                          { text: "English", onPress: () => setLanguage('en') },
+                          { text: t('settings.langFrench'), onPress: () => setLanguage('fr') },
+                          { text: t('settings.langEnglish'), onPress: () => setLanguage('en') },
                           { text: t('settings.langAuto'), onPress: () => setLanguage('auto') },
                           { text: t('common.cancel'), style: 'cancel' }
                         ]
@@ -520,7 +577,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                     />
                     <Text style={[styles.compactBtnText, { color: theme.colors.text }]}>{t('profile.notifications')}</Text>
                   </View>
-                </div>
+                </View>
               </Card>
 
               <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -534,7 +591,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
               </View>
             </>
           )}
-        </div>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -601,7 +658,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    borderWidth: 4,
+    borderWidth: 0.8,
     justifyContent: 'center',
     alignItems: 'center',
     overflow: 'hidden',
@@ -632,7 +689,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
+    borderWidth: 0.8,
     borderColor: '#FFF',
     zIndex: 10
   },
@@ -704,9 +761,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     textAlign: 'center'
   },
   dividerVertical: {
-    width: 1,
+    width: 0.8,
     height: 40,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: theme.colors.border,
   },
   compactSettingsRow: {
     flexDirection: 'row',
@@ -734,9 +791,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     letterSpacing: 0.5,
   },
   dividerVerticalSmall: {
-    width: 1,
+    width: 0.8,
     height: 20,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: theme.colors.border,
   },
   logoutButton: {
     backgroundColor: theme.colors.danger,
@@ -768,7 +825,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginBottom: 12,
     paddingHorizontal: 15,
     height: 55,
-    borderWidth: 1,
+    borderWidth: 0.8,
   },
   inputIcon: {
     marginRight: 10,
@@ -779,7 +836,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     height: '100%',
   },
   inputSimple: {
-    borderWidth: 1,
+    borderWidth: 0.8,
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
@@ -812,7 +869,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   infoTexts: { flex: 1 },
   infoLabelStyled: { fontSize: 12, color: '#888' },
   infoValueStyled: { fontSize: 15, fontWeight: '500' },
-  divider: { height: 1, backgroundColor: 'rgba(0,0,0,0.05)', marginLeft: 70 },
+  divider: { height: 0.8, backgroundColor: theme.colors.border, marginLeft: 70 },
   paymentRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

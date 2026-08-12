@@ -1,6 +1,6 @@
 export const theme = {
   colors: {
-    background: '#FFE9BB', // Fond crème/jaune doux demandé
+    background: '#FFF8EC', // Fond crème très clair demandé
     primary: '#F9D760',    // Boutons principaux
     secondary: '#FFFFFF',  // Pour les contrastes ou boutons secondaires
     surface: '#FFFFFF',    // Cartes blanches

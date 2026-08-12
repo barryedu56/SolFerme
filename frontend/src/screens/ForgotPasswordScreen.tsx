@@ -5,6 +5,8 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
+import { repositoryProvider } from '../repositories';
+import { getErrorMessage } from '../utils/errors';
 
 export const ForgotPasswordScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
@@ -12,24 +14,68 @@ export const ForgotPasswordScreen = ({ navigation }: any) => {
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [step, setStep] = useState(1); // 1: Request Code, 2: Confirm Reset
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleReset = async () => {
+  const handleRequestCode = async () => {
+    setError(null);
     if (!email) {
-      Alert.alert(t('common.error'), t('auth.emailRequired', { defaultValue: 'Veuillez renseigner votre adresse email.' }));
+      setError(t('auth.emailRequired'));
       return;
     }
     
     setLoading(true);
-    // Simulation d'un appel réseau (Mock UI) car le backend Django n'a pas encore de serveur SMTP configuré
-    setTimeout(() => {
+    try {
+      const res = await repositoryProvider.api.post('/auth/password-reset-request/', { email });
+      setLoading(false);
+
+      // In DEBUG mode, we might get the code back for testing
+      if (res.data.code_dev) {
+        Alert.alert(
+          t('auth.emailSent'),
+          `DEBUG MODE: Code: ${res.data.code_dev}`
+        );
+        setCode(res.data.code_dev);
+      } else {
+        Alert.alert(
+          t('auth.emailSent'),
+          t('auth.resetEmailSentDesc')
+        );
+      }
+      setStep(2);
+    } catch (e: any) {
+      setLoading(false);
+      setError(getErrorMessage(e));
+    }
+  };
+
+  const handleConfirmReset = async () => {
+    setError(null);
+    if (!code || !newPassword) {
+      setError(t('profile.fillAllFields'));
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await repositoryProvider.api.post('/auth/password-reset-confirm/', {
+        email,
+        code,
+        new_password: newPassword
+      });
       setLoading(false);
       Alert.alert(
-        t('auth.emailSent'),
-        t('auth.resetEmailSentDesc', { defaultValue: "Si un compte est associé à cet email, vous recevrez un lien de réinitialisation d'ici quelques minutes." })
+        t('common.success'),
+        t('profile.passwordSuccess'),
+        [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
       );
-      navigation.goBack();
-    }, 1500);
+    } catch (e: any) {
+      setLoading(false);
+      setError(getErrorMessage(e));
+    }
   };
 
   return (
@@ -42,25 +88,77 @@ export const ForgotPasswordScreen = ({ navigation }: any) => {
         
         <View style={styles.header}>
           <Text style={styles.title}>{t('auth.resetPassword')}</Text>
-          <Text style={styles.subtitle}>{t('auth.resetPasswordSubtitle')}</Text>
+          <Text style={styles.subtitle}>
+            {step === 1
+              ? t('auth.resetPasswordSubtitle')
+              : t('auth.resetPasswordConfirmSubtitle')
+            }
+          </Text>
         </View>
         
         <Card style={styles.card}>
-          <Input
-            label={t('auth.email')}
-            placeholder="votre@email.com"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
-          
-          <Button 
-            title={t('auth.sendLink')}
-            onPress={handleReset} 
-            loading={loading}
-            style={styles.submitButton}
-          />
+          {step === 1 ? (
+            <>
+              <Input
+                label={t('auth.email')}
+                placeholder="votre@email.com"
+                value={email}
+                onChangeText={(text) => { setEmail(text); setError(null); }}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                error={error && error.includes('email') ? error : undefined}
+              />
+
+              {error && !error.includes('email') && (
+                <Text style={styles.errorText}>{error}</Text>
+              )}
+
+              <Button
+                title={t('auth.sendLink')}
+                onPress={handleRequestCode}
+                loading={loading}
+                style={styles.submitButton}
+              />
+            </>
+          ) : (
+            <>
+              <Input
+                label={t('auth.code')}
+                placeholder="123456"
+                value={code}
+                onChangeText={(text) => { setCode(text); setError(null); }}
+                keyboardType="numeric"
+                error={error && (error.includes('code') || error.includes('lien')) ? error : undefined}
+              />
+
+              <Input
+                label={t('profile.newPassword')}
+                placeholder="********"
+                value={newPassword}
+                onChangeText={(text) => { setNewPassword(text); setError(null); }}
+                secureTextEntry
+                error={error && error.includes('passe') ? error : undefined}
+              />
+
+              {error && !error.includes('code') && !error.includes('lien') && !error.includes('passe') && (
+                <Text style={styles.errorText}>{error}</Text>
+              )}
+
+              <Button
+                title={t('common.confirm')}
+                onPress={handleConfirmReset}
+                loading={loading}
+                style={styles.submitButton}
+              />
+
+              <TouchableOpacity
+                onPress={() => { setStep(1); setError(null); }}
+                style={{ marginTop: 15, alignItems: 'center' }}
+              >
+                <Text style={{ color: theme.colors.primary }}>{t('common.back')}</Text>
+              </TouchableOpacity>
+            </>
+          )}
         </Card>
       </View>
     </SafeAreaView>
@@ -112,5 +210,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   submitButton: {
     marginTop: theme.spacing.m,
+  },
+  errorText: {
+    color: theme.colors.danger,
+    fontSize: 14,
+    marginBottom: theme.spacing.m,
+    textAlign: 'center',
   }
 });

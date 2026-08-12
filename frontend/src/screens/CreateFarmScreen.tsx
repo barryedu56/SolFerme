@@ -4,14 +4,17 @@ import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { useAuth } from '../context/AuthContext';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
+import { toast } from '../utils/toast';
 
 export const CreateFarmScreen = ({ navigation, route }: any) => {
-  const { theme } = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { userId } = useAuth();
+  const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
 
   const editFarm = route.params?.farm;
   const isEditing = !!editFarm;
@@ -25,51 +28,96 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
 
   const handleSave = async () => {
     if (!name || !location) {
-      Alert.alert(t('common.error'), t('farms.fillRequired'));
+      toast.error(t('common.error'), t('farms.fillRequired'));
       return;
     }
 
     setLoading(true);
     try {
-      const payload = {
+      // owner requis pour la création offline (contrainte NOT NULL sur owner_id dans SQLite)
+      const payload: Record<string, any> = {
         name,
         location,
-        phone,
         description,
-        capacity: capacity ? parseInt(capacity) : 0,
+        capacity: capacity ? Number(capacity) : 0,
       };
+      if (userId) {
+        payload.owner = userId;
+      }
 
       if (isEditing) {
-        await apiClient.put(`/farms/${editFarm.id}/`, payload);
-        Alert.alert(t('common.success'), t('farms.saveSuccess'));
+        await repositoryProvider.farm.update(editFarm.id, payload);
+        toast.success(t('common.success'), t('farms.saveSuccess'));
       } else {
-        await apiClient.post('/farms/', payload);
-        Alert.alert(t('common.success'), t('farms.saveSuccess'));
+        await repositoryProvider.farm.create(payload);
+        toast.success(t('common.success'), t('farms.saveSuccess'));
       }
       navigation.goBack();
     } catch (error) {
-      Alert.alert(t('common.error'), t('farms.saveError'));
+      toast.error(t('common.error'), t('farms.saveError'));
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = () => {
+  const handleReactivate = () => {
     Alert.alert(
-      t('common.delete'),
-      t('farms.deleteFarmConfirm'),
+      t('common.reactivate'),
+      t('farms.reactivateFarmConfirm'),
       [
         { text: t('common.cancel'), style: "cancel" },
         {
-          text: t('common.delete'),
+          text: t('common.reactivate'),
+          onPress: async () => {
+            try {
+              await repositoryProvider.farm.reactivate(editFarm.id);
+              toast.success(t('common.success'), t('farms.reactivateSuccess'));
+              navigation.navigate('Farms');
+            } catch (e: any) {
+              const errorMsg = e.response?.data?.error || t('farms.reactivateError');
+              toast.error(t('common.error'), errorMsg);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleDelete = () => {
+    const isAlreadyArchived = editFarm?.status === 'ARCHIVE';
+    const canDeleteDefinitively = !editFarm?.has_data;
+
+    const actionTitle = canDeleteDefinitively
+      ? (isAlreadyArchived ? t('common.delete') : t('common.delete'))
+      : t('common.archive');
+
+    const actionMessage = canDeleteDefinitively
+      ? t('common.deleteConfirm')
+      : t('farms.archiveFarmConfirm');
+
+    Alert.alert(
+      actionTitle,
+      actionMessage,
+      [
+        { text: t('common.cancel'), style: "cancel" },
+        {
+          text: actionTitle,
           style: "destructive",
           onPress: async () => {
             try {
-              await apiClient.delete(`/farms/${editFarm.id}/`);
-              Alert.alert(t('common.success'), t('farms.deleteSuccess'));
+                      if (canDeleteDefinitively) {
+                // Suppression définitive si pas de données
+                await repositoryProvider.farm.delete(editFarm.id);
+                toast.success(t('common.success'), t('farms.deleteSuccess'));
+              } else {
+                // Archivage obligatoire si historique existe
+                await repositoryProvider.farm.archive(editFarm.id);
+                toast.success(t('common.success'), t('farms.archiveSuccess'));
+              }
               navigation.navigate('Farms');
-            } catch (e) {
-              Alert.alert(t('common.error'), t('farms.deleteError'));
+            } catch (e: any) {
+              const errorMsg = e.response?.data?.error || (canDeleteDefinitively ? t('farms.deleteError') : t('farms.archiveError'));
+              toast.error(t('common.error'), errorMsg);
             }
           }
         }
@@ -89,9 +137,20 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{isEditing ? t('farms.editFarm') : t('farms.newFarm')}</Text>
           {isEditing ? (
-            <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
-              <MaterialIcons name="delete-outline" size={24} color={theme.colors.danger} />
-            </TouchableOpacity>
+            <View style={{ flexDirection: 'row' }}>
+              {editFarm.status === 'ARCHIVE' && (
+                <TouchableOpacity onPress={handleReactivate} style={[styles.deleteBtn, { backgroundColor: theme.colors.success + '15', marginRight: 10 }]}>
+                  <MaterialIcons name="unarchive" size={24} color={theme.colors.success} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity onPress={handleDelete} style={styles.deleteBtn}>
+                <MaterialIcons
+                  name={editFarm?.has_data ? "archive" : "delete-forever"}
+                  size={24}
+                  color={theme.colors.danger}
+                />
+              </TouchableOpacity>
+            </View>
           ) : (
             <View style={{ width: 40 }} />
           )}
@@ -143,7 +202,8 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
                   placeholder={t('farms.phonePlaceholder')}
                   value={phone}
                   onChangeText={setPhone}
-                  keyboardType="phone-pad"
+                  isPhone
+                  maxLength={9}
                   style={styles.fieldInput}
                 />
              </View>
@@ -200,7 +260,7 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -273,7 +333,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   infoBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+    backgroundColor: isDarkMode ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.l,
     marginBottom: theme.spacing.xl,

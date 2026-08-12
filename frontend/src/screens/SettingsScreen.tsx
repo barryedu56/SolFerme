@@ -12,6 +12,7 @@ export const SettingsScreen = ({ navigation }: any) => {
   const { language, setLanguage, t } = useTranslation();
   const { width } = useWindowDimensions();
   const isTablet = width > 600;
+  const styles = React.useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
   const [autoBackup, setAutoBackup] = useState(true);
   const [cacheSize, setCacheSize] = useState('0 MB');
   const [lastSync, setLastSync] = useState('---');
@@ -45,7 +46,7 @@ export const SettingsScreen = ({ navigation }: any) => {
   const handleClearCache = async () => {
     Alert.alert(
       t('settings.clearCache'),
-      'Voulez-vous vraiment vider le cache local ? Cela supprimera les fichiers temporaires.',
+      t('settings.clearCacheConfirm') || 'Voulez-vous vraiment vider le cache local ? Cela supprimera les fichiers temporaires.',
       [
         { text: t('common.cancel'), style: 'cancel' },
         {
@@ -67,7 +68,7 @@ export const SettingsScreen = ({ navigation }: any) => {
               setCacheSize('0.0 MB');
               Alert.alert(t('common.success'), t('common.success'));
             } catch (e) {
-              Alert.alert(t('common.error'), 'Échec du nettoyage.');
+              Alert.alert(t('common.error'), t('settings.clearCacheError') || 'Échec du nettoyage.');
             }
           }
         }
@@ -103,8 +104,6 @@ export const SettingsScreen = ({ navigation }: any) => {
     </TouchableOpacity>
   );
 
-  const styles = createStyles(theme, isTablet);
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -123,7 +122,7 @@ export const SettingsScreen = ({ navigation }: any) => {
             title={t('settings.themeLight')}
             type="link"
             onPress={() => setThemeMode('light')}
-            subtitle={themeMode === 'light' ? 'Sélectionné' : ''}
+            subtitle={themeMode === 'light' ? t('common.selected') : ''}
           />
           <View style={styles.divider} />
           <SettingItem
@@ -131,7 +130,7 @@ export const SettingsScreen = ({ navigation }: any) => {
             title={t('settings.themeDark')}
             type="link"
             onPress={() => setThemeMode('dark')}
-            subtitle={themeMode === 'dark' ? 'Sélectionné' : ''}
+            subtitle={themeMode === 'dark' ? t('common.selected') : ''}
           />
           <View style={styles.divider} />
           <SettingItem
@@ -139,7 +138,7 @@ export const SettingsScreen = ({ navigation }: any) => {
             title={t('settings.themeAuto')}
             type="link"
             onPress={() => setThemeMode('auto')}
-            subtitle={themeMode === 'auto' ? 'Sélectionné' : ''}
+            subtitle={themeMode === 'auto' ? t('common.selected') : ''}
           />
         </Card>
 
@@ -150,23 +149,23 @@ export const SettingsScreen = ({ navigation }: any) => {
             title={t('settings.langAuto')}
             type="link"
             onPress={() => setLanguage('auto')}
-            subtitle={language === 'auto' ? 'Sélectionné' : ''}
+            subtitle={language === 'auto' ? t('common.selected') : ''}
           />
           <View style={styles.divider} />
           <SettingItem
             icon="language"
-            title="Français"
+            title={t('settings.langFrench')}
             type="link"
             onPress={() => setLanguage('fr')}
-            subtitle={language === 'fr' ? 'Sélectionné' : ''}
+            subtitle={language === 'fr' ? t('common.selected') : ''}
           />
           <View style={styles.divider} />
           <SettingItem
             icon="language"
-            title="English"
+            title={t('settings.langEnglish')}
             type="link"
             onPress={() => setLanguage('en')}
-            subtitle={language === 'en' ? 'Sélectionné' : ''}
+            subtitle={language === 'en' ? t('common.selected') : ''}
           />
         </Card>
 
@@ -209,21 +208,21 @@ export const SettingsScreen = ({ navigation }: any) => {
           </TouchableOpacity>
         </Card>
 
-        <Text style={styles.sectionLabel}>Informations</Text>
+        <Text style={styles.sectionLabel}>{t('common.info')}</Text>
         <Card style={styles.card}>
           <SettingItem
             icon="info"
-            title="Version"
+            title={t('common.version')}
             subtitle="v2.1.0-PRO"
             type="text"
           />
           <View style={styles.divider} />
           <SettingItem
             icon="policy"
-            title="Légal"
-            subtitle="Confidentialité"
+            title={t('settings.legal')}
+            subtitle={t('settings.privacy')}
             type="link"
-            onPress={() => Alert.alert('Légal', 'Vos données sont stockées de façon sécurisée.')}
+            onPress={() => Alert.alert(t('settings.legal'), t('settings.legalDesc'))}
           />
         </Card>
 
@@ -271,7 +270,15 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1.2
   },
-  card: { padding: 0, marginBottom: theme.spacing.xl, borderRadius: theme.borderRadius.xl, overflow: 'hidden', backgroundColor: theme.colors.surface },
+  card: {
+    padding: 0,
+    marginBottom: theme.spacing.xl,
+    borderRadius: theme.borderRadius.xl,
+    overflow: 'hidden',
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#000000'
+  },
   item: {
     flexDirection: 'row',
     alignItems: 'center',

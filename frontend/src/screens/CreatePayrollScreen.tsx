@@ -3,10 +3,14 @@ import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert, TouchableOpaci
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
+import { getErrorMessage } from '../utils/errors';
+import { toast } from '../utils/toast';
+import { formatCurrency } from '../utils/formatters';
+import { getPeriodInfo } from '../utils/payrollUtils';
 
 export const CreatePayrollScreen = ({ navigation, route }: any) => {
   const { theme } = useTheme();
@@ -20,18 +24,28 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
 
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(initialEmployee?.id?.toString() || '');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [month, setMonth] = useState(initialMonthParam || new Date().toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US', { month: 'long', year: 'numeric' }));
   const [baseSalary, setBaseSalary] = useState(initialEmployee?.salary?.toString() || '0');
   const [bonus, setBonus] = useState('0');
   const [deduction, setDeduction] = useState('0');
-  const [paymentMethod, setPaymentMethod] = useState('Espèces');
+  const [paymentMethod, setPaymentMethod] = useState('CASH');
+  const [employeeBonuses, setEmployeeBonuses] = useState<any[]>([]);
 
   const [showEmployeePicker, setShowEmployeePicker] = useState(false);
+
+  const selectedEmployee = useMemo(() => {
+    return employees.find(e => e.id.toString() === selectedEmployeeId);
+  }, [employees, selectedEmployeeId]);
+
+  const paymentFrequency = selectedEmployee?.payment_frequency || 'MENSUEL';
+
+  const { periodKey, periodLabel } = useMemo(() => {
+    return getPeriodInfo(paymentFrequency, date, activeLanguage);
+  }, [paymentFrequency, date, activeLanguage]);
 
   useEffect(() => {
     const fetchEmployees = async () => {
       try {
-        const res = await apiClient.get('/employees/');
+        const res = await repositoryProvider.api.get('/employees/');
         setEmployees(res.data);
       } catch (error) {
         console.error('Erreur fetch employees:', error);
@@ -39,6 +53,23 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
     };
     fetchEmployees();
   }, []);
+
+  useEffect(() => {
+    const fetchEmployeeBonuses = async () => {
+      if (selectedEmployeeId) {
+        try {
+          const res = await repositoryProvider.api.get(`/bonuses/?employee=${selectedEmployeeId}`);
+          setEmployeeBonuses(res.data);
+          // Auto-calculate total bonuses
+          const totalBonus = res.data.reduce((sum: number, b: any) => sum + parseFloat(b.amount), 0);
+          setBonus(totalBonus.toString());
+        } catch (error) {
+          console.error('Erreur fetch bonuses:', error);
+        }
+      }
+    };
+    fetchEmployeeBonuses();
+  }, [selectedEmployeeId]);
 
   const calculateNet = () => {
     const base = parseFloat(baseSalary) || 0;
@@ -48,30 +79,31 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
   };
 
   const handleCreate = async () => {
-    if (!selectedEmployeeId || !date || !month) {
-      Alert.alert(t('common.error'), t('payroll.fillRequired'));
+    if (!selectedEmployeeId || !date) {
+      toast.error(t('common.error'), t('payroll.fillRequired'));
       return;
     }
 
     setLoading(true);
     try {
-      await apiClient.post('/payrolls/', {
+      await repositoryProvider.api.post('/payrolls/', {
         employee: parseInt(selectedEmployeeId),
         date: date,
-        month: month,
-        base_salary: parseFloat(baseSalary),
-        bonus: parseFloat(bonus),
-        deduction: parseFloat(deduction),
+        month: periodLabel,
+        period_key: periodKey,
+        base_salary: parseFloat(baseSalary) || 0,
+        bonus: parseFloat(bonus) || 0,
+        deduction: parseFloat(deduction) || 0,
         amount_paid: calculateNet(),
-        status: 'PAID',
+        status: 'ACTIF',
         payment_method: paymentMethod
       });
 
-      Alert.alert(t('common.success'), t('payroll.success'));
+      toast.success(t('common.success'), t('payroll.success'));
       navigation.goBack();
     } catch (error: any) {
       console.error(error);
-      Alert.alert(t('common.error'), t('payroll.error'));
+      toast.error('Action impossible', getErrorMessage(error, t('payroll.error')));
     } finally {
       setLoading(false);
     }
@@ -131,15 +163,15 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
                 <Input value={date} onChangeText={setDate} placeholder="AAAA-MM-JJ" />
               </View>
               <View style={[styles.inputGroup, { flex: 1 }]}>
-                <Text style={styles.label}>{t('payroll.period')} *</Text>
-                <Input value={month} onChangeText={setMonth} placeholder={t('payroll.periodPlaceholder')} />
+                <Text style={styles.label}>{t('payroll.period')} ({paymentFrequency.toLowerCase()})</Text>
+                <Input value={periodLabel} editable={false} style={{ backgroundColor: theme.colors.background + '80' }} />
               </View>
             </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('payroll.baseSalary')}</Text>
               <Input
-                keyboardType="numeric"
+                isNumeric
                 value={baseSalary}
                 onChangeText={setBaseSalary}
               />
@@ -147,17 +179,22 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
 
             <View style={styles.row}>
               <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
-                <Text style={styles.label}>{t('payroll.bonus')}</Text>
+                <Text style={styles.label}>{t('payroll.bonus')} (Auto-calculé)</Text>
                 <Input
-                  keyboardType="numeric"
+                  isNumeric
                   value={bonus}
                   onChangeText={setBonus}
+                  editable={false}
+                  style={{ backgroundColor: theme.colors.background + '80' }}
                 />
+                {employeeBonuses.length > 0 && (
+                  <Text style={styles.bonusHint}>{employeeBonuses.length} prime(s) inclue(s)</Text>
+                )}
               </View>
               <View style={[styles.inputGroup, { flex: 1 }]}>
                 <Text style={styles.label}>{t('payroll.deduction')}</Text>
                 <Input
-                  keyboardType="numeric"
+                  isNumeric
                   value={deduction}
                   onChangeText={setDeduction}
                 />
@@ -174,7 +211,7 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
 
             <View style={styles.netAmountContainer}>
                <Text style={styles.netLabel}>{t('payroll.netAmount')}</Text>
-               <Text style={styles.netValue}>{calculateNet().toLocaleString()} GNF</Text>
+               <Text style={styles.netValue}>{formatCurrency(calculateNet())}</Text>
             </View>
           </Card>
 
@@ -231,26 +268,32 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.colors.background + '40',
     padding: 12,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   pickerButtonText: { fontSize: 14, color: theme.colors.text },
   pickerOptions: {
     marginTop: 4,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
     maxHeight: 200,
   },
   pickerOption: {
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border + '10',
+    borderBottomWidth: 0.8,
+    borderBottomColor: theme.colors.border,
   },
   pickerOptionText: { fontSize: 14, color: theme.colors.textSecondary },
   selectedOptionText: { color: theme.colors.primary, fontWeight: 'bold' },
+  bonusHint: {
+    fontSize: 10,
+    color: theme.colors.textSecondary,
+    marginTop: 4,
+    fontStyle: 'italic'
+  },
   netAmountContainer: {
     marginTop: theme.spacing.m,
     padding: theme.spacing.m,

@@ -59,16 +59,38 @@ def test_serialization():
         import traceback
         traceback.print_exc()
 
-    print("\n--- Testing serialization WITHOUT request context ---")
-    serializer = EmployeeSerializer(employee, context={})
+    print("\n--- Testing serialization with EMPTY SALARY ---")
+    employee.salary = None
     try:
+        serializer = EmployeeSerializer(employee, context={'request': request})
         data = serializer.data
-        print("Serialization successful")
-        print(f"User Image URL: {data.get('user_image')}")
+        print(f"Serialization successful even with None salary: {data.get('salary')}")
+        print(f"Estimated total: {data.get('estimated_total')}")
     except Exception as e:
-        print(f"FAILED without request context: {e}")
+        print(f"FAILED with None salary: {e}")
         import traceback
         traceback.print_exc()
+
+    print("\n--- Testing serialization with NULL BONUS AMOUNT ---")
+    employee.salary = 1000
+    from farm_management.models import Bonus
+    import datetime
+    bonus = Bonus.objects.create(
+        employee=employee,
+        amount=None, # If this is even possible in DB
+        date=datetime.date.today(),
+        status='ACTIVE'
+    )
+    try:
+        serializer = EmployeeSerializer(employee, context={'request': request})
+        data = serializer.data
+        print(f"Serialization successful with NULL bonus amount: {data.get('bonus_total')}")
+    except Exception as e:
+        print(f"FAILED with NULL bonus amount: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        bonus.delete()
 
 if __name__ == "__main__":
     test_serialization()

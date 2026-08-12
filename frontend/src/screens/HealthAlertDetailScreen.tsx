@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { MaterialIcons } from '@expo/vector-icons';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
+import { useTranslation } from '../context/LanguageContext';
 
 export const HealthAlertDetailScreen = ({ route, navigation }: any) => {
   const { alert } = route.params;
   const { theme } = useTheme();
+  const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
 
   const getStatusColor = (color: string) => {
@@ -15,6 +17,7 @@ export const HealthAlertDetailScreen = ({ route, navigation }: any) => {
       case 'ORANGE': return '#F57C00';
       case 'GREEN': return '#388E3C';
       case 'BLUE': return '#1976D2';
+      case 'PURPLE': return '#9C27B0';
       default: return theme.colors.textSecondary;
     }
   };
@@ -22,14 +25,21 @@ export const HealthAlertDetailScreen = ({ route, navigation }: any) => {
   const markAsViewed = async () => {
     try {
       setLoading(true);
-      await apiClient.post(`/health-alerts/${alert.id}/mark_as_viewed/`);
+      await repositoryProvider.api.post(`/health-alerts/${alert.id}/mark_as_viewed/`);
       navigation.goBack();
     } catch (error) {
       console.error(error);
-      Alert.alert('Erreur', 'Impossible de marquer cette alerte comme vue.');
+      Alert.alert(t('common.error'), t('healthAlertDetail.viewError'));
     } finally {
       setLoading(false);
     }
+  };
+
+  const formatDate = (dateString: string) => {
+    if (!dateString) return t('healthAlertDetail.dateUnknown');
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return t('healthAlertDetail.invalidDate');
+    return date.toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'long', year: 'numeric' });
   };
 
   return (
@@ -38,22 +48,23 @@ export const HealthAlertDetailScreen = ({ route, navigation }: any) => {
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.title, { color: theme.colors.text }]}>Détails de l'Alerte</Text>
+        <Text style={[styles.title, { color: theme.colors.text }]}>{t('healthAlertDetail.title')}</Text>
         <View style={{ width: 24 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.statusBanner, { backgroundColor: getStatusColor(alert.color) }]}>
-          <MaterialIcons name="warning" size={40} color="#FFF" />
-          <Text style={styles.alertType}>{alert.type}</Text>
-          <Text style={styles.alertDate}>{new Date(alert.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</Text>
+          <MaterialIcons name="notification-important" size={40} color="#FFF" />
+          <Text style={styles.alertType}>{alert.type || t('healthAlertDetail.health')}</Text>
+          <Text style={styles.alertDate}>{formatDate(alert.date || alert.created_at)}</Text>
         </View>
 
         <View style={[styles.card, { backgroundColor: theme.colors.surface }]}>
-          <DetailRow label="Lot concerné" value={alert.lot_name} theme={theme} />
-          <DetailRow label="Quantité" value={`${alert.quantity} sujets`} theme={theme} />
-          {alert.reason && <DetailRow label="Cause / Raison" value={alert.reason} theme={theme} />}
-          <DetailRow label="Déclaré par" value={alert.created_by_name} theme={theme} />
+          <DetailRow label={t('healthAlertDetail.farm')} value={alert.farm_name || t('healthAlertDetail.unknown')} theme={theme} />
+          <DetailRow label={t('healthAlertDetail.lot')} value={alert.lot_name || t('healthAlertDetail.unknown')} theme={theme} />
+          <DetailRow label={t('healthAlertDetail.event')} value={alert.type || t('healthAlertDetail.unknown')} theme={theme} />
+          <DetailRow label={t('healthAlertDetail.quantity')} value={alert.quantity !== undefined ? `${alert.quantity} ${t('healthAlertDetail.subjects')}` : t('healthAlertDetail.unknown')} theme={theme} />
+          <DetailRow label={t('healthAlertDetail.performedBy')} value={alert.created_by_name || t('healthAlertDetail.unknownUser')} theme={theme} />
         </View>
 
         {!alert.is_viewed && (
@@ -62,7 +73,7 @@ export const HealthAlertDetailScreen = ({ route, navigation }: any) => {
             onPress={markAsViewed}
             disabled={loading}
           >
-            <Text style={styles.buttonText}>Marquer comme vue</Text>
+            <Text style={styles.buttonText}>{t('healthAlertDetail.markAsViewed')}</Text>
           </TouchableOpacity>
         )}
       </ScrollView>

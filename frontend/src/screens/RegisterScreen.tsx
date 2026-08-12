@@ -1,39 +1,76 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import { toast } from '../utils/toast';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { useTranslation } from '../context/LanguageContext';
+import { repositoryProvider } from '../repositories';
+import { getErrorMessage } from '../utils/errors';
 
 export const RegisterScreen = ({ navigation }: any) => {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
   const { theme } = useTheme();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
-  const handleRegister = async () => {
-    if (!name || !email || !password) {
-      Alert.alert('Erreur', 'Veuillez remplir les champs obligatoires.');
-      return;
+  const validate = () => {
+    const newErrors: Record<string, string> = {};
+    if (!name) newErrors.name = t('auth.fillRequired');
+    if (!email) {
+      newErrors.email = t('auth.fillRequired');
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      newErrors.email = t('auth.invalidEmail');
     }
-    
+
+    if (!password) {
+      newErrors.password = t('auth.fillRequired');
+    } else {
+      // Aligné avec la validation backend (serializers.py:187-198) : 8+ caractères, majuscule, minuscule, chiffre, caractère spécial
+      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
+      if (!passwordRegex.test(password)) {
+        newErrors.password = t('auth.passwordComplexity');
+      }
+    }
+
+    if (password !== confirmPassword) {
+      newErrors.confirmPassword = t('auth.passwordMismatch');
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleRegister = async () => {
+    if (!validate()) return;
+
     setLoading(true);
     try {
-      await apiClient.post('/users/', {
+      await repositoryProvider.api.post('/users/', {
         name,
         email,
         phone,
         password,
         role: 'PROPRIETAIRE'
       });
-      Alert.alert('Succès', 'Compte créé avec succès !');
+      toast.success(t('common.success'), t('auth.registerSuccess'));
       navigation.navigate('Login');
     } catch (error: any) {
-      Alert.alert('Erreur', "L'inscription a échoué.");
+      const errorMessage = getErrorMessage(error, t('auth.registerError'));
+      if (errorMessage.includes('email')) {
+        setErrors({ email: errorMessage });
+      } else if (errorMessage.includes('téléphone') || errorMessage.includes('numéro')) {
+        setErrors({ phone: errorMessage });
+      } else {
+        toast.error(t('common.actionImpossible') || "Action impossible", errorMessage);
+      }
     } finally {
       setLoading(false);
     }
@@ -45,53 +82,71 @@ export const RegisterScreen = ({ navigation }: any) => {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="always"
+          keyboardDismissMode="none"
+        >
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <Text style={styles.backArrow}>‹</Text>
-            <Text style={styles.backText}>Retour</Text>
+            <Text style={styles.backText}>{t('common.back')}</Text>
           </TouchableOpacity>
 
           <View style={styles.header}>
-            <Text style={styles.title}>Rejoindre SolFerme</Text>
-            <Text style={styles.subtitle}>Créez votre compte propriétaire pour commencer l'aventure.</Text>
+            <Text style={styles.title}>{t('auth.registerTitle')}</Text>
+            <Text style={styles.subtitle}>{t('auth.registerSubtitle')}</Text>
           </View>
           
           <Card style={styles.card}>
             <Input
-              label="Nom complet"
-              placeholder="Ex: Jean Dupont"
+              label={t('auth.fullName')}
+              placeholder={t('auth.fullNamePlaceholder')}
               value={name}
-              onChangeText={setName}
+              onChangeText={(text) => { setName(text); setErrors({ ...errors, name: '' }); }}
               autoCapitalize="words"
+              error={errors.name}
             />
             <Input
-              label="Email"
-              placeholder="jean@email.com"
+              label={t('auth.email')}
+              placeholder={t('auth.emailPlaceholder')}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(text) => { setEmail(text); setErrors({ ...errors, email: '' }); }}
               keyboardType="email-address"
               autoCapitalize="none"
+              error={errors.email}
             />
             <Input
-              label="Téléphone (Optionnel)"
-              placeholder="+225 ..."
+              label={t('auth.phone')}
+              placeholder={t('auth.phonePlaceholder')}
               value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
+              onChangeText={(text) => { setPhone(text); setErrors({ ...errors, phone: '' }); }}
+              isPhone
+              maxLength={9}
+              error={errors.phone}
             />
             <Input
-              label="Mot de passe"
-              placeholder="••••••••"
+              label={t('auth.password')}
+              placeholder={t('auth.passwordPlaceholder')}
               value={password}
-              onChangeText={setPassword}
+              onChangeText={(text) => { setPassword(text); setErrors({ ...errors, password: '' }); }}
               secureTextEntry
+              error={errors.password}
+            />
+            <Input
+              label={t('auth.confirmPassword')}
+              placeholder="********"
+              value={confirmPassword}
+              onChangeText={(text) => { setConfirmPassword(text); setErrors({ ...errors, confirmPassword: '' }); }}
+              secureTextEntry
+              error={errors.confirmPassword}
             />
 
             <Button
-              title="Créer mon compte"
+              title={t('auth.registerButton')}
               onPress={handleRegister}
               loading={loading}
               style={styles.submitButton}
+              textColor="#000000"
             />
           </Card>
 
@@ -99,7 +154,7 @@ export const RegisterScreen = ({ navigation }: any) => {
             onPress={() => navigation.navigate('Login')}
             style={styles.footerLink}
           >
-            <Text style={styles.linkText}>Déjà inscrit ? <Text style={styles.linkBold}>Se connecter</Text></Text>
+            <Text style={styles.linkText}>{t('auth.alreadyRegistered')}<Text style={styles.linkBold}>{t('auth.login')}</Text></Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>

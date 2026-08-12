@@ -1,5 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { useColorScheme } from 'react-native';
+import { useColorScheme, Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme as defaultTheme } from '../theme';
 
@@ -13,38 +13,50 @@ const darkColors = {
   textSecondary: '#AAAAAA',
   border: '#333333',
   inputBackground: '#2C2C2C',
-  primary: '#F9D760', // Keep primary yellow for brand consistency
+  primary: '#F9D760',
 };
 
 const lightColors = { ...defaultTheme.colors };
 
-export const ThemeContext = createContext({
-  themeMode: 'auto' as ThemeMode,
-  setThemeMode: (mode: ThemeMode) => {},
+interface ThemeContextType {
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
+  isDarkMode: boolean;
+  toggleDarkMode: (val: boolean) => void;
+  notifications: boolean;
+  toggleNotifications: (val?: boolean) => void;
+  theme: typeof defaultTheme;
+}
+
+export const ThemeContext = createContext<ThemeContextType>({
+  themeMode: 'auto',
+  setThemeMode: () => {},
   isDarkMode: false,
-  toggleDarkMode: (val: boolean) => {},
+  toggleDarkMode: () => {},
   notifications: true,
-  toggleNotifications: (val?: boolean) => {},
-  theme: {
-    ...defaultTheme,
-    colors: lightColors
-  }
+  toggleNotifications: () => {},
+  theme: defaultTheme
 });
 
 export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   const systemColorScheme = useColorScheme();
   const [themeMode, setThemeModeState] = useState<ThemeMode>('auto');
   const [notifications, setNotifications] = useState(true);
-  const [mounted, setMounted] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const loadSettings = async () => {
-      const savedMode = await AsyncStorage.getItem('themeMode') as ThemeMode | null;
-      if (savedMode) setThemeModeState(savedMode);
+      try {
+        const savedMode = await AsyncStorage.getItem('themeMode') as ThemeMode | null;
+        if (savedMode) setThemeModeState(savedMode);
 
-      const notifVal = await AsyncStorage.getItem('notifications');
-      if (notifVal !== null) setNotifications(notifVal === 'true');
-      setMounted(true);
+        const notifVal = await AsyncStorage.getItem('notifications');
+        if (notifVal !== null) setNotifications(notifVal === 'true');
+      } catch (e) {
+        console.error("Failed to load theme settings", e);
+      } finally {
+        setLoading(false);
+      }
     };
     loadSettings();
   }, []);
@@ -72,8 +84,9 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
     ...defaultTheme,
     colors: isDarkMode ? darkColors : lightColors
   };
-  
-  if (!mounted) return null;
+
+  // Ne pas bloquer le rendu complètement si possible, ou afficher un loader
+  if (loading) return null;
 
   return (
     <ThemeContext.Provider value={{

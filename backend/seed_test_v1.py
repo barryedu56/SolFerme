@@ -6,7 +6,7 @@ from django.utils import timezone
 from django.db import transaction
 
 # Setup Django environment
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'solferme_backend.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'solferme_api.settings')
 django.setup()
 
 from farm_management.models import (
@@ -19,9 +19,21 @@ from farm_management.models import (
 
 def clear_data():
     print("PHASE 1: Nettoyage de la base de données...")
-    # Order matters due to foreign keys if not using CASCADE, but here we just delete all.
-    # We avoid deleting Users if they are superusers, but the prompt says "vider les anciennes données".
-    # Let's delete everything except maybe the structure.
+
+    # Disable signals temporarily to avoid issues during mass deletion
+    from django.db.models.signals import post_save, post_delete
+    from farm_management import signals
+
+    # Disconnect problematic signals during cleanup
+    post_delete.disconnect(signals.handle_payroll_change, sender=Payroll)
+    post_delete.disconnect(signals.handle_sale_change, sender=Sale)
+    post_delete.disconnect(signals.handle_chicken_movement_change, sender=ChickenMovement)
+    post_delete.disconnect(signals.handle_feed_purchase_change, sender=FeedPurchase)
+    post_delete.disconnect(signals.handle_health_purchase_change, sender=HealthPurchase)
+    post_delete.disconnect(signals.handle_feed_usage_change, sender=Feed)
+    post_delete.disconnect(signals.handle_feed_preparation_change, sender=FeedPreparation)
+    post_delete.disconnect(signals.handle_feed_preparation_ingredient_change, sender=FeedPreparationIngredient)
+    post_delete.disconnect(signals.handle_health_usage_change, sender=HealthRecord)
 
     models_to_clear = [
         ActivityLog, HealthAlert, EmployeeRequest, Attendance, Task, Bonus, Payroll,
@@ -73,7 +85,21 @@ def create_farms(owner):
     print("Fermes et lots créés.")
     return lot_alpha1, lot_beta1
 
-def create_alpha_actions(lot, owner):
+def create_employees(owner, farm_alpha):
+    print("PHASE 6 (Anticipée): Employés...")
+    u1 = User.objects.create_user(email='mamadou@test.com', password='Test12345@', name='Mamadou', role='EMPLOYE')
+    e1 = Employee.objects.create(user=u1, farm=farm_alpha, position='Ouvrier', salary=750000, hired_at=date.today() - timedelta(days=90))
+    e1.lots.add(farm_alpha.lots.first())
+
+    u2 = User.objects.create_user(email='ibrahima@test.com', password='Test12345@', name='Ibrahima', role='EMPLOYE')
+    e2 = Employee.objects.create(user=u2, farm=farm_alpha, position='Gardien', salary=600000, hired_at=date.today() - timedelta(days=60))
+
+    FarmUser.objects.create(farm=farm_alpha, user=u1, role='Worker')
+    FarmUser.objects.create(farm=farm_alpha, user=u2, role='Worker')
+
+    return e1, e2
+
+def create_alpha_actions(lot, owner, employee):
     print("PHASE 4: Actions complètes Lot Alpha...")
 
     # Production
@@ -102,39 +128,28 @@ def create_alpha_actions(lot, owner):
     # Rappel
     Reminder.objects.create(farm=lot.farm, lot=lot, title='Vaccin Rappel Gumboro', type='VACCIN', date=date.today() + timedelta(days=7), created_by=owner)
 
-    # Tâches
-    Task.objects.create(farm=lot.farm, lot=lot, title='Nettoyage poulailler', task_type='ENTRETIEN', due_date=date.today(), priority='HIGH', created_by=owner)
-    Task.objects.create(farm=lot.farm, lot=lot, title='Ramassage œufs soir', task_type='PRODUCTION', due_date=date.today(), priority='MEDIUM', created_by=owner)
+    # Tâches (Assignées à Mamadou)
+    Task.objects.create(farm=lot.farm, lot=lot, employee=employee, title='Nettoyage poulailler', task_type='ENTRETIEN', due_date=date.today(), priority='HIGH', created_by=owner)
+    Task.objects.create(farm=lot.farm, lot=lot, employee=employee, title='Ramassage œufs soir', task_type='PRODUCTION', due_date=date.today(), priority='MEDIUM', created_by=owner)
 
     # Finance (Autres dépenses)
     Expense.objects.create(farm=lot.farm, category='AUTRE', description='Réparation clôture', amount=300000, date=date.today() - timedelta(days=4), created_by=owner)
 
 def create_stocks(lot_alpha, lot_beta):
     print("PHASE 5: Stock...")
-    FeedInventory.objects.create(lot=lot_alpha, feed_type='Maïs', quantity_kg=450)
-    FeedInventory.objects.create(lot=lot_alpha, feed_type='Soja', quantity_kg=10) # Stock faible
-    FeedInventory.objects.create(lot=lot_alpha, feed_type='Concentré', quantity_kg=0) # Rupture
+    FeedInventory.objects.get_or_create(lot=lot_alpha, feed_type='Maïs', defaults={'quantity_kg': 450})
+    FeedInventory.objects.get_or_create(lot=lot_alpha, feed_type='Soja', defaults={'quantity_kg': 10}) # Stock faible
+    FeedInventory.objects.get_or_create(lot=lot_alpha, feed_type='Concentré', defaults={'quantity_kg': 0}) # Rupture
 
-    HealthInventory.objects.create(lot=lot_alpha, product_name='Newcastle', quantity=2, unit='Flacon')
-    HealthInventory.objects.create(lot=lot_alpha, product_name='Vitamines', quantity=0.5, unit='Litre')
-
-def create_employees(owner, farm_alpha):
-    print("PHASE 6: Employés...")
-    u1 = User.objects.create_user(email='mamadou@test.com', password='Test12345@', name='Mamadou', role='EMPLOYE')
-    e1 = Employee.objects.create(user=u1, farm=farm_alpha, position='Ouvrier', salary=750000, hired_at=date.today() - timedelta(days=90))
-    e1.lots.add(Farm.objects.get(name='Ferme Alpha').lots.first())
-
-    u2 = User.objects.create_user(email='ibrahima@test.com', password='Test12345@', name='Ibrahima', role='EMPLOYE')
-    e2 = Employee.objects.create(user=u2, farm=farm_alpha, position='Gardien', salary=600000, hired_at=date.today() - timedelta(days=60))
-
-    FarmUser.objects.create(farm=farm_alpha, user=u1, role='Worker')
-    FarmUser.objects.create(farm=farm_alpha, user=u2, role='Worker')
-
-    return e1, e2
+    HealthInventory.objects.get_or_create(lot=lot_alpha, product_name='Newcastle', defaults={'quantity': 2, 'unit': 'Flacon'})
+    HealthInventory.objects.get_or_create(lot=lot_alpha, product_name='Vitamines', defaults={'quantity': 0.5, 'unit': 'Litre'})
 
 def create_employee_scenarios(employee):
     print("PHASE 7: Scénarios employé...")
     lot = employee.lots.first()
+    if not lot:
+        lot = employee.farm.lots.first()
+
     # Tâche terminée
     Task.objects.create(
         farm=employee.farm, lot=lot, employee=employee, title='Contrôle eau',
@@ -169,9 +184,12 @@ def main():
             clear_data()
             owner = create_owner()
             lot_alpha, lot_beta = create_farms(owner)
-            create_alpha_actions(lot_alpha, owner)
-            create_stocks(lot_alpha, lot_beta)
+
+            # Create employees early to satisfy Task and other foreign keys
             e1, e2 = create_employees(owner, lot_alpha.farm)
+
+            create_alpha_actions(lot_alpha, owner, e1)
+            create_stocks(lot_alpha, lot_beta)
             create_employee_scenarios(e1)
             create_payroll_bonuses(e1, owner)
 

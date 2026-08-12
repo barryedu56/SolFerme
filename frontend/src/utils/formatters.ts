@@ -25,10 +25,9 @@ export const parseFormattedNumber = (value: string): string => {
 };
 
 /**
- * Formats a number for display with GNF currency.
- * Example: 500000 -> "500 000 GNF"
+ * Formats a number for display with dynamic currency.
  */
-export const formatCurrency = (value: number | string | undefined | null): string => {
-  if (value === undefined || value === null || value === '') return '0 GNF';
-  return `${formatNumber(value)} GNF`;
+export const formatCurrency = (value: number | string | undefined | null, currency: string = 'GNF'): string => {
+  if (value === undefined || value === null || value === '') return `0 ${currency}`;
+  return `${formatNumber(value)} ${currency}`;
 };

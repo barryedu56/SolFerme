@@ -1,23 +1,74 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import { Alert, Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-let API_URL = 'http://127.0.0.1:8000/api'; // IP par défaut
+// API URL configurable via AsyncStorage, avec fallback automatique
+// Priorité : 1) URL stockée (configureApiUrl)  2) URL configurée persistée
+//           3) Détection Expo dev (hostUri)    4) Détection plateforme
+//           5) Fallback par défaut
+let _configuredApiUrl: string | null = null;
+const DEFAULT_API_URL = 'http://192.168.1.141:8000/api';
 
-// En environnement de développement Expo, on récupère l'IP dynamique de l'ordinateur
-const debuggerHost = Constants.expoConfig?.hostUri;
-if (debuggerHost) {
-  // hostUri ressemble à "192.168.1.103:8081", on extrait juste l'IP
-  const ip = debuggerHost.split(':')[0];
-  API_URL = `http://${ip}:8000/api`;
-}
+// Détection automatique selon la plateforme et l'environnement Expo
+const detectLocalUrl = (): string => {
+  // 1. En développement Expo, utiliser l'IP du poste de développement
+  const debuggerHost = Constants.expoConfig?.hostUri;
+  if (debuggerHost) {
+    // hostUri ressemble à "192.168.1.103:8081" ou "10.0.2.2:8081"
+    const ip = debuggerHost.split(':')[0];
+    return `http://${ip}:8000/api`;
+  }
+
+  // 2. Fallback selon la plateforme (émulateurs)
+  if (Platform.OS === 'android') {
+    return 'http://10.0.2.2:8000/api';
+  }
+  return 'http://localhost:8000/api';
+};
+
+const AUTO_DETECTED_URL = detectLocalUrl();
+
+export const configureApiUrl = async (url: string): Promise<void> => {
+  _configuredApiUrl = url;
+  await AsyncStorage.setItem('api_base_url', url);
+  apiClient.defaults.baseURL = url;
+};
+
+export const getApiUrl = async (): Promise<string> => {
+  if (_configuredApiUrl) return _configuredApiUrl;
+  try {
+    const stored = await AsyncStorage.getItem('api_base_url');
+    if (stored) {
+      _configuredApiUrl = stored;
+      return stored;
+    }
+  } catch {
+    // AsyncStorage peut échouer, on continue
+  }
+  return AUTO_DETECTED_URL;
+};
+
+// Initialisation asynchrone de la baseURL
+const initApiUrl = async (): Promise<string> => {
+  const url = await getApiUrl();
+  apiClient.defaults.baseURL = url;
+  return url;
+};
+
+// URL initiale (sera mise à jour par initApiUrl au premier usage)
+let API_URL = DEFAULT_API_URL;
 
 export const apiClient = axios.create({
-  baseURL: API_URL,
+  baseURL: API_URL, // Sera mis à jour par initApiUrl() au démarrage
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+// Initialiser l'URL au chargement du module
+initApiUrl().catch(() => {
+  // Silencieux — utilise le fallback DEFAULT_API_URL
 });
 
 apiClient.interceptors.request.use(
@@ -31,48 +82,113 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+// Callback appelé quand la session expire (refresh token échoué)
+let onSessionExpired: (() => void) | null = null;
+export const setSessionExpiredHandler = (handler: (() => void) | null) => {
+  onSessionExpired = handler;
+};
+
+// Supprime uniquement les données d'authentification, PAS la config API
+export const clearAuthData = async (): Promise<void> => {
+  const keysToRemove = ['access_token', 'refresh_token', 'user_role', 'user_name', 'user_image', 'user_farms', 'user_id'];
+  await Promise.all(keysToRemove.map(k => AsyncStorage.removeItem(k).catch(() => {})));
+};
+
+// Verrou global pour éviter que plusieurs requêtes 401 déclenchent
+// un refresh simultané (race condition avec ROTATE_REFRESH_TOKENS).
+let isRefreshing = false;
+let failedQueue: Array<{ resolve: (token: string) => void; reject: (err: any) => void }> = [];
+
+// Cache mémoire du refresh token pour éviter les lectures AsyncStorage
+// concurrentes qui peuvent retourner l'ancien token pendant une rotation.
+// Mis à jour par AuthContext.login() et par chaque refresh réussi.
+let _cachedRefreshToken: string | null = null;
+
+/** Appelé par AuthContext après login pour initialiser le cache mémoire */
+export const setCachedRefreshToken = (token: string | null): void => {
+  _cachedRefreshToken = token;
+};
+
+const getRefreshToken = async (): Promise<string | null> => {
+  // Priorité au cache mémoire (atomique pour cette session, pas de stale read)
+  if (_cachedRefreshToken) return _cachedRefreshToken;
+  // Fallback AsyncStorage (premier chargement après restart de l'app)
+  const stored = await AsyncStorage.getItem('refresh_token');
+  if (stored) {
+    _cachedRefreshToken = stored;
+    return stored;
+  }
+  return null;
+};
+
+const processFailedQueue = (error: any, token: string | null) => {
+  failedQueue.forEach(({ resolve, reject }) => {
+    if (error) {
+      reject(error);
+    } else if (token) {
+      resolve(token);
+    }
+  });
+  failedQueue = [];
+};
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config;
 
-    // Log détaillé pour le débogage des erreurs 403/401
-    // On ignore les 403 sur les logs d'activité, rappels et ventes qui peuvent être restreints selon le rôle
-    const isOptionalEndpoint = originalRequest.url?.includes('activity-logs') ||
-                               originalRequest.url?.includes('reminders') ||
-                               originalRequest.url?.includes('movements') ||
-                               originalRequest.url?.includes('payrolls') ||
-                               originalRequest.url?.includes('employees/me') ||
-                               originalRequest.url?.includes('sales');
-
-    if (error.response && !(error.response.status === 403 && isOptionalEndpoint)) {
-      console.log(`[API Error] ${error.response.status} on ${originalRequest.url}`, error.response.data);
+    if (error.response?.status === 429) {
+      const waitTime = error.response.headers['retry-after'] || 'quelques';
+      Alert.alert("Trop de tentatives", `Veuillez patienter ${waitTime} secondes.`);
+      return Promise.reject(error);
     }
 
     if (error.response?.status === 401 && !originalRequest._retry) {
+      if (originalRequest.url?.includes('/auth/login/')) return Promise.reject(error);
+
+      // Si un refresh est déjà en cours, mettre en file d'attente
+      if (isRefreshing) {
+        return new Promise<string>((resolve, reject) => {
+          failedQueue.push({ resolve, reject });
+        }).then((token) => {
+          originalRequest.headers['Authorization'] = `Bearer ${token}`;
+          return apiClient(originalRequest);
+        }).catch((err) => Promise.reject(err));
+      }
+
       originalRequest._retry = true;
+      isRefreshing = true;
+
       try {
-        const refreshToken = await AsyncStorage.getItem('refresh_token');
-        if (!refreshToken) {
-          throw new Error('No refresh token available');
-        }
-
-        const response = await axios.post(`${API_URL}/auth/refresh/`, {
-          refresh: refreshToken,
-        });
-
-        const { access } = response.data;
+        // Petit délai pour laisser AsyncStorage se stabiliser si une autre opération
+        // vient de mettre à jour le token
+        await new Promise(r => setTimeout(r, 100));
+        const refreshToken = await getRefreshToken();
+        if (!refreshToken) throw new Error('No refresh token');
+        const baseUrl = apiClient.defaults.baseURL || API_URL;
+        const response = await axios.post(`${baseUrl}/auth/refresh/`, { refresh: refreshToken });
+        const { access, refresh } = response.data;
         await AsyncStorage.setItem('access_token', access);
-
+        if (refresh) {
+          await AsyncStorage.setItem('refresh_token', refresh);
+          // Mettre à jour le cache mémoire AVANT de résoudre la queue
+          _cachedRefreshToken = refresh;
+        }
         apiClient.defaults.headers.common['Authorization'] = `Bearer ${access}`;
         originalRequest.headers['Authorization'] = `Bearer ${access}`;
-
+        // Résoudre toutes les requêtes en attente avec le nouveau token
+        processFailedQueue(null, access);
+        isRefreshing = false;
         return apiClient(originalRequest);
       } catch (refreshError) {
-        // Si le refresh échoue, on peut forcer la déconnexion
-        console.error('Token refresh failed', refreshError);
-        await AsyncStorage.clear();
-        // Optionnel : rediriger vers le login ou laisser le context réagir à la perte du token
+        _cachedRefreshToken = null;
+        processFailedQueue(refreshError, null);
+        isRefreshing = false;
+        // Correction: nettoyer auth ET notifier AuthContext pour synchroniser l'état React
+        await clearAuthData();
+        if (onSessionExpired) {
+          onSessionExpired();
+        }
         return Promise.reject(refreshError);
       }
     }
@@ -80,28 +196,18 @@ apiClient.interceptors.response.use(
   }
 );
 
-/**
- * Utility to fetch all pages of a paginated DRF endpoint
- */
 export const fetchAll = async (url: string): Promise<any[]> => {
   let results: any[] = [];
   let nextUrl = url;
-
   try {
     while (nextUrl) {
-      // We use the full URL if it's already an absolute URL (from 'next'),
-      // otherwise axios uses the baseURL
       const response = await apiClient.get(nextUrl);
-
       if (Array.isArray(response.data)) {
         results = [...results, ...response.data];
-        nextUrl = ''; // Not paginated
+        nextUrl = '';
       } else if (response.data && response.data.results) {
         results = [...results, ...response.data.results];
-        nextUrl = response.data.next; // DRF pagination provides the full URL for the next page
-
-        // If nextUrl is absolute, we need to handle it carefully because apiClient has a baseURL.
-        // Axios handles absolute URLs in 'get' by ignoring baseURL.
+        nextUrl = response.data.next;
       } else {
         nextUrl = '';
       }

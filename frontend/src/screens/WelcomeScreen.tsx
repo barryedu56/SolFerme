@@ -1,11 +1,13 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity } from 'react-native';
-import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Button } from '../components/Button';
 import { useTheme } from '../context/ThemeContext';
+import { useTranslation } from '../context/LanguageContext';
 
 export const WelcomeScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
@@ -13,21 +15,19 @@ export const WelcomeScreen = ({ navigation }: any) => {
       <View style={styles.content}>
         <View style={styles.logoSection}>
           <View style={styles.logoCircle}>
-            <MaterialCommunityIcons name="egg" size={50} color={theme.colors.text} />
+            <MaterialCommunityIcons name="egg" size={50} color="#000000" />
           </View>
           <Text style={styles.brandName}>SolFerme</Text>
         </View>
 
         <View style={styles.textSection}>
-          <Text style={styles.title}>Gérez votre ferme {"\n"}comme un pro</Text>
-          <Text style={styles.subtitle}>
-            Le SaaS agricole moderne pour le suivi {"\n"}de votre production et de vos lots.
-          </Text>
+          <Text style={styles.title}>{t('welcome.title')}</Text>
+          <Text style={styles.subtitle}>{t('welcome.subtitle')}</Text>
         </View>
 
         <View style={styles.buttonContainer}>
           <Button 
-            title="Get Started"
+            title={t('welcome.getStarted')}
             onPress={() => navigation.navigate('Login')} 
             style={styles.button}
           />
@@ -35,7 +35,7 @@ export const WelcomeScreen = ({ navigation }: any) => {
             onPress={() => navigation.navigate('Register')}
             style={styles.secondaryAction}
           >
-            <Text style={styles.secondaryActionText}>Créer un nouveau compte</Text>
+            <Text style={styles.secondaryActionText}>{t('welcome.createAccount')}</Text>
           </TouchableOpacity>
         </View>
       </View>

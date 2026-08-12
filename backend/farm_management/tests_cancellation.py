@@ -1,6 +1,8 @@
 from django.test import TestCase
 from django.utils import timezone
 from django.db.models import Sum
+from rest_framework import status
+from rest_framework.test import APIClient
 from .models import User, Farm, Lot, Sale, Production, FeedPurchase, Expense, FeedInventory, ChickenMovement, HealthPurchase, HealthInventory, HealthRecord, Feed
 
 class CancellationSystemTestCase(TestCase):
@@ -32,7 +34,7 @@ class CancellationSystemTestCase(TestCase):
         sale = Sale.objects.create(
             lot=self.lot,
             date=timezone.now().date(),
-            product_type='Œufs Normaux',
+            product_type='NORMAL',
             quantity=5,
             unit_price=50000,
             total_amount=250000,
@@ -45,7 +47,7 @@ class CancellationSystemTestCase(TestCase):
 
         # Available should be 10 - 5 = 5
         produced = Production.objects.filter(lot=self.lot, status='ACTIVE').aggregate(Sum('casiers_vendables'))['casiers_vendables__sum'] or 0
-        sold = Sale.objects.filter(lot=self.lot, product_type='Œufs Normaux', status='ACTIVE').aggregate(Sum('quantity'))['quantity__sum'] or 0
+        sold = Sale.objects.filter(lot=self.lot, product_type='NORMAL', status='ACTIVE').aggregate(Sum('quantity'))['quantity__sum'] or 0
         self.assertEqual(produced - sold, 5)
 
         # 3. Cancel Sale
@@ -53,9 +55,34 @@ class CancellationSystemTestCase(TestCase):
         sale.save()
 
         # 4. Verify stock recovery
-        sold_after = Sale.objects.filter(lot=self.lot, product_type='Œufs Normaux', status='ACTIVE').aggregate(Sum('quantity'))['quantity__sum'] or 0
+        sold_after = Sale.objects.filter(lot=self.lot, product_type='NORMAL', status='ACTIVE').aggregate(Sum('quantity'))['quantity__sum'] or 0
         self.assertEqual(sold_after, 0)
         self.assertEqual(produced - sold_after, 10)
+
+    def test_sale_cancellation_api_soft_delete(self):
+        sale = Sale.objects.create(
+            lot=self.lot,
+            date=timezone.now().date(),
+            product_type='NORMAL',
+            quantity=5,
+            unit_price=50000,
+            total_amount=250000,
+            amount_paid=250000,
+            created_by=self.user
+        )
+
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        response = client.delete(f'/api/sales/{sale.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        sale.refresh_from_db()
+        self.assertEqual(sale.status, 'ANNULEE')
+        self.assertTrue(Sale.objects.filter(id=sale.id).exists())
+
+        activity_log = sale.lot.activitylog_set.filter(related_id=sale.id, module='Vente').order_by('-id').first()
+        self.assertIsNotNone(activity_log)
+        self.assertIn('Annulée', activity_log.action)
 
     def test_production_cancellation_guards(self):
         # 1. Create Production
@@ -71,7 +98,7 @@ class CancellationSystemTestCase(TestCase):
         Sale.objects.create(
             lot=self.lot,
             date=timezone.now().date(),
-            product_type='Œufs Normaux',
+            product_type='NORMAL',
             quantity=8,
             unit_price=50000,
             total_amount=400000,
@@ -84,7 +111,7 @@ class CancellationSystemTestCase(TestCase):
         def attempt_cancel_production(production_id):
             instance = Production.objects.get(id=production_id)
             lot = instance.lot
-            total_sold_normaux = lot.sales.filter(product_type='Œufs Normaux', status='ACTIVE').aggregate(total=Sum('quantity'))['total'] or 0
+            total_sold_normaux = lot.sales.filter(product_type='NORMAL', status='ACTIVE').aggregate(total=Sum('quantity'))['total'] or 0
             remaining_produced = lot.productions.filter(status='ACTIVE').exclude(id=instance.id).aggregate(total=Sum('casiers_vendables'))['total'] or 0
 
             if remaining_produced < total_sold_normaux:
@@ -102,9 +129,10 @@ class CancellationSystemTestCase(TestCase):
         self.assertEqual(prod.status, 'ACTIVE')
 
     def test_feed_purchase_cancellation_rollback(self):
-        # 1. Purchase Feed
+        # 1. Purchase Feed - providing mandatory lot
         purchase = FeedPurchase.objects.create(
             farm=self.farm,
+            lot=self.lot,
             date=timezone.now().date(),
             feed_type='Ponte',
             quantity_kg=100,
@@ -112,9 +140,10 @@ class CancellationSystemTestCase(TestCase):
             created_by=self.user
         )
 
-        inventory = FeedInventory.objects.get(farm=self.farm, feed_type='Ponte')
+        inventory = FeedInventory.objects.get(lot=self.lot, feed_type='Ponte')
         self.assertEqual(inventory.quantity_kg, 100)
 
+        purchase.refresh_from_db()
         expense = purchase.expense
         self.assertIsNotNone(expense)
         self.assertEqual(expense.status, 'ACTIVE')
@@ -130,6 +159,39 @@ class CancellationSystemTestCase(TestCase):
         # 4. Verify Expense Cancellation
         expense.refresh_from_db()
         self.assertEqual(expense.status, 'ANNULEE')
+    def test_chronological_stock_integrity_rule_a(self):
+        # Day 1: Produce 10
+        p1 = Production.objects.create(
+            lot=self.lot, date=timezone.now().date() - timezone.timedelta(days=3),
+            casiers_produits=10, casiers_vendables=10, created_by=self.user
+        )
+        # Day 2: Produce 10
+        p2 = Production.objects.create(
+            lot=self.lot, date=timezone.now().date() - timezone.timedelta(days=2),
+            casiers_produits=10, casiers_vendables=10, created_by=self.user
+        )
+        # Day 3: Sell 15
+        s1 = Sale.objects.create(
+            lot=self.lot, date=timezone.now().date() - timezone.timedelta(days=1),
+            product_type='NORMAL', quantity=15, unit_price=100, total_amount=1500, created_by=self.user
+        )
+
+        # Attempt to cancel p1.
+        # Logic: Remaining after p1 cancel = 10 (p2). Sold = 15. 10 - 15 = -5 -> Should fail.
+        from .serializers import validate_egg_stock_integrity
+        ok, err = validate_egg_stock_integrity(self.lot, 'NORMAL', exclude_id=p1.id, is_prod=True)
+        self.assertFalse(ok)
+        self.assertIn("insuffisant", err)
+
+        # Attempt to cancel p2.
+        # Logic: Remaining after p2 cancel = 10 (p1). Sold = 15. 10 - 15 = -5 -> Should fail.
+        ok, err = validate_egg_stock_integrity(self.lot, 'NORMAL', exclude_id=p2.id, is_prod=True)
+        self.assertFalse(ok)
+
+        # Attempt to cancel s1.
+        # This should always be OK as it increases stock.
+        ok, err = validate_egg_stock_integrity(self.lot, 'NORMAL', exclude_id=s1.id, is_prod=False)
+        self.assertTrue(ok)
 
     def test_chicken_movement_cancellation(self):
         # Initial quantity 100

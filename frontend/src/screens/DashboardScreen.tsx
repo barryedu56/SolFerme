@@ -1,14 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, useWindowDimensions, Image } from 'react-native';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, useWindowDimensions, Image } from 'react-native';
+import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../context/LanguageContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { BarChart } from 'react-native-chart-kit';
 import { formatNumber, formatCurrency } from '../utils/formatters';
-import { syncOfflineData, getOfflineData, saveOfflineData, STORAGE_KEYS } from '../utils/offlineStorage';
+import { syncManager } from '../utils/syncManager';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
 
 export const DashboardScreen = ({ navigation }: any) => {
@@ -25,84 +26,142 @@ export const DashboardScreen = ({ navigation }: any) => {
     totalChickens: 0,
     todayProduction: 0,
     revenues: 0,
+    encaissements: 0,
+    creances: 0,
     expenses: 0,
     alertsCount: 0,
     performance: 0,
+    totalBonuses: 0,
+    employeesWithBonuses: 0,
+    pendingRequests: 0,
   });
   const [inventory, setInventory] = useState({
-    feed: [] as any[],
+    raw: [] as any[],
+    prepared: [] as any[],
     health: [] as any[],
   });
-  const [reminders, setReminders] = useState<any[]>([]);
-  const [recentActions, setRecentActions] = useState<any[]>([]);
+  const [selectedFarm, setSelectedFarm] = useState<number | 'ALL'>('ALL');
+  const [selectedLot, setSelectedLot] = useState<number | 'ALL'>('ALL');
+  const { userFarms } = useAuth() as any;
+  const [period, setPeriod] = useState('week');
   const [chartData, setChartData] = useState<any>(null);
-  const [period, setPeriod] = useState('Semaine');
-  const periods = ['Jour', 'Semaine', 'Mois', 'Trimestre', 'Année'];
-  const [rawData, setRawData] = useState<any>({ productions: [] });
+  const [recentActions, setRecentActions] = useState<any[]>([]);
+  const [healthAlerts, setHealthAlerts] = useState<any[]>([]);
+  const [reminders, setReminders] = useState<any[]>([]);
+  const [activeLotId, setActiveLotId] = useState<number | null>(null);
+
+  const periods = useMemo(() => [
+    { key: 'day', label: t('common.day') },
+    { key: 'week', label: t('common.week') },
+    { key: 'month', label: t('common.month') },
+    { key: 'year', label: t('common.year') },
+  ], [t]);
+
+  const updateChart = (selectedPeriod: string, productionData: any[]) => {
+    processChartData({ production: productionData }, selectedPeriod);
+  };
+
+  const currentFarmLots = useMemo(() => {
+    if (selectedFarm === 'ALL') return [];
+    return userFarms?.find((f: any) => f.id === selectedFarm)?.lots || [];
+  }, [selectedFarm, userFarms]);
 
   const fetchDashboardData = async () => {
     try {
-      await syncOfflineData(apiClient);
+      // syncAll() est appelé séparément par le focus listener — pas ici
+      // pour éviter de doubler chaque appel API.
 
-      const offlineFarms = await getOfflineData(STORAGE_KEYS.FARMS);
-      const offlineLots = await getOfflineData(STORAGE_KEYS.LOTS);
-      const offlineFeedInv = await getOfflineData(STORAGE_KEYS.FEED_INVENTORY);
-      const offlineHealthInv = await getOfflineData(STORAGE_KEYS.HEALTH_INVENTORY);
+      const params: any = {
+        period: period
+      };
+      if (selectedFarm !== 'ALL') params.farm = selectedFarm;
+      if (selectedLot !== 'ALL') params.lot = selectedLot;
 
-      if (offlineFarms && offlineLots) {
-        processDashboardData(offlineFarms, offlineLots, [], [], [], [], [], [], [], [], [], []);
-        if (offlineFeedInv || offlineHealthInv) {
-          setInventory({
-            feed: offlineFeedInv || [],
-            health: offlineHealthInv || [],
-          });
-        }
-        setLoading(false);
-      }
+      const emptyFarmStats = {
+        summary: {
+          farms_count: 0, lots_count: 0, total_chickens: 0,
+          today_production: 0, revenues: 0, expenses: 0,
+          alerts_count: 0, performance: 0,
+          total_bonuses: 0, employees_with_bonuses: 0,
+        },
+      };
+      const statsRes = await repositoryProvider.api.get('/farms/statistics/', { params }).catch(() => ({ data: emptyFarmStats }));
+      const backendSummary = statsRes.data.summary;
 
-      const [farmsRes, lotsRes, prodRes, salesRes, expensesRes, healthRes, remindersRes, feedsRes, logsRes, movementsRes, feedPurchasesRes, healthPurchasesRes, feedInvRes, healthInvRes] = await Promise.all([
-        apiClient.get('/farms/').catch(() => ({ data: offlineFarms || [] })),
-        apiClient.get('/lots/').catch(() => ({ data: offlineLots || [] })),
-        apiClient.get('/productions/').catch(() => ({ data: [] })),
-        apiClient.get('/sales/').catch(() => ({ data: [] })),
-        apiClient.get('/expenses/').catch(() => ({ data: [] })),
-        apiClient.get('/health-records/').catch(() => ({ data: [] })),
-        apiClient.get('/reminders/').catch(() => ({ data: [] })),
-        apiClient.get('/feeds/').catch(() => ({ data: [] })),
-        apiClient.get('/activity-logs/').catch(() => ({ data: [] })),
-        apiClient.get('/movements/').catch(() => ({ data: [] })),
-        apiClient.get('/feed-purchases/').catch(() => ({ data: [] })),
-        apiClient.get('/health-purchases/').catch(() => ({ data: [] })),
-        apiClient.get('/feed-inventory/').catch(() => ({ data: offlineFeedInv || [] })),
-        apiClient.get('/health-inventory/').catch(() => ({ data: offlineHealthInv || [] })),
+      const invParams: any = selectedFarm !== 'ALL' ? { farm: selectedFarm } : {};
+      if (selectedLot !== 'ALL') invParams.lot = selectedLot;
+      const alertParams: any = selectedFarm !== 'ALL' ? { farm: selectedFarm } : {};
+      if (selectedLot !== 'ALL') alertParams.lot = selectedLot;
+
+      const [remindersRes, logsRes, rawInvRes, prepInvRes, healthInvRes, alertsRes, requestsRes] = await Promise.all([
+        repositoryProvider.api.get('/reminders/').catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/activity-logs/').catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/feed-inventory/', { params: invParams }).catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/prepared-feed-inventory/', { params: invParams }).catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/health-inventory/', { params: invParams }).catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/health-alerts/', { params: alertParams }).catch(() => ({ data: [] })),
+        repositoryProvider.api.get('/employee-requests/').catch(() => ({ data: [] })),
       ]);
 
-      await saveOfflineData(STORAGE_KEYS.FARMS, farmsRes.data);
-      await saveOfflineData(STORAGE_KEYS.LOTS, lotsRes.data);
-      await saveOfflineData(STORAGE_KEYS.FEED_INVENTORY, feedInvRes.data);
-      await saveOfflineData(STORAGE_KEYS.HEALTH_INVENTORY, healthInvRes.data);
+      const requests = Array.isArray(requestsRes.data) ? requestsRes.data : [];
+      const pendingRequestsCount = requests.filter((r: any) => r.status === 'PENDING').length;
 
-      setRawData({ productions: prodRes.data });
-      setRecentActions(logsRes.data.slice(0, 2));
+      const isEmployee = userRole === 'EMPLOYE';
+
+      setStats({
+        farmsCount: backendSummary.farms_count,
+        lotsCount: backendSummary.lots_count,
+        totalChickens: backendSummary.total_chickens,
+        todayProduction: backendSummary.today_production,
+        revenues: isEmployee ? 0 : backendSummary.revenues,
+        encaissements: isEmployee ? 0 : (backendSummary.encaissements || 0),
+        creances: isEmployee ? 0 : (backendSummary.creances || 0),
+        expenses: isEmployee ? 0 : backendSummary.expenses,
+        alertsCount: backendSummary.alerts_count,
+        performance: backendSummary.performance,
+        totalBonuses: isEmployee ? 0 : (backendSummary.total_bonuses || 0),
+        employeesWithBonuses: isEmployee ? 0 : (backendSummary.employees_with_bonuses || 0),
+        pendingRequests: pendingRequestsCount,
+      });
+
+      const logs = Array.isArray(logsRes.data) ? logsRes.data : (logsRes.data?.results || []);
+
+      // Sanitisation des logs pour les employés : masquer les montants financiers dans les descriptions
+      const sanitizedLogs = logs.map((log: any) => {
+        if (isEmployee && (log.module === 'Vente' || log.module === 'Finance' || log.action.includes('Achat'))) {
+          return {
+            ...log,
+            description: log.description ? String(log.description).replace(/(\d[\d\s]*\s*GNF|\d[\d\s]*\s*FG)/gi, '*** GNF') : log.description
+          };
+        }
+        return log;
+      });
+
+      setRecentActions(sanitizedLogs.slice(0, 2));
+
+      // Filter for PENDING requests on dashboard
+      const dashboardRequests = requests.filter((r: any) => r.status === 'PENDING').slice(0, 2);
+      // If we want to show some requests even if none are pending (less likely based on instructions)
+      // we'd stick to slice(0,2), but "filtrage intelligent... pour ne garder que celles nécessitant une action"
+      // suggests PENDING only.
+
+      let alertsData = Array.isArray(alertsRes.data) ? alertsRes.data : (alertsRes.data?.results || []);
+      setHealthAlerts(alertsData.filter((a: any) => !a.is_viewed));
+
       setInventory({
-        feed: feedInvRes.data,
+        raw: rawInvRes.data,
+        prepared: prepInvRes.data,
         health: healthInvRes.data,
       });
 
-      processDashboardData(
-        farmsRes.data,
-        lotsRes.data,
-        prodRes.data,
-        salesRes.data,
-        expensesRes.data,
-        healthRes.data,
-        remindersRes.data,
-        feedsRes.data,
-        logsRes.data,
-        movementsRes.data,
-        feedPurchasesRes.data,
-        healthPurchasesRes.data
-      );
+      const upcomingReminders = (remindersRes.data || [])
+        .filter((r: any) => r.status === 'PENDING')
+        .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
+        .slice(0, 3);
+      setReminders(upcomingReminders);
+
+      const backendCharts = statsRes.data.charts;
+      processChartData(backendCharts, period);
 
     } catch (error) {
       console.log('Erreur de chargement du dashboard', error);
@@ -112,80 +171,65 @@ export const DashboardScreen = ({ navigation }: any) => {
     }
   };
 
-  useEffect(() => {
-    if (loading || !rawData.productions) return;
-    updateChart(period, rawData.productions);
-  }, [period, rawData.productions]);
+  const processChartData = (charts: any, selectedPeriod: string) => {
+    if (!charts || !charts.production) return;
 
-  const updateChart = (selectedPeriod: string, productions: any[]) => {
     let chartLabels: string[] = [];
     let chartValues: number[] = [];
 
-    const getProdForRange = (start: Date, end: Date) => {
-      return (productions || [])
-        .filter((p: any) => {
-          const d = new Date(p.date);
-          return d >= start && d <= end;
-        })
-        .reduce((sum: number, p: any) => sum + (p.casiers_produits || 0), 0);
-    };
+    const data = charts.production;
 
-    if (selectedPeriod === 'Jour') {
-      chartLabels = ['Matin', 'Midi', 'Soir'];
-      const start = new Date(); start.setHours(0,0,0,0);
-      const end = new Date(); end.setHours(23,59,59,999);
-      chartValues = [getProdForRange(start, end), 0, 0];
-    } else if (selectedPeriod === 'Semaine') {
-      const days = language === 'fr' ? ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'] : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      const last7Days = Array.from({ length: 7 }, (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (6 - i));
-        return d;
-      });
-      chartLabels = last7Days.map(d => days[d.getDay()]);
-      chartValues = last7Days.map(d => {
-        const start = new Date(d); start.setHours(0,0,0,0);
-        const end = new Date(d); end.setHours(23,59,59,999);
-        return getProdForRange(start, end);
-      });
-    } else if (selectedPeriod === 'Mois') {
-      chartLabels = ['S1', 'S2', 'S3', 'S4'];
-      chartValues = Array.from({ length: 4 }, (_, i) => {
-        const start = new Date(); start.setDate(start.getDate() - (28 - i * 7));
-        const end = new Date(start); end.setDate(end.getDate() + 7);
-        return getProdForRange(start, end);
-      });
-    } else if (selectedPeriod === 'Trimestre') {
-      const monthNames = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
-      const last3Months = Array.from({ length: 3 }, (_, i) => {
-        const d = new Date(); d.setMonth(d.getMonth() - (2 - i));
-        return d;
-      });
-      chartLabels = last3Months.map(d => monthNames[d.getMonth()]);
-      chartValues = last3Months.map(d => {
-        const start = new Date(d.getFullYear(), d.getMonth(), 1);
-        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-        return getProdForRange(start, end);
-      });
+    if (selectedPeriod === 'day') {
+        chartLabels = [t('dashboard.chartLabels.morning'), t('dashboard.chartLabels.midday'), t('dashboard.chartLabels.evening')];
+        const matin = data.find((d: any) => d.label === 'Matin')?.value || 0;
+        const midi = data.find((d: any) => d.label === 'Midi')?.value || 0;
+        const soir = data.find((d: any) => d.label === 'Soir')?.value || 0;
+        chartValues = [matin, midi, soir];
     } else {
-      chartLabels = ['T1', 'T2', 'T3', 'T4'];
-      const year = new Date().getFullYear();
-      chartValues = [0, 1, 2, 3].map(q => {
-        const start = new Date(year, q * 3, 1);
-        const end = new Date(year, q * 3 + 3, 0, 23, 59, 59);
-        return getProdForRange(start, end);
-      });
+        chartLabels = data.map((d: any) => {
+            const date = new Date(d.day);
+            if (selectedPeriod === 'week') {
+                const days = [t('days.sun'), t('days.mon'), t('days.tue'), t('days.wed'), t('days.thu'), t('days.fri'), t('days.sat')];
+                return days[date.getDay()];
+            } else if (selectedPeriod === 'month') {
+                return date.getDate().toString();
+            } else if (selectedPeriod === 'year') {
+                const months = [t('months.jan'), t('months.feb'), t('months.mar'), t('months.apr'), t('months.may'), t('months.jun'), t('months.jul'), t('months.aug'), t('months.sep'), t('months.oct'), t('months.nov'), t('months.dec')];
+                return months[date.getMonth()];
+            }
+            return d.day;
+        });
+        chartValues = data.map((d: any) => d.value);
     }
 
     const hasData = chartValues.some(v => v !== 0);
     setChartData({
-      labels: chartLabels,
-      datasets: [{ data: hasData ? chartValues : [0, 0, 0, 0, 0] }],
+      labels: chartLabels.length > 0 ? chartLabels : [''],
+      datasets: [{ data: hasData ? chartValues : [0] }],
       isPlaceholder: !hasData
     });
   };
 
-  const processDashboardData = (farms: any, lots: any, productions: any, sales: any, expenses: any, health: any, allReminders: any, feeds: any, logs: any, movements: any, feedPurchases: any, healthPurchases: any) => {
+  useEffect(() => {
+    fetchDashboardData();
+  }, [period, selectedFarm, selectedLot]);
+
+  // 🔄 Au focus (sauf montage initial) : sync puis recharge les données
+  // Le focus initial est déjà couvert par l'effet [period, farm, lot]
+  const firstFocusRef = useRef(true);
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (firstFocusRef.current) {
+        firstFocusRef.current = false;
+        return; // Ignorer le focus initial (montage) — le 2e useEffect gère le chargement
+      }
+      syncManager.syncAll().catch(() => {}).finally(() => fetchDashboardData());
+    });
+    return unsubscribe;
+  }, [navigation, period, selectedFarm, selectedLot]);
+
+
+  const processDashboardData = (farms: any, lots: any, productions: any, sales: any, expenses: any, health: any, allReminders: any, feeds: any, logs: any, movements: any, feedPurchases: any, healthPurchases: any, allAlerts: any) => {
     const upcomingReminders = (allReminders || [])
       .filter((r: any) => r.status === 'PENDING')
       .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
@@ -193,80 +237,85 @@ export const DashboardScreen = ({ navigation }: any) => {
 
     setReminders(upcomingReminders);
 
+    const activeProductions = (productions || []).filter((p: any) => p.status === 'ACTIF');
+    const activeSales = (sales || []).filter((s: any) => s.status === 'ACTIF');
+    const activeMovements = (movements || []).filter((m: any) => m.status === 'ACTIF');
+    const activeExpenses = (expenses || []).filter((e: any) => e.status === 'ACTIF');
+    const activeFeedPurchases = (feedPurchases || []).filter((fp: any) => fp.status === 'ACTIF');
+    const activeHealthPurchases = (healthPurchases || []).filter((hp: any) => hp.status === 'ACTIF');
+
     const totalChickens = (lots || [])
       .filter((lot: any) => lot.status === 'EN_PRODUCTION')
       .reduce((sum: number, lot: any) => sum + lot.current_quantity, 0);
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayProduction = (productions || [])
-      .filter((p: any) => {
-        const prodDate = new Date(p.date);
-        prodDate.setHours(0, 0, 0, 0);
-        return prodDate.getTime() === today.getTime();
-      })
-      .reduce((sum: number, p: any) => sum + (p.casiers_vendables || 0) + ((p.oeufs_casses || 0) / 30), 0);
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const todayStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const todayProduction = activeProductions
+      .filter((p: any) => p.date === todayStr)
+      .reduce((sum: number, p: any) => sum + (p.casiers_produits || 0), 0);
 
-    const revenues = (sales || []).reduce((sum: number, s: any) => sum + parseFloat(s.amount_paid || 0), 0);
+    const revenues = activeSales
+      .reduce((sum: number, s: any) => sum + parseFloat(s.amount_paid || 0), 0);
 
-    const expenseAmount = (expenses || []).reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0);
-    const lotInvestment = (lots || []).reduce((sum: number, l: any) => sum + parseFloat(l.purchase_price || 0), 0);
-    const feedPurchaseCost = (feedPurchases || []).reduce((sum: number, f: any) => sum + parseFloat(f.total_price || 0), 0);
-    const healthPurchaseCost = (healthPurchases || []).reduce((sum: number, h: any) => sum + parseFloat(h.total_price || 0), 0);
+    const expenseAmount = activeExpenses
+      .reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0);
+
+    const lotInvestment = (lots || [])
+      .filter((l: any) => l.status !== 'ANNULEE')
+      .reduce((sum: number, l: any) => sum + parseFloat(l.purchase_price || 0), 0);
+
+    const feedPurchaseCost = activeFeedPurchases
+      .reduce((sum: number, f: any) => sum + parseFloat(f.total_price || 0), 0);
+
+    const healthPurchaseCost = activeHealthPurchases
+      .reduce((sum: number, h: any) => sum + parseFloat(h.total_price || 0), 0);
 
     const totalExpenses = expenseAmount + lotInvestment + feedPurchaseCost + healthPurchaseCost;
 
-    const healthAlerts = (health || []).filter((h: any) => {
-        const recordDate = new Date(h.date);
-        const sevenDaysAgo = new Date();
-        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-        return recordDate >= sevenDaysAgo;
-    });
+    const activeAlertsCount = (allAlerts || []).filter((a: any) => !a.is_viewed).length;
 
-    const movementAlerts = (movements || []).filter((m: any) => {
-        const mDate = new Date(m.date);
-        const threeDaysAgo = new Date();
-        threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-        const type = m.type ? m.type.toUpperCase() : '';
-        const isAlert =
-            type === 'MORT' || type === 'MORTALITÉ' ||
-            type === 'MALADE' ||
-            m.type === 'Mortalité' || m.type === 'Malade' ||
-            m.type === 'Perte' ||
-            (m.reason && (m.reason.toLowerCase().includes('mort') || m.reason.toLowerCase().includes('malad')));
-        return isAlert && mDate >= threeDaysAgo;
-    });
-
-    // Performance globale pour le dashboard
     const activeLots = (lots || []).filter((l: any) => l.status === 'EN_PRODUCTION');
+    if (activeLots.length > 0) {
+      setActiveLotId(activeLots[0].id);
+    }
+
     let avgPerf = 0;
     if (activeLots.length > 0) {
       let totalPerf = 0;
+      let lotsWithData = 0;
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setHours(0, 0, 0, 0);
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
       activeLots.forEach((lot: any) => {
-        const lotProds = (productions || []).filter((p: any) => p.lot === lot.id);
+        const lotProds = activeProductions.filter((p: any) => p.lot === lot.id);
         const recentProds = lotProds.filter((p: any) => {
           const pDate = new Date(p.date);
-          const sevenDaysAgo = new Date();
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
           return pDate >= sevenDaysAgo;
         });
-        const recentEggs = recentProds.reduce((sum: number, p: any) => sum + (p.casiers_produits * 30), 0);
-        const daysWithData = new Set(recentProds.map(p => p.date)).size || 1;
+        const recentEggs = recentProds.reduce((sum: number, p: any) => sum + ((p.casiers_produits || 0) * 30), 0);
+        const daysWithData = new Set(recentProds.map((p: any) => p.date)).size || 1;
 
-        const lotMovements = (movements || []).filter((m: any) => m.lot === lot.id);
-        const totalSick = lotMovements.filter((m: any) => m.type === 'MALADE').reduce((sum: number, m: any) => sum + m.quantity, 0);
-        const recovered = lotMovements.filter((m: any) => m.type === 'GUERI').reduce((sum: number, m: any) => sum + m.quantity, 0);
+        const lotMovements = activeMovements.filter((m: any) => m.lot === lot.id);
+        const totalSick = lotMovements.filter((m: any) => m.type === 'MALADE').reduce((sum: number, m: any) => sum + (m.quantity || 0), 0);
+        const recovered = lotMovements.filter((m: any) => m.type === 'GUERI').reduce((sum: number, m: any) => sum + (m.quantity || 0), 0);
         const currentSick = Math.max(0, totalSick - recovered);
 
-        totalPerf += calculatePerformance(
-          lot.initial_quantity,
-          lot.current_quantity,
+        const perf = calculatePerformance(
+          lot.initial_quantity || 0,
+          lot.current_quantity || 0,
           currentSick,
           recentEggs,
           daysWithData
         );
+
+        if (perf > 0 || recentProds.length > 0) {
+          totalPerf += perf;
+          lotsWithData++;
+        }
       });
-      avgPerf = Math.round(totalPerf / activeLots.length);
+      avgPerf = lotsWithData > 0 ? Math.round(totalPerf / lotsWithData) : 0;
     }
 
     setStats({
@@ -275,55 +324,32 @@ export const DashboardScreen = ({ navigation }: any) => {
       totalChickens,
       todayProduction,
       revenues,
+      encaissements: 0,
+      creances: 0,
       expenses: totalExpenses,
-      alertsCount: healthAlerts.length + movementAlerts.length,
+      alertsCount: activeAlertsCount,
       performance: avgPerf,
+      totalBonuses: 0,
+      employeesWithBonuses: 0,
+      pendingRequests: 0, // Will be updated by fetchDashboardData
     });
 
     updateChart(period, productions);
   };
 
   useEffect(() => {
-    fetchDashboardData();
-  }, []);
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchDashboardData();
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   const onRefresh = () => {
     setRefreshing(true);
     fetchDashboardData();
   };
 
-  const styles = createStyles(theme, isTablet);
-
-  if (loading) {
-    const getLogIcon = (module: string) => {
-    switch (module) {
-      case 'Production': return 'egg';
-      case 'Vente': return 'shopping-cart';
-      case 'Alimentation': return 'restaurant';
-      case 'Santé': return 'medication';
-      case 'Mouvement': return 'sync-alt';
-      case 'Rappel': return 'notifications';
-      default: return 'history';
-    }
-  };
-
-  const getLogColor = (module: string) => {
-    switch (module) {
-      case 'Production': return '#FBC02D';
-      case 'Vente': return '#4CAF50';
-      case 'Alimentation': return '#03A9F4';
-      case 'Santé': return '#E91E63';
-      case 'Mouvement': return '#FF5722';
-      default: return theme.colors.primary;
-    }
-  };
-
-  return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
-  }
+  const styles = useMemo(() => createStyles(theme, isTablet, isDarkMode), [theme, isTablet, isDarkMode]);
 
   const getLogIcon = (module: string) => {
     switch (module) {
@@ -340,7 +366,7 @@ export const DashboardScreen = ({ navigation }: any) => {
   const getLogColor = (module: string) => {
     switch (module) {
       case 'Production': return '#FBC02D';
-      case 'Vente': return '#4CAF50';
+      case 'Vente': return theme.colors.success;
       case 'Alimentation': return '#03A9F4';
       case 'Santé': return '#E91E63';
       case 'Mouvement': return '#FF5722';
@@ -348,11 +374,42 @@ export const DashboardScreen = ({ navigation }: any) => {
     }
   };
 
+  const getLocalizedAction = (action: string) => {
+    if (action.includes('Annulation') || action.includes('annulé') || action.includes('Annulée')) {
+      return `${t('common.cancelled')} • ${action}`;
+    }
+    if (action.includes('Production')) return t('actions.production');
+    if (action.includes('Vente')) return t('actions.sale');
+    if (action.includes('Aliment')) return t('actions.feed');
+    if (action.includes('Santé')) return t('actions.health');
+    if (action.includes('Mouvement')) return t('actions.movement');
+    if (action.includes('Rappel')) return t('actions.reminder');
+    return action;
+  };
+
+  const getLocalizedReminderType = (type: string) => {
+    switch (type) {
+      case 'Vaccination': return t('health.interventionType').split(',')[0];
+      case 'Traitement': return t('health.details');
+      case 'Nettoyage': return t('dbMgt.cacheClean');
+      case 'Approvisionnement': return t('dashboard.restock');
+      default: return type;
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaWrapper style={styles.container}>
       <View style={styles.header}>
         <View>
-          <Text style={styles.welcomeText}>Bonjour, {userName}!</Text>
+          <Text style={styles.welcomeText}>{t('profile.greeting')} {userName}!</Text>
           <Text style={styles.subWelcomeText}>{t('dashboard.recentActivities')}</Text>
         </View>
         <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.avatarContainer}>
@@ -368,16 +425,68 @@ export const DashboardScreen = ({ navigation }: any) => {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
-        {stats.alertsCount > 0 && (
+        <View style={styles.filterSection}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+            <TouchableOpacity
+              style={[styles.filterChip, selectedFarm === 'ALL' && styles.filterChipActive]}
+              onPress={() => { setSelectedFarm('ALL'); setSelectedLot('ALL'); }}
+            >
+              <Text style={[styles.filterText, selectedFarm === 'ALL' && styles.filterTextActive]}>
+                {t('common.allFarms')}
+              </Text>
+            </TouchableOpacity>
+            {userFarms?.map((farm: any) => (
+              <TouchableOpacity
+                key={farm.id}
+                style={[styles.filterChip, selectedFarm === farm.id && styles.filterChipActive]}
+                onPress={() => { setSelectedFarm(farm.id); setSelectedLot('ALL'); }}
+              >
+                <Text style={[styles.filterText, selectedFarm === farm.id && styles.filterTextActive]}>
+                  {farm.name}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+
+          {selectedFarm !== 'ALL' && currentFarmLots.length > 0 && (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterScroll, { marginTop: 8 }]}>
+              <TouchableOpacity
+                style={[styles.filterChip, selectedLot === 'ALL' && styles.filterChipActive]}
+                onPress={() => setSelectedLot('ALL')}
+              >
+                <Text style={[styles.filterText, selectedLot === 'ALL' && styles.filterTextActive]}>
+                  {t('common.allLots')}
+                </Text>
+              </TouchableOpacity>
+              {currentFarmLots.map((lot: any) => (
+                <TouchableOpacity
+                  key={lot.id}
+                  style={[styles.filterChip, selectedLot === lot.id && styles.filterChipActive]}
+                  onPress={() => setSelectedLot(lot.id)}
+                >
+                  <Text style={[styles.filterText, selectedLot === lot.id && styles.filterTextActive]}>
+                    {lot.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+        {stats.alertsCount > 0 && healthAlerts.length > 0 && (
           <TouchableOpacity
             style={styles.alertBanner}
-            onPress={() => navigation.navigate('GlobalHistory')}
+            onPress={() => {
+              navigation.navigate('HealthAlertDetail', { alert: healthAlerts[0] });
+            }}
           >
             <View style={styles.alertBannerLeft}>
-              <MaterialIcons name="warning" size={24} color="#FFF" />
+              <MaterialIcons name="notification-important" size={24} color="#FFF" />
               <View style={styles.alertBannerTextContainer}>
-                <Text style={styles.alertBannerTitle}>Alertes Santé ({stats.alertsCount})</Text>
-                <Text style={styles.alertBannerSub}>Mortalité ou maladies détectées récemment</Text>
+                <Text style={styles.alertBannerTitle}>{t('dashboard.healthAlerts')} ({healthAlerts.length})</Text>
+                <Text style={styles.alertBannerSub}>
+                  {`${healthAlerts[0].type || 'Alerte'}: ${healthAlerts[0].quantity || 0} ${t('common.subjects')} (${healthAlerts[0].lot_name || 'Lot'})`}
+                </Text>
               </View>
             </View>
             <MaterialIcons name="chevron-right" size={24} color="#FFF" />
@@ -387,35 +496,44 @@ export const DashboardScreen = ({ navigation }: any) => {
         <View style={styles.grid}>
           <TouchableOpacity
             style={styles.statCard}
-            onPress={() => navigation.navigate('Statistics')}
+            onPress={() => navigation.navigate('Farms')}
           >
             <View style={styles.statHeader}>
-               <Text style={styles.statLabel}>Performance</Text>
-               <MaterialIcons name="speed" size={20} color={getPerformanceLabel(stats.performance).color} />
+               <Text style={styles.statLabel}>{t('profile.myLots')}</Text>
+               <MaterialIcons name="business" size={20} color={theme.colors.primary} />
             </View>
-            <Text style={[styles.statValue, { color: getPerformanceLabel(stats.performance).color }]}>{stats.performance}%</Text>
+            <Text style={styles.statValue}>{stats.farmsCount} / {stats.lotsCount}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.statCard}
-            onPress={() => navigation.navigate('Fermes', { screen: 'FarmsList' })}
+            onPress={() => navigation.navigate('Farms')}
           >
             <View style={styles.statHeader}>
                <Text style={styles.statLabel}>{t('dashboard.totalBirds')}</Text>
                <MaterialIcons name="egg" size={20} color={theme.colors.primary} />
             </View>
-            <Text style={styles.statValue}>{stats.totalChickens}</Text>
+            <Text style={styles.statValue}>{formatNumber(stats.totalChickens)}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.statCard}
-            onPress={() => navigation.navigate('Statistics')}
+            onPress={() => {
+              if (activeLotId) {
+                navigation.navigate('Farms', {
+                  screen: 'LotDetail',
+                  params: { lotId: activeLotId }
+                });
+              } else {
+                navigation.navigate('Farms');
+              }
+            }}
           >
             <View style={styles.statHeader}>
                <Text style={styles.statLabel}>{t('dashboard.dailyProduction')}</Text>
                <MaterialIcons name="egg" size={20} color={theme.colors.primary} />
             </View>
-            <Text style={styles.statValue}>{formatNumber(stats.todayProduction)} cas.</Text>
+            <Text style={styles.statValue}>{formatNumber(stats.todayProduction)} {t('dashboard.units.trays')}</Text>
           </TouchableOpacity>
 
           {userRole !== 'EMPLOYE' && (
@@ -424,28 +542,80 @@ export const DashboardScreen = ({ navigation }: any) => {
               onPress={() => navigation.navigate('Finance')}
             >
               <View style={styles.statHeader}>
-                 <Text style={styles.statLabel}>{t('dashboard.finance')}</Text>
-                 <MaterialIcons name="account-balance-wallet" size={20} color={theme.colors.primary} />
+                 <Text style={styles.statLabel}>Chiffre d'Affaires</Text>
+                 <MaterialIcons name="point-of-sale" size={20} color={theme.colors.success} />
               </View>
-              <Text style={[styles.statValue, { color: stats.revenues - stats.expenses >= 0 ? theme.colors.success : theme.colors.danger }]}>
-                  {formatCurrency(stats.revenues - stats.expenses)}
+              <Text style={[styles.statValue, { color: theme.colors.success }]}>
+                  {formatCurrency(stats.revenues)}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {userRole !== 'EMPLOYE' && (
+            <TouchableOpacity
+              style={styles.statCard}
+              onPress={() => navigation.navigate('Finance')}
+            >
+              <View style={styles.statHeader}>
+                 <Text style={styles.statLabel}>Encaissements</Text>
+                 <MaterialIcons name="account-balance-wallet" size={20} color={theme.colors.success} />
+              </View>
+              <Text style={[styles.statValue, { color: theme.colors.success }]}>
+                  {formatCurrency(stats.encaissements)}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {userRole !== 'EMPLOYE' && (
+            <TouchableOpacity
+              style={styles.statCard}
+              onPress={() => navigation.navigate('Finance')}
+            >
+              <View style={styles.statHeader}>
+                 <Text style={styles.statLabel}>Créances</Text>
+                 <MaterialIcons name="hourglass-empty" size={20} color={theme.colors.warning || '#f57c00'} />
+              </View>
+              <Text style={[styles.statValue, { color: theme.colors.warning || '#f57c00' }]}>
+                  {formatCurrency(stats.creances)}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {userRole !== 'EMPLOYE' && stats.pendingRequests > 0 && (
+            <TouchableOpacity
+              style={[styles.statCard, { borderColor: theme.colors.warning, borderWidth: 2 }]}
+              onPress={() => navigation.navigate('EmployeeRequests')}
+            >
+              <View style={styles.statHeader}>
+                 <Text style={styles.statLabel}>{t('requests.shortTitle')}</Text>
+                 <View style={styles.badgeContainer}>
+                    <MaterialIcons
+                      name="people"
+                      size={20}
+                      color={theme.colors.warning}
+                    />
+                    <View style={styles.notificationDot} />
+                 </View>
+              </View>
+              <Text style={[styles.statValue, { color: theme.colors.warning }]}>
+                {stats.pendingRequests}
               </Text>
             </TouchableOpacity>
           )}
         </View>
 
-        <TouchableOpacity onPress={() => navigation.navigate('Statistics')}>
+        <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Statistics')}>
           <Card style={styles.chartCard}>
-            <Text style={styles.sectionTitle}>Production (casiers)</Text>
+            <Text style={styles.sectionTitle}>{t('dashboard.productionChart')}</Text>
             <View style={styles.periodSelectorContainer}>
               <View style={styles.periodSelector}>
                 {periods.map(p => (
                   <TouchableOpacity
-                    key={p}
-                    style={[styles.periodItem, period === p && styles.periodActive]}
-                    onPress={() => setPeriod(p)}
+                    key={p.key}
+                    style={[styles.periodItem, period === p.key && styles.periodActive]}
+                    onPress={() => setPeriod(p.key)}
                   >
-                    <Text style={period === p ? styles.periodTextActive : styles.periodText}>{p}</Text>
+                    <Text style={period === p.key ? styles.periodTextActive : styles.periodText}>{p.label}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -465,7 +635,8 @@ export const DashboardScreen = ({ navigation }: any) => {
                   color: (opacity = 1) => `rgba(249, 215, 96, ${opacity})`,
                   labelColor: (opacity = 1) => theme.colors.text,
                   style: { borderRadius: 16 },
-                  propsForDots: { r: "6", strokeWidth: "2", stroke: theme.colors.primary }
+                  propsForDots: { r: "6", strokeWidth: "2", stroke: theme.colors.primary },
+                  barPercentage: 0.7,
                 }}
                 verticalLabelRotation={0}
                 style={{ marginVertical: 8, borderRadius: 16 }}
@@ -481,23 +652,23 @@ export const DashboardScreen = ({ navigation }: any) => {
         {recentActions.length > 0 && (
           <View style={styles.recentActionsSection}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Dernières activités</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('GlobalHistory')}>
-                <Text style={styles.seeAllText}>Tout voir</Text>
+              <Text style={styles.sectionTitle}>{t('dashboard.recentActivitiesSection')}</Text>
+              <TouchableOpacity onPress={() => navigation.getParent()?.navigate('GlobalHistory')}>
+                <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
               </TouchableOpacity>
             </View>
             {recentActions.map((log) => (
-              <TouchableOpacity key={log.id} onPress={() => navigation.navigate('GlobalHistory')}>
+              <TouchableOpacity key={log.id} onPress={() => navigation.getParent()?.navigate('GlobalHistory')}>
                 <Card style={styles.logCard}>
                   <View style={[styles.logIconBox, { backgroundColor: getLogColor(log.module) + '15' }]}>
                     <MaterialIcons name={getLogIcon(log.module) as any} size={20} color={getLogColor(log.module)} />
                   </View>
                   <View style={styles.logInfo}>
-                    <Text style={styles.logAction}>{log.action}</Text>
+                    <Text style={styles.logAction}>{getLocalizedAction(log.action)}</Text>
                     <Text style={styles.logDesc} numberOfLines={1}>{log.description}</Text>
                     <View style={styles.logFooter}>
                        <Text style={styles.logUser}><MaterialIcons name="person" size={10} /> {log.user_name}</Text>
-                       <Text style={styles.logDate}>{new Date(log.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                       <Text style={styles.logDate}>{new Date(log.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
                     </View>
                   </View>
                 </Card>
@@ -509,13 +680,13 @@ export const DashboardScreen = ({ navigation }: any) => {
         {reminders.length > 0 && (
           <View style={styles.remindersSection}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Rappels prioritaires</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Reminders')}>
-                 <Text style={styles.seeAllText}>Mes rappels</Text>
+              <Text style={styles.sectionTitle}>{t('dashboard.priorityReminders')}</Text>
+              <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Reminders')}>
+                 <Text style={styles.seeAllText}>{t('dashboard.myReminders')}</Text>
               </TouchableOpacity>
             </View>
             {reminders.map((reminder) => (
-              <TouchableOpacity key={reminder.id} onPress={() => navigation.navigate('Reminders')}>
+              <TouchableOpacity key={reminder.id} onPress={() => navigation.getParent()?.navigate('Reminders')}>
                 <Card style={styles.reminderItem}>
                   <View style={[styles.reminderIconBox, { backgroundColor: theme.colors.primary + '15' }]}>
                     <MaterialIcons name="event-note" size={20} color={theme.colors.primary} />
@@ -523,11 +694,11 @@ export const DashboardScreen = ({ navigation }: any) => {
                   <View style={styles.reminderInfo}>
                     <Text style={styles.reminderTitle}>{reminder.title}</Text>
                     <Text style={styles.reminderDate}>
-                      {new Date(reminder.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}
+                      {new Date(reminder.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'long' })}
                     </Text>
                   </View>
                   <View style={[styles.typeBadge, { borderColor: theme.colors.primary + '40' }]}>
-                    <Text style={[styles.typeText, { color: theme.colors.primary }]}>{reminder.type}</Text>
+                    <Text style={[styles.typeText, { color: theme.colors.primary }]}>{getLocalizedReminderType(reminder.type)}</Text>
                   </View>
                 </Card>
               </TouchableOpacity>
@@ -536,33 +707,34 @@ export const DashboardScreen = ({ navigation }: any) => {
         )}
 
 
-        {userRole !== 'EMPLOYE' && (inventory.feed.length > 0 || inventory.health.length > 0) && (
+        {userRole !== 'EMPLOYE' && (inventory.raw.length > 0 || inventory.prepared.length > 0 || inventory.health.length > 0) && (
           <View style={styles.inventorySection}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>État des Stocks</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Purchase', { type: 'feed' })}>
-                <Text style={styles.seeAllText}>Approvisionner</Text>
+              <Text style={styles.sectionTitle}>{t('dashboard.stockStatus')}</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('Inventory')}>
+                <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
               </TouchableOpacity>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.inventoryScroll}>
-              {inventory.feed.map((item: any) => (
-                <Card key={`feed-${item.id}`} style={styles.inventoryCard}>
-                  <MaterialCommunityIcons name="food-apple" size={24} color={theme.colors.primary} />
-                  <Text style={styles.inventoryName} numberOfLines={1}>{item.feed_type}</Text>
-                  <Text style={[styles.inventoryValue, item.quantity_kg < 50 && { color: theme.colors.danger }]}>
-                    {formatNumber(item.quantity_kg)} kg
+              {[
+                ...inventory.raw.map((item: any) => ({ ...item, type: 'raw' })),
+                ...inventory.prepared.map((item: any) => ({ ...item, type: 'prepared' })),
+                ...inventory.health.map((item: any) => ({ ...item, type: 'health' }))
+              ].slice(0, 2).map((item: any) => (
+                <Card key={`${item.type}-${item.id}`} style={styles.inventoryCard}>
+                  <View style={styles.inventoryHeader}>
+                    {item.type === 'raw' && <MaterialCommunityIcons name="seed" size={18} color={theme.colors.primary} />}
+                    {item.type === 'prepared' && <MaterialCommunityIcons name="food-apple" size={18} color="#03A9F4" />}
+                    {item.type === 'health' && <MaterialIcons name="medical-services" size={18} color="#E91E63" />}
+                    <Text style={styles.inventoryFarm} numberOfLines={1}>{item.farm_name}</Text>
+                  </View>
+                  <Text style={styles.inventoryName} numberOfLines={1}>
+                    {item.type === 'raw' ? item.feed_type : item.type === 'prepared' ? item.feed_name : item.product_name}
                   </Text>
-                  <Text style={styles.inventoryFarm}>{item.farm_name}</Text>
-                </Card>
-              ))}
-              {inventory.health.map((item: any) => (
-                <Card key={`health-${item.id}`} style={styles.inventoryCard}>
-                  <MaterialIcons name="medical-services" size={24} color="#E91E63" />
-                  <Text style={styles.inventoryName} numberOfLines={1}>{item.product_name}</Text>
-                  <Text style={[styles.inventoryValue, item.quantity < 5 && { color: theme.colors.danger }]}>
-                    {formatNumber(item.quantity)} u.
+                  <Text style={[styles.inventoryValue, (item.type === 'health' ? item.quantity < 5 : item.quantity_kg < 50) && { color: theme.colors.danger }]}>
+                    {formatNumber(item.type === 'health' ? item.quantity : item.quantity_kg)}
+                    <Text style={styles.unitText}> {item.type === 'health' ? (item.unit || t('common.unit')) : t('common.kg')}</Text>
                   </Text>
-                  <Text style={styles.inventoryFarm}>{item.farm_name}</Text>
                 </Card>
               ))}
             </ScrollView>
@@ -570,11 +742,11 @@ export const DashboardScreen = ({ navigation }: any) => {
         )}
 
       </ScrollView>
-    </SafeAreaView>
+    </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
   header: {
@@ -597,8 +769,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     backgroundColor: theme.colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: theme.colors.primary,
+    borderWidth: isDarkMode ? 0 : 1,
+    borderColor: '#000000',
     overflow: 'hidden',
     ...theme.shadows.light,
   },
@@ -614,6 +786,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.l,
     marginBottom: theme.spacing.m,
+    borderWidth: 1,
+    borderColor: '#000000',
     ...theme.shadows.medium,
   },
   alertBannerLeft: {
@@ -649,7 +823,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   statCard: {
     width: isTablet ? '23.5%' : '48%',
     padding: theme.spacing.m,
-    height: 100,
+    height: 90,
     justifyContent: 'space-between',
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
@@ -664,14 +838,28 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     alignItems: 'center',
   },
   statLabel: {
-    fontSize: 13,
+    fontSize: 12,
     color: theme.colors.textSecondary,
     fontWeight: '600',
   },
   statValue: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     color: theme.colors.text,
+  },
+  badgeContainer: {
+    position: 'relative',
+  },
+  notificationDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: theme.colors.danger,
+    borderWidth: 1,
+    borderColor: theme.colors.surface,
   },
   chartHeader: {
     marginBottom: 10,
@@ -717,6 +905,33 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     alignItems: 'center',
     marginBottom: theme.spacing.s,
   },
+  filterSection: {
+    marginBottom: theme.spacing.m,
+  },
+  filterScroll: {
+    paddingBottom: 4,
+  },
+  filterChip: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surface,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#000000',
+  },
+  filterChipActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  filterText: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+    fontWeight: '600',
+  },
+  filterTextActive: {
+    color: '#000000',
+    fontWeight: 'bold',
+  },
   seeAllText: {
     fontSize: 12,
     color: theme.colors.primary,
@@ -727,6 +942,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     marginBottom: theme.spacing.l,
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: '#000000',
     ...theme.shadows.medium,
   },
   recentActionsSection: {
@@ -739,7 +956,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     marginBottom: theme.spacing.s,
     borderRadius: theme.borderRadius.l,
     borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderColor: '#000000',
     backgroundColor: theme.colors.surface,
   },
   logIconBox: {
@@ -779,10 +996,10 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     color: theme.colors.primary,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: 'bold',
     color: theme.colors.text,
-    marginBottom: theme.spacing.m,
+    marginBottom: theme.spacing.s,
   },
   alertsSection: {
     marginTop: theme.spacing.l,
@@ -845,7 +1062,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     backgroundColor: theme.colors.background,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: '#000000',
   },
   typeText: {
     fontSize: 10,
@@ -860,7 +1077,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     height: 10,
     borderRadius: 5,
     backgroundColor: theme.colors.danger,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#FFFFFF',
   },
   inventorySection: {
@@ -872,31 +1089,54 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     marginTop: theme.spacing.s,
   },
   inventoryCard: {
-    width: 140,
+    width: 130,
     marginRight: theme.spacing.m,
-    padding: theme.spacing.m,
-    alignItems: 'center',
+    padding: theme.spacing.s,
     borderRadius: theme.borderRadius.l,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
     backgroundColor: theme.colors.surface,
+    ...theme.shadows.light,
+  },
+  inventoryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
   },
   inventoryName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginTop: 8,
-    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '600',
+    color: theme.colors.textSecondary,
+    marginBottom: 2,
   },
   inventoryValue: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
-    color: theme.colors.primary,
-    marginVertical: 4,
+    color: theme.colors.text,
+  },
+  unitText: {
+    fontSize: 10,
+    fontWeight: 'normal',
+    color: theme.colors.textSecondary,
   },
   inventoryFarm: {
-    fontSize: 10,
+    fontSize: 9,
     color: theme.colors.textSecondary,
-    textAlign: 'center',
+    flex: 1,
+    marginLeft: 4,
+    textAlign: 'right',
+  },
+  viewMoreInventory: {
+    width: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: theme.spacing.m,
+  },
+  viewMoreText: {
+    fontSize: 12,
+    color: theme.colors.primary,
+    fontWeight: 'bold',
+    marginTop: 4,
   }
 });

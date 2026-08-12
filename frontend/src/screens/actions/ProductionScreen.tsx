@@ -1,21 +1,24 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import { toast } from '../../utils/toast';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { DatePicker } from '../../components/DatePicker';
 import { useTheme } from '../../context/ThemeContext';
 import { useTranslation } from '../../context/LanguageContext';
-import { apiClient } from '../../api/client';
+import { repositoryProvider } from '../../repositories';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { formatNumber } from '../../utils/formatters';
+import { getErrorMessage } from '../../utils/errors';
 
 const OEUFS_PAR_CASIER = 30;
 
 export const ActionProductionScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, lotName, lotPurchaseDate, item } = route.params || {};
   const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
   const [casiersProdu, setCasiersProdu] = useState(item?.casiers_produits?.toString() || '');
@@ -32,67 +35,56 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
     });
   }, []);
 
-  const totalOeufs = (parseInt(casiersProdu) || 0) * OEUFS_PAR_CASIER;
+  const totalOeufs = (parseInt(casiersProdu.toString().replace(/\s/g, '')) || 0) * OEUFS_PAR_CASIER;
 
   const handleSubmit = async () => {
+    if (loading) return;
     if (!date || !casiersProdu) {
-      Alert.alert(t('common.error'), t('production.fillRequired') || 'Veuillez indiquer la date et le nombre de casiers produits.');
+      toast.error(t('common.error'), t('production.fillRequired'));
       return;
     }
 
     if (lotPurchaseDate && date < lotPurchaseDate) {
-      Alert.alert(t('common.error'), "La date de cette action ne peut pas être antérieure à la date de création du lot.");
+      toast.error(t('common.error'), t('production.dateBeforeLotError'));
       return;
     }
 
-    const cp = parseInt(casiersProdu) || 0;
-    const cv = parseInt(casiersVendables) || 0;
+    const cleanCasiersProdu = casiersProdu.toString().replace(/\s/g, '');
+    const cleanCasiersVendables = casiersVendables.toString().replace(/\s/g, '');
+    const cleanOeufsCasses = oeufssCasses.toString().replace(/\s/g, '');
+
+    const cp = parseInt(cleanCasiersProdu) || 0;
+    const cv = cleanCasiersVendables ? (parseInt(cleanCasiersVendables) || 0) : cp;
     if (cv > cp) {
-      Alert.alert(t('common.error'), t('production.errorVendables') || 'Les casiers vendables ne peuvent pas dépasser les casiers produits.');
+      toast.error(t('common.error'), t('production.errorVendables'));
       return;
     }
+
     setLoading(true);
     try {
       const payload = {
         lot: lotId,
         date,
         casiers_produits: cp,
-        oeufs_casses: parseInt(oeufssCasses) || 0,
-        casiers_vendables: cv || cp,
+        oeufs_casses: parseInt(cleanOeufsCasses) || 0,
+        casiers_vendables: cv,
         note,
       };
 
       if (isEdit) {
-        await apiClient.put(`/productions/${item.id}/`, payload);
-        Alert.alert(t('common.success'), t('production.updated') || 'Production mise à jour !');
+        await repositoryProvider.api.put(`/productions/${item.id}/`, payload);
+        toast.success(t('common.success'), t('production.updated'));
       } else {
-        await apiClient.post('/productions/', payload);
-        Alert.alert(t('common.success'), t('production.saved') || 'Production enregistrée !');
+        await repositoryProvider.api.post('/productions/', payload);
+        toast.success(t('common.success'), t('production.saved'));
       }
       navigation.goBack();
     } catch (e: any) {
-      if (!e.response) {
-        // Network error, queue for sync
-        const payload = {
-          lot: lotId,
-          date,
-          casiers_produits: cp,
-          oeufs_casses: parseInt(oeufssCasses) || 0,
-          casiers_vendables: cv || cp,
-          note,
-        };
-        await addToSyncQueue('POST', '/productions/', payload);
-        Alert.alert(t('common.offline') || 'Hors-ligne', t('production.offlineSaved') || 'Connexion impossible. La production a été enregistrée localement et sera synchronisée plus tard.');
-        navigation.goBack();
-      } else {
-        Alert.alert(t('common.error'), t('production.saveError') || "Impossible d'enregistrer la production.");
-      }
+      toast.error(t('common.actionImpossible'), getErrorMessage(e, t('production.saveError')));
     } finally {
       setLoading(false);
     }
   };
-
-  const styles = createStyles(theme);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -104,7 +96,7 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
             <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {isEdit ? (t('production.edit') || 'Modifier Production') : (t('production.title') || 'Production du jour')}
+            {isEdit ? t('production.edit') : t('production.title')}
           </Text>
           <View style={{ width: 40 }} />
         </View>
@@ -116,40 +108,39 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
                 <MaterialIcons name="inventory-2" size={24} color={theme.colors.primary} />
               </View>
               <View style={styles.lotTexts}>
-                <Text style={styles.lotNameText}>{t('lots.lot') || 'Lot'}: {lotName}</Text>
-                <Text style={styles.lotDetailText}>1 {t('production.tray') || 'casier'} = {OEUFS_PAR_CASIER} {t('production.eggs') || 'œufs'}</Text>
+                <Text style={styles.lotNameText}>{t('lots.lot')}: {lotName}</Text>
+                <Text style={styles.lotDetailText}>1 {t('production.tray')} = {OEUFS_PAR_CASIER} {t('production.eggs')}</Text>
               </View>
             </View>
           </Card>
 
           {/* Total en temps réel */}
           <Card style={[styles.totalCard, { backgroundColor: theme.colors.primary }]}>
-            <Text style={styles.totalCardLabel}>{t('production.totalProduced') || 'Total produit'}</Text>
-            <Text style={styles.totalCardValue}>{formatNumber(parseInt(casiersProdu) || 0)} {t('production.trays') || 'casiers'}</Text>
-            <Text style={styles.totalCardSub}>= {formatNumber(totalOeufs)} {t('production.eggs') || 'œufs'}</Text>
+            <Text style={styles.totalCardLabel}>{t('production.totalProduced')}</Text>
+            <Text style={styles.totalCardValue}>{formatNumber(parseInt(casiersProdu.toString().replace(/\s/g, '')) || 0)} {t('production.trays')}</Text>
+            <Text style={styles.totalCardSub}>= {formatNumber(totalOeufs)} {t('production.eggs')}</Text>
           </Card>
 
-          <Text style={styles.sectionTitle}>{t('production.collectDate') || 'Date de collecte'}</Text>
+          <Text style={styles.sectionTitle}>{t('production.collectDate')}</Text>
           <Card style={styles.formCard}>
             <DatePicker
-              label={t('common.date') || 'Date'}
+              label={t('common.date')}
               value={date}
               onChange={setDate}
             />
           </Card>
 
-          <Text style={styles.sectionTitle}>{t('production.quantities') || 'Quantités (en casiers)'}</Text>
+          <Text style={styles.sectionTitle}>{t('production.quantities')}</Text>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
               <View style={styles.labelRow}>
-                <MaterialCommunityIcons name="check-circle-outline" size={18} color="#2E7D32" />
-                <Text style={styles.label}>{t('production.traysProduced') || 'Casiers produits *'}</Text>
+                <MaterialCommunityIcons name="check-circle-outline" size={18} color={theme.colors.success} />
+                <Text style={styles.label}>{t('production.traysProduced')} *</Text>
               </View>
               <Input
                 value={casiersProdu}
                 onChangeText={(val) => {
                   setCasiersProdu(val);
-                  // Optionnel: On peut suggérer que tout est vendable par défaut
                 }}
                 isNumeric
                 placeholder="0"
@@ -160,8 +151,8 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
             <View style={styles.row}>
               <View style={[styles.inputGroup, { flex: 1, marginRight: 8 }]}>
                 <View style={styles.labelRow}>
-                  <MaterialIcons name="storefront" size={18} color="#1565C0" />
-                  <Text style={styles.label}>{t('production.traysVendables') || 'Casiers vendables'}</Text>
+                  <MaterialIcons name="storefront" size={18} color={theme.colors.info || '#2196F3'} />
+                  <Text style={styles.label}>{t('production.traysVendables')}</Text>
                 </View>
                 <Input
                   value={casiersVendables}
@@ -174,12 +165,12 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
 
               <View style={[styles.inputGroup, { flex: 1 }]}>
                 <View style={styles.labelRow}>
-                  <MaterialIcons name="Block" size={18} color={theme.colors.danger} />
-                  <Text style={styles.label}>{t('production.traysNonVendables') || 'Non vendables'}</Text>
+                  <MaterialIcons name="block" size={18} color={theme.colors.danger} />
+                  <Text style={styles.label}>{t('production.traysNonVendables')}</Text>
                 </View>
                 <View style={[styles.fieldInput, styles.readOnlyInput]}>
                    <Text style={styles.readOnlyText}>
-                     {Math.max(0, (parseInt(casiersProdu) || 0) - (parseInt(casiersVendables) || (parseInt(casiersProdu) || 0)))}
+                     {formatNumber(Math.max(0, (parseInt(casiersProdu.toString().replace(/\s/g, '')) || 0) - (parseInt(casiersVendables.toString().replace(/\s/g, '')) || (parseInt(casiersProdu.toString().replace(/\s/g, '')) || 0))))}
                    </Text>
                 </View>
               </View>
@@ -188,7 +179,7 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
               <View style={[styles.inputGroup, { flex: 1 }]}>
                 <View style={styles.labelRow}>
                   <MaterialIcons name="error-outline" size={18} color={theme.colors.danger} />
-                  <Text style={styles.label}>{t('production.brokenEggs') || 'Œufs cassés'}</Text>
+                  <Text style={styles.label}>{t('production.brokenEggs')}</Text>
                 </View>
                 <Input
                   value={oeufssCasses}
@@ -198,17 +189,17 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
                   style={[styles.fieldInput, { textAlign: 'center' }]}
                 />
                 <Text style={{ fontSize: 10, color: theme.colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-                  ≈ {formatNumber((parseInt(oeufssCasses) || 0) / 30)} casiers
+                  ≈ {formatNumber((parseInt(oeufssCasses.toString().replace(/\s/g, '')) || 0) / 30)} {t('production.trays')}
                 </Text>
               </View>
           </Card>
 
-          <Text style={styles.sectionTitle}>{t('production.note') || 'Remarque'}</Text>
+          <Text style={styles.sectionTitle}>{t('production.note')}</Text>
           <Card style={styles.formCard}>
             <Input
               value={note}
               onChangeText={setNote}
-              placeholder={t('production.observation') || 'Observation (optionnel)'}
+              placeholder={t('production.observation')}
               multiline
               numberOfLines={3}
               style={{ height: 80, textAlignVertical: 'top' }}
@@ -216,11 +207,11 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
           </Card>
 
           {userName ? (
-            <Text style={styles.responsable}>{t('production.responsible') || 'Responsable'} : {userName}</Text>
+            <Text style={styles.responsable}>{t('production.responsible')} : {userName}</Text>
           ) : null}
 
           <Button
-            title={isEdit ? (t('common.update') || 'Mettre à jour') : (t('production.save') || 'Enregistrer la production')}
+            title={isEdit ? t('common.update') : t('production.save')}
             onPress={handleSubmit}
             loading={loading}
             style={styles.submitBtn}
@@ -245,7 +236,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
   lotInfoCard: {
     padding: theme.spacing.m, borderRadius: theme.borderRadius.xl,
-    marginBottom: theme.spacing.m, borderWidth: 1, borderColor: theme.colors.border + '40',
+    marginBottom: theme.spacing.m, borderWidth: 0.8, borderColor: theme.colors.border,
   },
   lotInfoContent: { flexDirection: 'row', alignItems: 'center' },
   lotIconContainer: {
@@ -259,9 +250,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.l, borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.l, alignItems: 'center', ...theme.shadows.medium,
   },
-  totalCardLabel: { fontSize: 12, color: theme.colors.text, opacity: 0.8, textTransform: 'uppercase', fontWeight: '700' },
-  totalCardValue: { fontSize: 36, fontWeight: '900', color: theme.colors.text, marginTop: 4 },
-  totalCardSub: { fontSize: 14, color: theme.colors.text, opacity: 0.7, marginTop: 4 },
+  totalCardLabel: { fontSize: 12, color: '#000000', opacity: 0.8, textTransform: 'uppercase', fontWeight: '700' },
+  totalCardValue: { fontSize: 36, fontWeight: '900', color: '#000000', marginTop: 4 },
+  totalCardSub: { fontSize: 14, color: '#000000', opacity: 0.7, marginTop: 4 },
   sectionTitle: {
     fontSize: 16, fontWeight: 'bold', color: theme.colors.text,
     marginBottom: theme.spacing.m, marginTop: theme.spacing.s,
@@ -277,8 +268,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     height: 50,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.background + '10'
   },
   readOnlyText: { fontSize: 18, fontWeight: 'bold', color: theme.colors.textSecondary },

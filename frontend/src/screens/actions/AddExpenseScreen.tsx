@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
@@ -6,61 +6,87 @@ import { Card } from '../../components/Card';
 import { DatePicker } from '../../components/DatePicker';
 import { useTheme } from '../../context/ThemeContext';
 import { useTranslation } from '../../context/LanguageContext';
-import { apiClient } from '../../api/client';
+import { useAuth } from '../../context/AuthContext';
+import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
-
-const CATEGORIES = ['Électricité', 'Eau', 'Loyer', 'Transport', 'Main d\'œuvre', 'Maintenance', 'Divers'];
 
 export const AddExpenseScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { userRole, userFarms } = useAuth() as any;
+
+  useEffect(() => {
+    if (userRole === 'EMPLOYE') {
+      Alert.alert(t('common.error'), t('common.actionForbidden'));
+      navigation.goBack();
+    }
+  }, [userRole]);
+
+  const CATEGORIES = useMemo(() => [
+    t('expense.catElectricity'),
+    t('expense.catWater'),
+    t('expense.catRent'),
+    t('expense.catTransport'),
+    t('expense.catLabor'),
+    t('expense.catMaintenance'),
+    t('expense.catMisc')
+  ], [t]);
+
   const [description, setDescription] = useState('');
-  const [category, setCategory] = useState('Divers');
+  const [category, setCategory] = useState(CATEGORIES[6]); // Divers
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
+    if (loading) return;
     if (!description || !amount) {
-      Alert.alert(t('common.error'), 'Veuillez remplir la description et le montant.');
+      Alert.alert(t('common.error'), t('expense.fillRequired'));
       return;
     }
 
-    // On récupère la ferme par défaut (la première pour cet utilisateur ou via un sélecteur)
-    // Dans SolFerme, on suppose souvent une seule ferme ou on récupère l'id de la ferme active.
-    // Pour simplifier ici, on va chercher les fermes d'abord si nécessaire,
-    // ou utiliser l'ID stocké/passé.
-    // Comme c'est une dépense "Générale", elle doit être liée à une Farm.
-
     setLoading(true);
     try {
-      const farmsRes = await apiClient.get('/farms/');
-      if (farmsRes.data.length === 0) {
-        Alert.alert('Erreur', 'Aucune ferme trouvée pour associer la dépense.');
+      let farmId = null;
+      try {
+        const farmsRes = await repositoryProvider.api.get<any[]>('/farms/');
+        if (farmsRes.data && farmsRes.data.length > 0) {
+          farmId = farmsRes.data[0].id;
+        }
+      } catch (err) {
+        // API failed, fallback to context
+      }
+
+      if (!farmId && userFarms && userFarms.length > 0) {
+        farmId = userFarms[0].id;
+      }
+
+      if (!farmId) {
+        Alert.alert(t('common.error'), t('expense.noFarmFound'));
         setLoading(false);
         return;
       }
 
       const payload = {
-        farm: farmsRes.data[0].id,
+        farm: farmId,
         category,
         description,
-        amount: parseFloat(amount),
+        amount: parseFloat(amount.toString().replace(/\s/g, '')) || 0,
         date,
       };
 
-      await apiClient.post('/expenses/', payload);
-      Alert.alert(t('common.success'), 'Dépense enregistrée avec succès !');
+      await repositoryProvider.api.post('/expenses/', payload);
+      Alert.alert(t('common.success'), t('expense.success'));
       navigation.goBack();
     } catch (e) {
       console.error(e);
-      Alert.alert(t('common.error'), 'Impossible d\'enregistrer la dépense.');
+      Alert.alert(t('common.error'), t('expense.error'));
     } finally {
       setLoading(false);
     }
   };
 
-  const styles = createStyles(theme);
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -69,14 +95,14 @@ export const AddExpenseScreen = ({ navigation }: any) => {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Nouvelle Dépense</Text>
+          <Text style={styles.headerTitle}>{t('expense.newExpenseTitle')}</Text>
           <View style={{ width: 40 }} />
         </View>
 
         <ScrollView contentContainerStyle={styles.scroll}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
-               <Text style={styles.label}>Catégorie</Text>
+               <Text style={styles.label}>{t('expense.category')}</Text>
                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
                  {CATEGORIES.map(cat => (
                    <TouchableOpacity
@@ -91,19 +117,19 @@ export const AddExpenseScreen = ({ navigation }: any) => {
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Description</Text>
-              <Input placeholder="Ex: Facture EDG Juin" value={description} onChangeText={setDescription} />
+              <Text style={styles.label}>{t('expense.description')}</Text>
+              <Input placeholder={t('expense.placeholderDescription')} value={description} onChangeText={setDescription} />
             </View>
 
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Montant (GNF)</Text>
+              <Text style={styles.label}>{t('expense.amount')} (GNF)</Text>
               <Input placeholder="0" value={amount} onChangeText={setAmount} isNumeric />
             </View>
 
-            <DatePicker label="Date de la dépense" value={date} onChange={setDate} />
+            <DatePicker label={t('expense.date')} value={date} onChange={setDate} />
           </Card>
 
-          <Button title="Enregistrer la dépense" onPress={handleSubmit} loading={loading} style={styles.submitBtn} />
+          <Button title={t('expense.submit')} onPress={handleSubmit} loading={loading} style={styles.submitBtn} />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -120,9 +146,9 @@ const createStyles = (theme: any) => StyleSheet.create({
   inputGroup: { marginBottom: theme.spacing.m },
   label: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: 8, fontWeight: '600' },
   categoryScroll: { flexDirection: 'row', marginBottom: 8 },
-  categoryBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: theme.colors.background, marginRight: 8, borderWidth: 1, borderColor: theme.colors.border },
+  categoryBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: theme.colors.background, marginRight: 8, borderWidth: 0.8, borderColor: theme.colors.border },
   categoryBtnActive: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
   categoryText: { fontSize: 13, color: theme.colors.textSecondary },
-  categoryTextActive: { color: theme.colors.text, fontWeight: 'bold' },
-  submitBtn: { height: 56, borderRadius: theme.borderRadius.xl, marginTop: theme.spacing.m },
+  categoryTextActive: { color: '#000000', fontWeight: 'bold' },
+  submitBtn: { height: 56, borderRadius: theme.borderRadius.xl, marginTop: theme.spacing.m, borderWidth: 1, borderColor: theme.colors.border },
 });

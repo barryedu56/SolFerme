@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, SafeAreaView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { Card } from '../components/Card';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
@@ -17,7 +17,7 @@ export const AttendanceHistoryScreen = ({ navigation }: any) => {
 
   const fetchHistory = async () => {
     try {
-      const res = await apiClient.get('/attendances/');
+      const res = await repositoryProvider.api.get('/attendances/');
       // On groupe par date
       const grouped = res.data.reduce((acc: any, curr: any) => {
         const date = curr.date;
@@ -184,7 +184,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   statValue: { fontSize: 12, fontWeight: 'bold' },
   divider: {
-    height: 1,
+    height: 0.8,
     backgroundColor: theme.colors.border + '40',
     marginVertical: theme.spacing.s,
   },
@@ -193,7 +193,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: 8,
-    borderBottomWidth: 1,
+    borderBottomWidth: 0.8,
     borderBottomColor: theme.colors.border + '20',
   },
   empName: { fontSize: 14, color: theme.colors.text },

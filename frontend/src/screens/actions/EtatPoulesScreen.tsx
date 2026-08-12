@@ -4,9 +4,8 @@ import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { useTheme } from '../../context/ThemeContext';
-import { apiClient } from '../../api/client';
+import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
-import { addToSyncQueue } from '../../utils/offlineStorage';
 import { useTranslation } from '../../context/LanguageContext';
 
 export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
@@ -21,6 +20,12 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
+    if (loading) return;
+    if (parseInt(deadCount) <= 0 && parseInt(sickCount) <= 0) {
+      Alert.alert(t('common.info'), t('movement.fillRequired'));
+      return;
+    }
+
     const payload = {
       lot: lotId,
       type: 'MORT',
@@ -32,19 +37,14 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
     setLoading(true);
     try {
       if (parseInt(deadCount) > 0) {
-        await apiClient.post('/movements/', payload);
+        await repositoryProvider.api.post('/movements/', payload);
       }
+      // If we had a sickness endpoint or movement type, we'd add it here too.
+      // For now, mirroring the existing logic but with better validation.
       Alert.alert(t('common.success'), t('movement.success'));
       navigation.goBack();
     } catch (e: any) {
-      if (!e.response) {
-        if (parseInt(deadCount) > 0) {
-          await addToSyncQueue('POST', '/movements/', payload);
-        }
-        Alert.alert(t('common.offline'), t('movement.offlineSaved'), [{ text: 'OK', onPress: () => navigation.goBack() }]);
-      } else {
-        Alert.alert(t('common.error'), t('movement.fillRequired')); // Using generic for now
-      }
+      Alert.alert(t('common.error'), t('common.errorSave'));
     } finally {
       setLoading(false);
     }
@@ -65,15 +65,15 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
           <View style={styles.infoRow}>
             <View style={styles.infoTexts}>
               <Text style={styles.infoTitle}>{t('movement.updateEffectives')}</Text>
-              <Text style={styles.infoSubtitle}>{lotName} • {t('common.date')}</Text>
+              <Text style={styles.infoSubtitle}>{lotName} • {new Date().toLocaleDateString(t('common.dateLocale'))}</Text>
             </View>
             <View style={styles.iconCircle}>
-              <MaterialIcons name="assignment-turned-in" size={24} color={theme.colors.primary} />
+              <MaterialIcons name="assignment-turned-in" size={24} color="#000000" />
             </View>
           </View>
         </Card>
 
-        <Text style={styles.sectionTitle}>{t('movement.reason')}</Text>
+        <Text style={styles.sectionTitle}>{t('movement.details')}</Text>
 
         <Card style={styles.formCard}>
            <View style={styles.inputGroup}>
@@ -86,13 +86,13 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
                 onChangeText={setDeadCount}
                 keyboardType="numeric"
                 placeholder="0"
-                style={[styles.fieldInput, { fontSize: 20, color: theme.colors.danger, fontWeight: 'bold', textAlign: 'center' }]}
+                style={[styles.fieldInput, { fontSize: 22, color: theme.colors.danger, fontWeight: 'bold', textAlign: 'center' }]}
               />
            </View>
 
            <View style={styles.inputGroup}>
               <View style={styles.labelRow}>
-                <MaterialIcons name="medical-information" size={18} color={theme.colors.warning} />
+                <MaterialIcons name="medical-information" size={18} color="#E65100" />
                 <Text style={styles.label}>{t('movement.types.malade')}</Text>
               </View>
               <Input
@@ -100,7 +100,7 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
                 onChangeText={setSickCount}
                 keyboardType="numeric"
                 placeholder="0"
-                style={[styles.fieldInput, { fontSize: 20, color: theme.colors.warning, fontWeight: 'bold', textAlign: 'center' }]}
+                style={[styles.fieldInput, { fontSize: 22, color: '#E65100', fontWeight: 'bold', textAlign: 'center' }]}
               />
            </View>
 
@@ -121,9 +121,9 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
         </Card>
 
         <View style={styles.warningBox}>
-          <MaterialIcons name="warning-amber" size={20} color="#856404" />
+          <MaterialIcons name="warning-amber" size={24} color="#856404" />
           <Text style={styles.warningText}>
-            Toute mortalité anormale ({'>'}1%) doit être signalée immédiatement au vétérinaire conseil.
+            {t('movement.mortalityWarning')}
           </Text>
         </View>
 
@@ -166,7 +166,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.l,
-    backgroundColor: theme.colors.surface,
+    backgroundColor: theme.colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
   },
   infoRow: {
     flexDirection: 'row',
@@ -174,26 +176,30 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'space-between',
   },
   infoTexts: { flex: 1 },
-  infoTitle: { fontSize: 16, fontWeight: 'bold', color: theme.colors.text },
-  infoSubtitle: { fontSize: 13, color: theme.colors.textSecondary, marginTop: 2 },
+  infoTitle: { fontSize: 16, fontWeight: '900', color: '#000000', textTransform: 'uppercase' },
+  infoSubtitle: { fontSize: 13, color: '#000000', marginTop: 2, opacity: 0.7, fontWeight: '700' },
   iconCircle: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: theme.colors.background,
+    backgroundColor: 'rgba(0,0,0,0.05)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '900',
     color: theme.colors.text,
     marginBottom: theme.spacing.m,
+    textTransform: 'uppercase'
   },
   formCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.l,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface
   },
   inputGroup: { marginBottom: theme.spacing.m },
   labelRow: {
@@ -204,35 +210,40 @@ const createStyles = (theme: any) => StyleSheet.create({
   label: {
     fontSize: 13,
     color: theme.colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '900',
     marginLeft: 8,
+    textTransform: 'uppercase'
   },
   fieldInput: {
     marginBottom: 0,
-    backgroundColor: theme.colors.background + '40',
+    backgroundColor: theme.colors.background,
     borderRadius: theme.borderRadius.m,
+    borderWidth: 1,
+    borderColor: theme.colors.border
   },
   warningBox: {
     flexDirection: 'row',
-    backgroundColor: '#FFF3CD',
+    backgroundColor: '#FFF9C4',
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.l,
     alignItems: 'center',
     marginBottom: theme.spacing.xl,
     borderWidth: 1,
-    borderColor: '#FFEEBA',
+    borderColor: '#FBC02D',
   },
   warningText: {
     fontSize: 12,
-    color: '#856404',
+    color: '#000000',
     marginLeft: 10,
     flex: 1,
-    fontWeight: '500',
+    fontWeight: '700',
   },
   submitBtn: {
     height: 56,
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
     ...theme.shadows.medium,
   }
 });

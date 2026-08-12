@@ -1,13 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, Alert, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { useAuth } from '../context/AuthContext';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { cancelNotification } from '../utils/notifications';
+import { syncReminders } from '../utils/reminderSync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const RemindersScreen = ({ navigation }: any) => {
@@ -17,16 +18,18 @@ export const RemindersScreen = ({ navigation }: any) => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [reminders, setReminders] = useState<any[]>([]);
-  const [filter, setFilter] = useState('ALL'); // ALL, TODAY, WEEK, COMPLETED
+  const [filter, setFilter] = useState('ALL');
 
   const { width } = useWindowDimensions();
   const isTablet = width > 600;
   const numColumns = isTablet ? 2 : 1;
+  const styles = useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
 
   const fetchReminders = async () => {
     try {
-      const res = await apiClient.get('/reminders/');
+      const res = await repositoryProvider.api.get('/reminders/');
       setReminders(res.data);
+      await syncReminders(res.data);
     } catch (error) {
       console.error(error);
       Alert.alert(t('common.error'), t('reminders.loadError'));
@@ -49,42 +52,72 @@ export const RemindersScreen = ({ navigation }: any) => {
   };
 
   const handleToggleStatus = async (reminder: any) => {
+    const isRepetitive = reminder.repetition !== 'ONCE';
     const newStatus = reminder.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED';
+
     try {
-      await apiClient.patch(`/reminders/${reminder.id}/`, { status: newStatus });
+      if (newStatus === 'COMPLETED' && isRepetitive) {
+        Alert.alert(
+          t('reminders.repetitive.title') || "Rappel Répétitif",
+          t('reminders.repetitive.desc') || "Voulez-vous programmer la prochaine échéance ou terminer définitivement ce rappel ?",
+          [
+            {
+              text: t('reminders.repetitive.next') || "Prochaine échéance",
+              onPress: async () => {
+                const nextDate = new Date(reminder.date);
+                if (reminder.repetition === 'DAILY') nextDate.setDate(nextDate.getDate() + 1);
+                if (reminder.repetition === 'WEEKLY') nextDate.setDate(nextDate.getDate() + 7);
+                if (reminder.repetition === 'MONTHLY') nextDate.setMonth(nextDate.getMonth() + 1);
 
-      // If completed, cancel the notification
-      if (newStatus === 'COMPLETED') {
-        const notifId = await AsyncStorage.getItem(`notif_reminder_${reminder.id}`);
-        if (notifId) {
-          await cancelNotification(notifId);
-          await AsyncStorage.removeItem(`notif_reminder_${reminder.id}`);
+                await repositoryProvider.api.patch(`/reminders/${reminder.id}/`, {
+                  date: nextDate.toISOString().split('T')[0],
+                  status: 'PENDING'
+                });
+                fetchReminders();
+              }
+            },
+            {
+              text: t('reminders.repetitive.finishAll') || "Terminer tout",
+              style: "destructive",
+              onPress: async () => {
+                await repositoryProvider.api.patch(`/reminders/${reminder.id}/`, { status: 'COMPLETED' });
+                const notifId = await AsyncStorage.getItem(`notif_reminder_${reminder.id}`);
+                if (notifId) await cancelNotification(notifId);
+                fetchReminders();
+              }
+            }
+          ]
+        );
+      } else {
+        await repositoryProvider.api.patch(`/reminders/${reminder.id}/`, { status: newStatus });
+        if (newStatus === 'COMPLETED') {
+          const notifId = await AsyncStorage.getItem(`notif_reminder_${reminder.id}`);
+          if (notifId) {
+            await cancelNotification(notifId);
+            await AsyncStorage.removeItem(`notif_reminder_${reminder.id}`);
+          }
         }
+        fetchReminders();
       }
-
-      fetchReminders();
     } catch (error) {
-      Alert.alert(t('common.error'), t('common.error'));
+      Alert.alert(t('common.error'), "Erreur lors de la mise à jour");
     }
   };
 
   const handleDelete = (id: number) => {
-    Alert.alert(t('common.delete'), 'Voulez-vous supprimer ce rappel ?', [
+    Alert.alert(t('common.delete'), t('reminders.deleteConfirm') || 'Voulez-vous supprimer ce rappel ?', [
       { text: t('common.cancel'), style: 'cancel' },
       {
         text: t('common.delete'),
         style: 'destructive',
         onPress: async () => {
           try {
-            await apiClient.delete(`/reminders/${id}/`);
-
-            // Cancel notification if exists
+            await repositoryProvider.api.delete(`/reminders/${id}/`);
             const notifId = await AsyncStorage.getItem(`notif_reminder_${id}`);
             if (notifId) {
               await cancelNotification(notifId);
               await AsyncStorage.removeItem(`notif_reminder_${id}`);
             }
-
             fetchReminders();
           } catch (e) { Alert.alert(t('common.error'), t('common.error')); }
         }
@@ -115,76 +148,84 @@ export const RemindersScreen = ({ navigation }: any) => {
     today.setHours(0,0,0,0);
     const rDate = new Date(item.date);
     rDate.setHours(0,0,0,0);
-    const isOverdue = item.status === 'PENDING' && rDate < today;
+
+    const isOverdue = rDate < today && item.status === 'PENDING';
+
+    const getStatusInfo = () => {
+      if (item.status === 'COMPLETED') return { label: t('reminders.status.completed') || 'Terminé', color: '#4CAF50' };
+      if (item.status === 'CANCELLED') return { label: t('reminders.status.cancelled') || 'Annulé', color: '#9E9E9E' };
+      if (isOverdue) return { label: t('reminders.status.overdue') || 'En retard', color: '#FF5252' };
+      return { label: t('reminders.status.pending') || 'En attente', color: '#FFC107' };
+    };
+
+    const statusInfo = getStatusInfo();
 
     return (
       <View style={isTablet ? styles.tabletCardContainer : null}>
-        <Card style={[styles.reminderCard, isOverdue && { borderColor: theme.colors.danger, borderWidth: 1 }]}>
+        <Card style={[styles.reminderCard, isOverdue && { borderColor: '#FF5252', borderWidth: 0.8 }]}>
           <View style={styles.cardHeader}>
-              <View style={[styles.typeIcon, { backgroundColor: isDarkMode ? '#2C2C2C' : '#f0f0f0' }]}>
-             <MaterialIcons
-               name={item.status === 'COMPLETED' ? "check-circle" : "notifications-active"}
-               size={24}
-               color={item.status === 'COMPLETED' ? theme.colors.success : theme.colors.primary}
-             />
+            <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
+              <Text style={styles.statusBadgeText}>{statusInfo.label}</Text>
+            </View>
+            <View style={styles.headerInfo}>
+              <Text style={[styles.reminderTitle, item.status === 'COMPLETED' && styles.completedText, { color: theme.colors.text }]}>
+                {item.title}
+              </Text>
+              <Text style={[styles.reminderType, { color: theme.colors.textSecondary }]}>
+                {item.type}
+              </Text>
+            </View>
           </View>
-          <View style={styles.headerInfo}>
-             <Text style={[styles.reminderTitle, { color: theme.colors.text }, item.status === 'COMPLETED' && styles.completedText]}>{item.title}</Text>
-             <Text style={[styles.reminderType, { color: theme.colors.textSecondary }]}>{item.type}</Text>
-          </View>
-          {userRole === 'PROPRIETAIRE' && (
-            <TouchableOpacity onPress={() => handleToggleStatus(item)}>
-              <MaterialIcons
-                name={item.status === 'COMPLETED' ? "undo" : "check-circle"}
-                size={32}
-                color={item.status === 'COMPLETED' ? theme.colors.textSecondary : theme.colors.success}
-              />
-            </TouchableOpacity>
-          )}
-        </View>
 
-        <View style={[styles.detailsRow, { borderBottomColor: theme.colors.border + '40' }]}>
-           <View style={styles.detailItem}>
-              <MaterialIcons name="event" size={16} color={theme.colors.textSecondary} />
-              <Text style={[styles.detailText, { color: theme.colors.textSecondary }]}>{new Date(item.date).toLocaleDateString(language === 'fr' ? 'fr-FR' : 'en-US')}</Text>
-           </View>
-           {item.time && (
+          <View style={styles.detailsRow}>
              <View style={styles.detailItem}>
-                <MaterialIcons name="access-time" size={16} color={theme.colors.textSecondary} />
-                <Text style={[styles.detailText, { color: theme.colors.textSecondary }]}>{item.time.substring(0,5)}</Text>
+                <MaterialIcons name="event" size={16} color={theme.colors.primary} />
+                <Text style={[styles.detailText, { color: theme.colors.textSecondary }]}>{item.date}</Text>
              </View>
-           )}
-        </View>
-
-        <View style={styles.locationRow}>
-           <MaterialIcons name="business" size={16} color={theme.colors.primary} />
-           <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>{item.farm_name || `Ferme #${item.farm}`}</Text>
-           {item.lot && (
-             <>
-               <MaterialCommunityIcons name="layers" size={16} color={theme.colors.primary} style={{marginLeft: 10}} />
-               <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>{item.lot_name || `Lot #${item.lot}`}</Text>
-             </>
-           )}
-        </View>
-
-        {userRole === 'PROPRIETAIRE' && (
-          <View style={[styles.cardActions, { borderTopColor: theme.colors.border + '40' }]}>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('ActionReminder', { reminderId: item.id })}>
-                <MaterialIcons name="edit" size={20} color={theme.colors.primary} />
-                <Text style={[styles.actionText, { color: theme.colors.textSecondary }]}>{t('common.edit')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item.id)}>
-                <MaterialIcons name="delete" size={20} color={theme.colors.danger} />
-                <Text style={[styles.actionText, {color: theme.colors.danger}]}>{t('common.delete')}</Text>
-            </TouchableOpacity>
+             {item.time && (
+               <View style={styles.detailItem}>
+                  <MaterialIcons name="access-time" size={16} color={theme.colors.primary} />
+                  <Text style={[styles.detailText, { color: theme.colors.textSecondary }]}>{item.time.substring(0,5)}</Text>
+               </View>
+             )}
           </View>
-        )}
-      </Card>
-    </View>
+
+          <View style={styles.locationRow}>
+             <MaterialIcons name="business" size={16} color={theme.colors.primary} />
+             <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>{item.farm_name || `Ferme #${item.farm}`}</Text>
+             {item.lot && (
+               <>
+                 <MaterialCommunityIcons name="layers" size={16} color={theme.colors.primary} style={{marginLeft: 10}} />
+                 <Text style={[styles.locationText, { color: theme.colors.textSecondary }]}>{item.lot_name || `Lot #${item.lot}`}</Text>
+               </>
+             )}
+          </View>
+
+          <View style={[styles.cardActions, { borderTopColor: theme.colors.border + '40' }]}>
+            {item.status === 'PENDING' && userRole === 'PROPRIETAIRE' && (
+              <TouchableOpacity style={styles.doneBtn} onPress={() => handleToggleStatus(item)}>
+                <MaterialIcons name="check-circle" size={20} color={theme.colors.primary} />
+                <Text style={[styles.actionText, { color: theme.colors.primary }]}>{t('common.finish') || 'Terminer'}</Text>
+              </TouchableOpacity>
+            )}
+
+            {userRole === 'PROPRIETAIRE' && (
+              <>
+                <TouchableOpacity style={styles.actionBtn} onPress={() => navigation.navigate('ActionReminder', { reminderId: item.id })}>
+                    <MaterialIcons name="edit" size={20} color={theme.colors.primary} />
+                    <Text style={[styles.actionText, { color: theme.colors.textSecondary }]}>{t('common.edit')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={() => handleDelete(item.id)}>
+                    <MaterialIcons name="delete" size={20} color={theme.colors.danger} />
+                    <Text style={[styles.actionText, {color: theme.colors.danger}]}>{t('common.delete')}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </Card>
+      </View>
     );
   };
-
-  const styles = createStyles(theme, isTablet);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -203,12 +244,12 @@ export const RemindersScreen = ({ navigation }: any) => {
       </View>
 
       <View style={styles.filterRow}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={isTablet ? { alignSelf: 'center' } : null}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {[
-            { label: language === 'fr' ? 'Tous' : 'All', value: 'ALL' },
-            { label: language === 'fr' ? "Aujourd'hui" : 'Today', value: 'TODAY' },
-            { label: language === 'fr' ? 'Cette semaine' : 'This week', value: 'WEEK' },
-            { label: language === 'fr' ? 'Terminés' : 'Completed', value: 'COMPLETED' },
+            { label: t('common.all'), value: 'ALL' },
+            { label: t('common.today'), value: 'TODAY' },
+            { label: t('common.thisWeek'), value: 'WEEK' },
+            { label: t('reminders.status.completed'), value: 'COMPLETED' },
           ].map(f => (
             <TouchableOpacity
               key={f.value}
@@ -247,52 +288,32 @@ export const RemindersScreen = ({ navigation }: any) => {
 
 const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   container: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: 'center',
-    width: '100%'
-  },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16 },
   menuButton: { padding: 4 },
   title: { fontSize: 20, fontWeight: 'bold' },
   addButton: { padding: 4 },
-  filterRow: {
-    paddingHorizontal: 16,
-    marginBottom: 10,
-    width: '100%'
-  },
+  filterRow: { paddingHorizontal: 16, marginBottom: 10 },
   filterChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginRight: 8 },
   filterChipText: { fontSize: 13 },
-  list: {
-    padding: 16,
-    paddingBottom: 40,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: 'center',
-    width: '100%'
-  },
-  columnWrapper: {
-    justifyContent: 'space-between',
-  },
-  tabletCardContainer: {
-    flex: 0.49,
-  },
-  reminderCard: { padding: 16, marginBottom: 12, borderRadius: theme.borderRadius.xl },
-  cardHeader: { flexDirection: 'row', alignItems: 'center' },
-  typeIcon: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
-  headerInfo: { flex: 1 },
+  list: { padding: 16, paddingBottom: 40 },
+  columnWrapper: { justifyContent: 'space-between' },
+  tabletCardContainer: { flex: 0.49 },
+  reminderCard: { padding: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginBottom: 8, alignSelf: 'flex-start' },
+  statusBadgeText: { fontSize: 10, fontWeight: 'bold', color: '#000' },
+  headerInfo: { flex: 1, marginLeft: 0 },
   reminderTitle: { fontSize: 16, fontWeight: 'bold' },
   completedText: { textDecorationLine: 'line-through', opacity: 0.5 },
   reminderType: { fontSize: 12, marginTop: 2 },
-  detailsRow: { flexDirection: 'row', marginTop: 12, borderBottomWidth: 1, paddingBottom: 8 },
+  detailsRow: { flexDirection: 'row', marginTop: 12, borderBottomWidth: 0.8, borderBottomColor: theme.colors.border, paddingBottom: 8 },
   detailItem: { flexDirection: 'row', alignItems: 'center', marginRight: 20 },
   detailText: { fontSize: 13, marginLeft: 4 },
   locationRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
   locationText: { fontSize: 12, marginLeft: 4 },
-  cardActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTopWidth: 1 },
-  actionBtn: { flexDirection: 'row', alignItems: 'center', marginLeft: 20 },
+  cardActions: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12, paddingTop: 10, borderTopWidth: 0.8, borderTopColor: theme.colors.border },
+  actionBtn: { flexDirection: 'row', alignItems: 'center', marginLeft: 15 },
+  doneBtn: { flexDirection: 'row', alignItems: 'center', marginRight: 'auto' },
   actionText: { fontSize: 13, fontWeight: 'bold', marginLeft: 4 },
   emptyContainer: { alignItems: 'center', marginTop: 100 },
   emptyText: { marginTop: 10, fontSize: 16 }

@@ -2,12 +2,17 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Linking, Alert, useWindowDimensions, Image } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
+import { formatCurrency } from '../utils/formatters';
+import { useAuth } from '../context/AuthContext';
+import { EmptyState } from '../components/EmptyState';
 
 export const EmployeesScreen = ({ navigation }: any) => {
   const { t } = useTranslation();
+  const { userRole } = useAuth();
+  const isOwner = userRole === 'PROPRIETAIRE';
   const [employees, setEmployees] = useState([]);
   const [farms, setFarms] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -29,24 +34,25 @@ export const EmployeesScreen = ({ navigation }: any) => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const today = new Date().toISOString().split('T')[0];
-      const [empRes, farmsRes, attendanceRes] = await Promise.all([
-        apiClient.get('/employees/'),
-        apiClient.get('/farms/'),
-        apiClient.get(`/attendances/?date=${today}`)
+      // Récupérer employés + fermes en parallèle
+      const [empRes, farmsRes] = await Promise.all([
+        repositoryProvider.api.get('/employees/'),
+        repositoryProvider.api.get('/farms/'),
       ]);
 
       const empData = empRes.data;
       setEmployees(empData);
       setFarms(farmsRes.data);
 
-      // Calcul des stats
-      const total = empData.length;
-      const active = empData.filter((e: any) => e.status === 'ACTIF').length;
-      const payroll = empData.reduce((sum: number, e: any) => sum + (parseFloat(e.salary) || 0), 0);
-      const presentToday = attendanceRes.data.filter((a: any) => a.status === 'PRESENT').length;
-
-      setStats({ total, active, payroll, presentToday });
+      // Stats dynamiques via endpoint dédié (données réelles de la base)
+      const statsRes = await repositoryProvider.api.get('/employees/stats/');
+      const s = statsRes.data;
+      setStats({
+        total: s.total,
+        active: s.active,
+        payroll: s.payroll_mass,     // SUM salaire des employés ACTIFS uniquement
+        presentToday: s.present_today,
+      });
     } catch (error) {
       console.log('Erreur fetch employees:', error);
     } finally {
@@ -69,14 +75,14 @@ export const EmployeesScreen = ({ navigation }: any) => {
 
   const getFarmName = (farmId: number) => {
     const farm = farms.find(f => f.id === farmId);
-    return farm ? farm.name : 'Inconnue';
+    return farm ? farm.name : t('employees.unknownFarm');
   };
 
   const handleCall = (phone: string) => {
     if (phone) {
       Linking.openURL(`tel:${phone}`);
     } else {
-      Alert.alert('Info', 'Numéro de téléphone non disponible');
+      Alert.alert(t('common.info'), t('employees.phoneUnavailable'));
     }
   };
 
@@ -84,7 +90,7 @@ export const EmployeesScreen = ({ navigation }: any) => {
     const name = item.user_name || `Employé #${item.user}`;
 
     const profileImageUrl = item.user_image
-      ? (item.user_image.startsWith('http') ? item.user_image : `${apiClient.defaults.baseURL.replace('/api', '')}${item.user_image}`)
+      ? (item.user_image.startsWith('http') ? item.user_image : `${(repositoryProvider.api.defaults.baseURL || '').replace('/api', '')}${item.user_image}`)
       : null;
 
     return (
@@ -101,7 +107,7 @@ export const EmployeesScreen = ({ navigation }: any) => {
             <View style={styles.employeeInfoMain}>
               <Text style={styles.employeeName} numberOfLines={1}>{name}</Text>
               <View style={styles.farmRow}>
-                <MaterialIcons name="agriculture" size={14} color={theme.colors.textSecondary} />
+                <MaterialIcons name="business" size={14} color={theme.colors.textSecondary} />
                 <Text style={styles.farmName} numberOfLines={1}>{getFarmName(item.farm)}</Text>
               </View>
             </View>
@@ -113,9 +119,20 @@ export const EmployeesScreen = ({ navigation }: any) => {
             </TouchableOpacity>
           </View>
           <View style={styles.employeeFooter}>
-            <Text style={styles.hiredDate} numberOfLines={1}>Poste: {item.position || 'Agent'}</Text>
+            <View style={styles.salaryRow}>
+              <Text style={styles.salaryLabel}>{t('employees.salary')}:</Text>
+              <Text style={styles.salaryValue}>{formatCurrency(item.salary)}</Text>
+              {item.bonus_total > 0 && (
+                <>
+                  <Text style={styles.salaryLabel}> {t('employees.bonus')}:</Text>
+                  <Text style={[styles.salaryValue, { color: theme.colors.success }]}>
+                    +{formatCurrency(item.bonus_total)}
+                  </Text>
+                </>
+              )}
+            </View>
             <TouchableOpacity onPress={() => navigation.navigate('EmployeeDetail', { employeeId: item.id, farms })}>
-               <Text style={styles.detailsLink}>Détails</Text>
+               <Text style={styles.detailsLink}>{t('employees.details')}</Text>
             </TouchableOpacity>
           </View>
         </Card>
@@ -130,51 +147,57 @@ export const EmployeesScreen = ({ navigation }: any) => {
           <Text style={styles.title}>{t('farms.employees')}</Text>
           <Text style={styles.subtitle}>{employees.length} {t('farms.employees').toLowerCase()} actifs</Text>
         </View>
+      {isOwner && (
         <TouchableOpacity
           style={styles.addButton} 
           onPress={() => navigation.navigate('CreateEmployee', { farms })}
         >
           <MaterialIcons name="person-add" size={24} color={theme.colors.text} />
         </TouchableOpacity>
+      )}
       </View>
 
-      <View style={styles.statsContainer}>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{stats.total}</Text>
-          <Text style={styles.statLabel}>Employés</Text>
+      {isOwner && (
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.total}</Text>
+            <Text style={styles.statLabel}>{t('employees.title')}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={[styles.statValue, { color: theme.colors.success }]}>{stats.presentToday}</Text>
+            <Text style={styles.statLabel}>{t('employees.presentToday')}</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={[styles.statValue, { color: theme.colors.primary }]}>
+              {formatCurrency(stats.payroll)}
+            </Text>
+            <Text style={styles.statLabel}>{t('employees.payrollMass')}</Text>
+          </View>
         </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statValue, { color: theme.colors.success }]}>{stats.presentToday}</Text>
-          <Text style={styles.statLabel}>Présents (J)</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={[styles.statValue, { color: theme.colors.primary }]}>
-            {(stats.payroll / 1000000).toFixed(1)}M
-          </Text>
-          <Text style={styles.statLabel}>Masse Sal.</Text>
-        </View>
-      </View>
+      )}
 
       <View style={styles.quickActions}>
         <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Attendance')}>
-          <View style={[styles.actionIcon, { backgroundColor: '#E3F2FD' }]}>
-            <MaterialIcons name="event-available" size={26} color="#1976D2" />
+          <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+            <MaterialIcons name="event-available" size={26} color={theme.colors.primary} />
           </View>
-          <Text style={styles.actionLabel}>Pointage</Text>
+          <Text style={styles.actionLabel}>{t('employees.attendance')}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Payroll')}>
-          <View style={[styles.actionIcon, { backgroundColor: '#F3E5F5' }]}>
-            <MaterialIcons name="payments" size={26} color="#7B1FA2" />
-          </View>
-          <Text style={styles.actionLabel}>Paie</Text>
-        </TouchableOpacity>
+        {isOwner && (
+          <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Payroll')}>
+            <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+              <MaterialIcons name="payments" size={26} color={theme.colors.primary} />
+            </View>
+            <Text style={styles.actionLabel}>{t('employees.payrollLabel')}</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Tasks')}>
-          <View style={[styles.actionIcon, { backgroundColor: '#E8F5E9' }]}>
-            <MaterialIcons name="assignment" size={26} color="#2E7D32" />
+          <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+            <MaterialIcons name="assignment" size={26} color={theme.colors.primary} />
           </View>
-          <Text style={styles.actionLabel}>Tâches</Text>
+          <Text style={styles.actionLabel}>{t('employees.tasksLabel')}</Text>
         </TouchableOpacity>
       </View>
       
@@ -191,7 +214,10 @@ export const EmployeesScreen = ({ navigation }: any) => {
           columnWrapperStyle={isTablet ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
-            <Text style={styles.emptyText}>{t('common.noData')}</Text>
+            <EmptyState
+              icon="account-group-outline"
+              title={t('common.noData')}
+            />
           }
         />
       )}
@@ -234,8 +260,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 4,
     ...theme.shadows.light,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   statValue: {
     fontSize: 18,
@@ -280,8 +306,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     marginBottom: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   employeeContent: {
     flexDirection: 'row',
@@ -329,8 +355,24 @@ const createStyles = (theme: any) => StyleSheet.create({
     alignItems: 'center',
     marginTop: theme.spacing.m,
     paddingTop: theme.spacing.m,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border + '40',
+    borderTopWidth: 0.8,
+    borderTopColor: theme.colors.border,
+  },
+  salaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  salaryLabel: {
+    fontSize: 11,
+    color: theme.colors.textSecondary,
+    marginRight: 4,
+  },
+  salaryValue: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: theme.colors.text,
+    marginRight: 8,
   },
   hiredDate: {
     fontSize: 11,

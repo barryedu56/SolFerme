@@ -2,28 +2,35 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, useWindowDimensions } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { useTranslation } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { EmptyState } from '../components/EmptyState';
+import { useAutoRefreshData } from '../hooks/useDataChange';
 
 export const FarmsScreen = ({ navigation }: any) => {
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const { userRole } = useAuth();
   const { theme } = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const { width } = useWindowDimensions();
   const isTablet = width > 600;
   const numColumns = isTablet ? 2 : 1;
 
+  const [includeArchived, setIncludeArchived] = useState(false);
+
   const fetchFarms = async () => {
     setLoading(true);
     try {
-      const role = await AsyncStorage.getItem('user_role');
-      setUserRole(role);
-      const response = await apiClient.get('/farms/');
+      const response = await repositoryProvider.api.get('/farms/', {
+        params: { status: includeArchived ? 'ARCHIVE' : 'ACTIF' }
+      });
       setFarms(response.data);
     } catch (error) {
       console.log('Erreur fetch farms:', error);
@@ -33,12 +40,11 @@ export const FarmsScreen = ({ navigation }: any) => {
     }
   };
 
+  useAutoRefreshData(['farms'], fetchFarms, 150);
+
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchFarms();
-    });
-    return unsubscribe;
-  }, [navigation]);
+    fetchFarms();
+  }, [includeArchived]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -47,20 +53,31 @@ export const FarmsScreen = ({ navigation }: any) => {
 
   const renderItem = ({ item }: { item: any }) => (
     <View style={isTablet ? styles.tabletCardContainer : null}>
-      <Card style={styles.farmCard}>
+      <Card style={[styles.farmCard, item.status === 'ARCHIVE' && styles.archivedCard]}>
         <TouchableOpacity
           onPress={() => navigation.navigate('FarmDetail', { farmId: item.id, farmName: item.name })}
           activeOpacity={0.7}
           style={styles.cardHeader}
         >
           <View style={styles.iconContainer}>
-            <MaterialCommunityIcons name="egg" size={28} color={theme.colors.primary} />
+            <MaterialCommunityIcons
+              name={item.status === 'ARCHIVE' ? "archive" : "egg"}
+              size={28}
+              color={item.status === 'ARCHIVE' ? theme.colors.textSecondary : theme.colors.primary}
+            />
           </View>
           <View style={styles.cardInfo}>
-            <Text style={styles.farmName} numberOfLines={1}>{item.name}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={styles.farmName} numberOfLines={1}>{item.name}</Text>
+              {item.status === 'ARCHIVE' && (
+                <View style={styles.archiveBadge}>
+                  <Text style={styles.archiveBadgeText}>{t('profile.inactive')}</Text>
+                </View>
+              )}
+            </View>
             <View style={styles.locationRow}>
               <MaterialIcons name="location-on" size={14} color={theme.colors.textSecondary} />
-              <Text style={styles.farmLocation} numberOfLines={1}>{item.location || 'Localisation non définie'}</Text>
+              <Text style={styles.farmLocation} numberOfLines={1}>{item.location || t('common.noData')}</Text>
             </View>
           </View>
 
@@ -82,20 +99,34 @@ export const FarmsScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.title}>{userRole === 'EMPLOYE' ? 'Ma Ferme' : 'Mes Fermes'}</Text>
-          <Text style={styles.subtitle}>
-            {userRole === 'EMPLOYE' ? 'Votre exploitation affectée' : 'Gérez vos exploitations'}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.title}>{userRole === 'EMPLOYE' ? t('profile.myFarm') : t('farms.all')}</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {userRole === 'EMPLOYE' ? t('settings.guides.employee.lots.content') : t('farms.illustrationText')}
           </Text>
         </View>
-        {userRole !== 'EMPLOYE' && (
-          <TouchableOpacity
-            style={styles.addCircle}
-            onPress={() => navigation.navigate('CreateFarm')}
-          >
-            <MaterialIcons name="add" size={28} color={theme.colors.text} />
-          </TouchableOpacity>
-        )}
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          {userRole !== 'EMPLOYE' && (
+            <TouchableOpacity
+              style={[styles.filterBtn, includeArchived && styles.filterBtnActive]}
+              onPress={() => setIncludeArchived(!includeArchived)}
+            >
+              <MaterialIcons
+                name="archive"
+                size={22}
+                color={includeArchived ? theme.colors.surface : theme.colors.textSecondary}
+              />
+            </TouchableOpacity>
+          )}
+          {userRole !== 'EMPLOYE' && (
+            <TouchableOpacity
+              style={styles.addCircle}
+              onPress={() => navigation.navigate('CreateFarm')}
+            >
+              <MaterialIcons name="add" size={28} color="#000000" />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
       
       {loading && !refreshing ? (
@@ -113,14 +144,11 @@ export const FarmsScreen = ({ navigation }: any) => {
           columnWrapperStyle={isTablet ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>Aucune ferme trouvée.</Text>
-              {userRole !== 'EMPLOYE' && (
-                <TouchableOpacity onPress={() => navigation.navigate('CreateFarm')}>
-                  <Text style={styles.emptyLink}>Commencez par en créer une !</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+            <EmptyState
+              icon="office-building"
+              title={t('common.noData')}
+              description={userRole !== 'EMPLOYE' ? t('farms.addFarm') : undefined}
+            />
           }
         />
       )}
@@ -174,8 +202,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginBottom: theme.spacing.m,
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -212,6 +240,36 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: 8,
     backgroundColor: theme.colors.background,
     borderRadius: 10,
+  },
+  filterBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: theme.colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: theme.spacing.s,
+    ...theme.shadows.light,
+  },
+  filterBtnActive: {
+    backgroundColor: theme.colors.primary,
+  },
+  archivedCard: {
+    opacity: 0.6,
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.border,
+  },
+  archiveBadge: {
+    backgroundColor: theme.colors.textSecondary + '20',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginLeft: 8,
+  },
+  archiveBadgeText: {
+    fontSize: 10,
+    color: theme.colors.textSecondary,
+    fontWeight: 'bold',
   },
   center: {
     flex: 1,

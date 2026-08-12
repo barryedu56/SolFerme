@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, TextInput, Switch, useWindowDimensions, ActivityIndicator, Image, Platform } from 'react-native';
+import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
@@ -44,6 +45,9 @@ export const ProfileScreen = ({ navigation, route }: any) => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showOldPassword, setShowOldPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   useEffect(() => {
     loadUser();
@@ -58,7 +62,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
   const loadUser = async () => {
     try {
       setLoading(true);
-      const res = await apiClient.get('/auth/user/');
+      const res = await repositoryProvider.api.get('/auth/user/');
       setUser(res.data);
       setEditData({
         name: res.data.name || '',
@@ -77,8 +81,8 @@ export const ProfileScreen = ({ navigation, route }: any) => {
       if (res.data.role === 'PROPRIETAIRE') {
         try {
           const [farmsRes, employeesRes] = await Promise.all([
-            apiClient.get('/farms/'),
-            apiClient.get('/employees/')
+            repositoryProvider.api.get('/farms/'),
+            repositoryProvider.api.get('/employees/')
           ]);
           const fCount = Array.isArray(farmsRes.data) ? farmsRes.data.length : 0;
           const eCount = Array.isArray(employeesRes.data) ? employeesRes.data.length : 0;
@@ -121,7 +125,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('profile.cameraPermissionError', { defaultValue: 'Désolé, nous avons besoin des permissions pour accéder à vos photos.' }));
+      Alert.alert(t('common.error'), t('profile.cameraPermissionError'));
       return;
     }
 
@@ -154,7 +158,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
         type: type,
       });
 
-      const res = await apiClient.patch('/auth/user/', formData, {
+      const res = await repositoryProvider.api.patch('/auth/user/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       setUser(res.data);
@@ -162,30 +166,63 @@ export const ProfileScreen = ({ navigation, route }: any) => {
         setProfileImage(res.data.profile_image);
       }
       await updateUser(); // Mettre à jour le contexte global
-      Alert.alert(t('common.success'), t('profile.updatePhotoSuccess'));
+      toast.success(t('common.success'), t('profile.updatePhotoSuccess'));
     } catch (e) {
       console.error('Upload error:', e);
-      Alert.alert(t('common.error'), t('profile.updatePhotoError'));
+      toast.error(t('common.error'), t('profile.updatePhotoError'));
     } finally {
       setUpdating(false);
     }
   };
 
+  const handleRemoveImage = async () => {
+    try {
+      setUpdating(true);
+      const res = await repositoryProvider.api.patch('/auth/user/', { profile_image: null });
+      setUser(res.data);
+      setProfileImage(null);
+      await updateUser();
+      toast.success(t('common.success'), t('profile.removePhotoSuccess'));
+    } catch (e) {
+      console.error('Remove error:', e);
+      toast.error(t('common.error'), t('profile.removePhotoError'));
+    } finally {
+      setUpdating(false);
+    }
+  };
+
+  const showImageOptions = () => {
+    if (!profileImage) {
+      pickImage();
+      return;
+    }
+
+    Alert.alert(
+      t('profile.photoTitle'),
+      t('profile.photoOption'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('profile.removePhoto'), onPress: handleRemoveImage, style: 'destructive' },
+        { text: t('profile.changePhoto'), onPress: pickImage }
+      ]
+    );
+  };
+
   const handleUpdateProfile = async () => {
     if (!editData.name || !editData.email) {
-      Alert.alert(t('common.error'), t('profile.fillRequired', { defaultValue: 'Le nom et l\'email sont obligatoires.' }));
+      toast.error(t('common.error'), t('profile.fillRequired'));
       return;
     }
 
     setUpdating(true);
     try {
-      const res = await apiClient.patch('/auth/user/', editData);
+      const res = await repositoryProvider.api.patch('/auth/user/', editData);
       setUser(res.data);
       setIsEditing(false);
-      Alert.alert(t('common.success'), t('profile.saveChangesSuccess', { defaultValue: 'Profil mis à jour avec succès.' }));
+      toast.success(t('common.success'), t('profile.saveChangesSuccess'));
       await AsyncStorage.setItem('user_data', JSON.stringify(res.data));
     } catch (e) {
-      Alert.alert(t('common.error'), t('profile.updateError', { defaultValue: 'Échec de la mise à jour.' }));
+      toast.error(t('common.error'), t('profile.updateError'));
     } finally {
       setUpdating(false);
     }
@@ -193,21 +230,21 @@ export const ProfileScreen = ({ navigation, route }: any) => {
 
   const handleChangePassword = async () => {
     if (!oldPassword || !newPassword || !confirmPassword) {
-      Alert.alert(t('common.error'), t('profile.fillAllFields', { defaultValue: 'Veuillez remplir tous les champs.' }));
+      toast.error(t('common.error'), t('profile.fillAllFields'));
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert(t('common.error'), t('profile.passwordMismatch', { defaultValue: 'Les mots de passe ne correspondent pas.' }));
+      toast.error(t('common.error'), t('profile.passwordMismatch'));
       return;
     }
 
     setUpdating(true);
     try {
-      await apiClient.post('/auth/change-password/', {
+      await repositoryProvider.api.post('/auth/change-password/', {
         old_password: oldPassword,
         new_password: newPassword
       });
-      Alert.alert(t('common.success'), t('profile.passwordSuccess'));
+      toast.success(t('common.success'), t('profile.passwordSuccess'));
       setShowPasswordModal(false);
       setOldPassword('');
       setNewPassword('');
@@ -304,7 +341,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
                   <Text style={[styles.avatarInitial, { color: theme.colors.primary }]}>{user?.name?.[0]?.toUpperCase() || 'U'}</Text>
                 )}
               </View>
-              <TouchableOpacity style={styles.cameraBtn} onPress={pickImage}>
+              <TouchableOpacity style={styles.cameraBtn} onPress={showImageOptions}>
                 <MaterialIcons name="photo-camera" size={16} color="#FFF" />
               </TouchableOpacity>
             </View>
@@ -353,6 +390,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
                     style={[styles.input, { color: theme.colors.text }]}
                     placeholder={t('profile.phone')}
                     keyboardType="phone-pad"
+                    maxLength={9}
                     placeholderTextColor={theme.colors.textSecondary}
                     value={editData.phone}
                     onChangeText={(v) => setEditData({...editData, phone: v})}
@@ -513,30 +551,49 @@ export const ProfileScreen = ({ navigation, route }: any) => {
         <View style={styles.modalOverlay}>
           <Card style={[styles.modalCard, { backgroundColor: theme.colors.surface }]}>
             <Text style={[styles.modalTitle, { color: theme.colors.text }]}>{t('profile.security')}</Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}
-              placeholder={t('profile.oldPassword')}
-              placeholderTextColor={theme.colors.textSecondary}
-              secureTextEntry
-              value={oldPassword}
-              onChangeText={setOldPassword}
-            />
-            <TextInput
-              style={[styles.input, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}
-              placeholder={t('profile.newPassword')}
-              placeholderTextColor={theme.colors.textSecondary}
-              secureTextEntry
-              value={newPassword}
-              onChangeText={setNewPassword}
-            />
-            <TextInput
-              style={[styles.input, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, color: theme.colors.text, borderColor: theme.colors.border }]}
-              placeholder={t('profile.confirmPassword')}
-              placeholderTextColor={theme.colors.textSecondary}
-              secureTextEntry
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-            />
+
+            <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, borderColor: theme.colors.border }]}>
+              <TextInput
+                style={[styles.input, { color: theme.colors.text }]}
+                placeholder={t('profile.oldPassword')}
+                placeholderTextColor={theme.colors.textSecondary}
+                secureTextEntry={!showOldPassword}
+                value={oldPassword}
+                onChangeText={setOldPassword}
+              />
+              <TouchableOpacity onPress={() => setShowOldPassword(!showOldPassword)}>
+                <MaterialIcons name={showOldPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, borderColor: theme.colors.border }]}>
+              <TextInput
+                style={[styles.input, { color: theme.colors.text }]}
+                placeholder={t('profile.newPassword')}
+                placeholderTextColor={theme.colors.textSecondary}
+                secureTextEntry={!showNewPassword}
+                value={newPassword}
+                onChangeText={setNewPassword}
+              />
+              <TouchableOpacity onPress={() => setShowNewPassword(!showNewPassword)}>
+                <MaterialIcons name={showNewPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.inputContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, borderColor: theme.colors.border }]}>
+              <TextInput
+                style={[styles.input, { color: theme.colors.text }]}
+                placeholder={t('profile.confirmPassword')}
+                placeholderTextColor={theme.colors.textSecondary}
+                secureTextEntry={!showConfirmPassword}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+              <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)}>
+                <MaterialIcons name={showConfirmPassword ? "visibility-off" : "visibility"} size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.modalActions}>
               <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowPasswordModal(false)}>
                 <Text style={{ color: theme.colors.textSecondary }}>{t('common.cancel')}</Text>
@@ -648,9 +705,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontWeight: '600',
   },
   dividerVertical: {
-    width: 1,
+    width: 0.8,
     height: 40,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: theme.colors.border,
   },
   compactSettingsRow: {
     flexDirection: 'row',
@@ -678,9 +735,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     letterSpacing: 0.5,
   },
   dividerVerticalSmall: {
-    width: 1,
+    width: 0.8,
     height: 20,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: theme.colors.border,
   },
   logoutButton: {
     backgroundColor: theme.colors.danger,
@@ -715,8 +772,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginTop: 4,
   },
   divider: {
-    height: 1,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    height: 0.8,
+    backgroundColor: theme.colors.border,
   },
   modalOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -743,13 +800,13 @@ const createStyles = (theme: any) => StyleSheet.create({
   settingValue: { fontSize: 12, marginTop: 2 },
   sectionCard: { padding: 15, borderRadius: 16, marginBottom: 20 },
   scrollContent: { paddingBottom: 20 },
-  avatarWrapper: { position: 'relative', width: 100, height: 100, borderRadius: 50, borderWidth: 4, padding: 2 },
+  avatarWrapper: { position: 'relative', width: 100, height: 100, borderRadius: 50, borderWidth: 0.8, padding: 2 },
   avatar: { width: '100%', height: '100%', borderRadius: 50, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   avatarImage: { width: '100%', height: '100%' },
   avatarInitial: { fontSize: 32, fontWeight: 'bold' },
-  cameraBtn: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#000', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FFF' },
+  cameraBtn: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#000', width: 32, height: 32, borderRadius: 16, justifyContent: 'center', alignItems: 'center', borderWidth: 0.8, borderColor: '#FFF' },
   editForm: { marginTop: 10 },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, height: 50, marginBottom: 15 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', borderWidth: 0.8, borderRadius: 12, paddingHorizontal: 12, height: 50, marginBottom: 15 },
   inputIcon: { marginRight: 10 },
   input: { flex: 1, fontSize: 14 },
   footer: { alignItems: 'center', marginTop: 30, paddingBottom: 20 },

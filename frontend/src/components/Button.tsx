@@ -1,20 +1,28 @@
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, TouchableOpacityProps, ActivityIndicator } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, TouchableOpacityProps, ActivityIndicator, View, TextStyle, StyleProp } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 
 interface ButtonProps extends TouchableOpacityProps {
   title: string;
   loading?: boolean;
-  variant?: 'primary' | 'secondary' | 'danger';
+  variant?: 'primary' | 'secondary' | 'danger' | 'success' | 'warning' | 'outline';
+  textColor?: string;
+  textStyle?: StyleProp<TextStyle>;
+  icon?: React.ReactNode;
+  leftIcon?: React.ReactNode;
 }
 
-export const Button: React.FC<ButtonProps> = ({ 
-  title, 
-  loading = false, 
-  variant = 'primary', 
-  style, 
+export const Button: React.FC<ButtonProps> = ({
+  title,
+  loading = false,
+  variant = 'primary',
+  style,
   disabled,
-  ...props 
+  textColor: customTextColor,
+  textStyle,
+  icon,
+  leftIcon,
+  ...props
 }) => {
   const { theme } = useTheme();
 
@@ -24,15 +32,31 @@ export const Button: React.FC<ButtonProps> = ({
       case 'primary': return theme.colors.primary;
       case 'secondary': return theme.colors.surface;
       case 'danger': return theme.colors.danger;
+      case 'success': return theme.colors.success || '#4CAF50';
+      case 'warning': return theme.colors.warning || '#FF9800';
+      case 'outline': return 'transparent';
       default: return theme.colors.primary;
     }
   };
 
+  const getBorderColor = () => {
+    if (disabled) return theme.colors.border;
+    if (variant === 'outline') return theme.colors.primary;
+    return theme.colors.border;
+  };
+
   const getTextColor = () => {
+    if (customTextColor) return customTextColor;
     if (disabled) return theme.colors.textSecondary;
     switch (variant) {
       case 'secondary': return theme.colors.text;
-      case 'danger': return '#FFFFFF';
+      case 'danger':
+      case 'success':
+      case 'outline':
+        return theme.colors.primary;
+      case 'warning':
+        return '#000000';
+      case 'primary': return '#000000';
       default: return theme.colors.text;
     }
   };
@@ -40,12 +64,12 @@ export const Button: React.FC<ButtonProps> = ({
   return (
     <TouchableOpacity
       style={[
-        styles.button, 
+        styles.button,
         {
           backgroundColor: getBackgroundColor(),
           borderRadius: theme.borderRadius.xl,
-          borderWidth: 1,
-          borderColor: '#000000'
+          borderWidth: 0.8,
+          borderColor: getBorderColor()
         },
         style
       ]}
@@ -55,7 +79,10 @@ export const Button: React.FC<ButtonProps> = ({
       {loading ? (
         <ActivityIndicator color={getTextColor()} />
       ) : (
-        <Text style={[styles.text, { color: getTextColor() }]}>{title}</Text>
+        <View style={styles.content}>
+          {(icon || leftIcon) && <View style={styles.iconContainer}>{icon || leftIcon}</View>}
+          <Text style={[styles.text, { color: getTextColor() }, textStyle]}>{title}</Text>
+        </View>
       )}
     </TouchableOpacity>
   );
@@ -64,18 +91,21 @@ export const Button: React.FC<ButtonProps> = ({
 const styles = StyleSheet.create({
   button: {
     paddingVertical: 14,
-    paddingHorizontal: 24,
+    paddingHorizontal: 16,
     alignItems: 'center',
     justifyContent: 'center',
     marginVertical: 8,
   },
-  buttonSecondary: {
-    borderWidth: 1,
-    elevation: 0,
-    shadowOpacity: 0,
+  content: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconContainer: {
+    marginRight: 8,
   },
   text: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
   },
 });

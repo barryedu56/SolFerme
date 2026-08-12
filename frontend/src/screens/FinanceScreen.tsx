@@ -1,89 +1,129 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, Alert, useWindowDimensions } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
-import { apiClient, fetchAll } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LineChart } from 'react-native-chart-kit';
 import { generateConsolidatedFinancePDF } from '../utils/reportGenerator';
 import { formatNumber, formatCurrency } from '../utils/formatters';
+import { useAuth } from '../context/AuthContext';
+import { SalePaymentsModal } from '../components/SalePaymentsModal';
 
 export const FinanceScreen = ({ navigation }: any) => {
-  const { theme } = useTheme();
+  const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
+  const { userRole } = useAuth();
   const { width } = useWindowDimensions();
   const isTablet = width > 600;
+  const styles = useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [financeData, setFinanceData] = useState({
     revenues: 0,
+    encaissements: 0,
+    creances: 0,
     expenses: 0,
     transactions: [],
   });
   const [trend, setTrend] = useState(0);
-  const [period, setPeriod] = useState('Semaine');
-  const [rawSales, setRawSales] = useState<any[]>([]);
-  const [rawExpenses, setRawExpenses] = useState<any[]>([]);
+  const [period, setPeriod] = useState('week');
   const [chartData, setChartData] = useState<any>(null);
-  const periods = ['Jour', 'Semaine', 'Mois', 'Trimestre', 'Année'];
+  const [receivables, setReceivables] = useState<any[]>([]);
+  const [paymentTarget, setPaymentTarget] = useState<any>(null);
+  const [paymentsModalVisible, setPaymentsModalVisible] = useState(false);
+  const [farms, setFarms] = useState<any[]>([]);
+  const [lots, setLots] = useState<any[]>([]);
+  const [selectedFarm, setSelectedFarm] = useState<number | null>(null);
+  const [selectedLot, setSelectedLot] = useState<number | null>(null);
+  const [loadingFilters, setLoadingFilters] = useState(false);
+
+  const periods = useMemo(() => [
+    { key: 'day', label: t('common.day') },
+    { key: 'week', label: t('common.week') },
+    { key: 'month', label: t('common.month') },
+    { key: 'quarter', label: t('common.quarter') },
+    { key: 'year', label: t('common.year') }
+  ], [t]);
 
   const fetchData = async () => {
     try {
-      const [sales, expenses, lots, feedPurchases, healthPurchases] = await Promise.all([
-        fetchAll('/sales/').catch(() => []),
-        fetchAll('/expenses/').catch(() => []),
-        fetchAll('/lots/').catch(() => []),
-        apiClient.get('/feed-purchases/').then(res => res.data).catch(() => []),
-        apiClient.get('/health-purchases/').then(res => res.data).catch(() => []),
-      ]);
+      setLoadingFilters(true);
+      const backendPeriod = period;
 
-      setRawSales(sales);
-      // On combine les dépenses générales avec les achats
-      const allExpenses = [
-        ...expenses,
-        ...feedPurchases.map((p: any) => ({ ...p, description: `Achat ${p.feed_type}`, amount: p.total_price })),
-        ...healthPurchases.map((p: any) => ({ ...p, description: `Achat ${p.product_name}`, amount: p.total_price })),
-      ];
-      setRawExpenses(allExpenses);
+      // Charger fermes et lots pour le filtre
+      try {
+        const [farmsRes, lotsRes] = await Promise.all([
+          repositoryProvider.api.get('/farms/').catch(() => ({ data: [] })),
+          repositoryProvider.api.get('/lots/').catch(() => ({ data: [] })),
+        ]);
+        const fList: any = farmsRes.data;
+        setFarms(Array.isArray(fList) ? fList : (fList?.results || []));
+        const lList: any = lotsRes.data;
+        setLots(Array.isArray(lList) ? lList : (lList?.results || []));
+      } catch (fe: any) {
+        console.warn('Impossible de charger les filtres ferme/lot:', fe?.message);
+      }
 
-      const totalRev = sales.reduce((sum: number, s: any) => sum + parseFloat(s.amount_paid || 0), 0);
+      const params: any = { period: backendPeriod };
+      if (selectedFarm) params.farm = selectedFarm;
+      if (selectedLot) params.lot = selectedLot;
 
-      const totalExp = allExpenses.reduce((sum: number, e: any) => sum + parseFloat(e.amount || 0), 0) +
-                       lots.reduce((sum: number, l: any) => sum + parseFloat(l.purchase_price || 0), 0);
+      const res = await repositoryProvider.api.get('/farms/statistics/', { params }).catch(() => ({
+        data: {
+          summary: { revenues: 0, expenses: 0, revenue_trend: 0, farms_count: 0, lots_count: 0, total_chickens: 0, today_production: 0, alerts_count: 0, performance: 0, total_bonuses: 0, employees_with_bonuses: 0 },
+          charts: { sales: [], expenses: [] },
+          recent_transactions: []
+        }
+      }));
+      const { summary, charts, recent_transactions } = res.data;
 
-      // Calcul tendance
-      const today = new Date();
-      const thisMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-      const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      setTrend(summary.revenue_trend || 0);
 
-      const thisMonthSales = sales.filter((s: any) => new Date(s.date) >= thisMonthStart).reduce((sum, s) => sum + parseFloat(s.amount_paid || 0), 0);
-      const lastMonthSales = sales.filter((s: any) => new Date(s.date) >= lastMonthStart && new Date(s.date) < thisMonthStart).reduce((sum, s) => sum + parseFloat(s.amount_paid || 0), 0);
-
-      let calcTrend = 0;
-      if (lastMonthSales > 0) calcTrend = ((thisMonthSales - lastMonthSales) / lastMonthSales) * 100;
-      else if (thisMonthSales > 0) calcTrend = 100;
-      setTrend(Math.round(calcTrend));
-
-      // Transactions récentes
-      const combined = [
-        ...sales.map(s => ({ id: `s-${s.id}`, title: s.customer_name || 'Vente', amount: parseFloat(s.amount_paid), date: s.date, type: 'income' })),
-        ...allExpenses.map(e => ({ id: `e-${e.id}`, title: e.description, amount: -parseFloat(e.amount), date: e.date, type: 'expense' })),
-        ...lots.map(l => ({ id: `l-${l.id}`, title: `Achat Lot: ${l.name}`, amount: -parseFloat(l.purchase_price), date: l.purchase_date, type: 'expense' })),
-      ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10);
+      // Map backend transactions to frontend format
+      const combined = (recent_transactions || []).map((t: any) => ({
+        id: t.id,
+        title: t.title,
+        amount: t.amount,
+        date: t.date,
+        type: t.type,
+        status: t.status
+      }));
 
       setFinanceData({
-        revenues: totalRev,
-        expenses: totalExp,
-        transactions: combined as any,
+        revenues: summary.revenues,
+        encaissements: summary.encaissements || 0,
+        creances: summary.creances || 0,
+        expenses: summary.expenses,
+        transactions: combined,
       });
+
+      // Handle chart data
+      processChartData(charts, period);
+
+      // Liste des créances client (ventes non soldées) pour l'encaissement direct
+      try {
+        const salesRes = await repositoryProvider.api.get('/sales/');
+        let rawSales: any = salesRes.data;
+        let salesList = Array.isArray(rawSales) ? rawSales : (rawSales?.results || []);
+        if (selectedFarm) salesList = salesList.filter((s: any) => Number(s.farm) === selectedFarm);
+        if (selectedLot) salesList = salesList.filter((s: any) => Number(s.lot) === selectedLot);
+        const rec = salesList
+          .filter((s: any) => s.status !== 'ANNULEE' && (parseFloat(s.total_amount) - parseFloat(s.amount_paid)) > 0)
+          .map((s: any) => ({ ...s, reste: parseFloat(s.total_amount) - parseFloat(s.amount_paid) }));
+        setReceivables(rec);
+      } catch (e: any) {
+        console.warn('Impossible de récupérer les créances:', e?.message);
+      }
 
     } catch (error) {
       console.error('Error fetching finance data:', error);
-      Alert.alert('Erreur', 'Impossible de charger les données financières');
+      Alert.alert(t('common.error'), t('finance.loadError'));
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setLoadingFilters(false);
     }
   };
 
@@ -92,102 +132,97 @@ export const FinanceScreen = ({ navigation }: any) => {
     fetchData();
   };
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const openPayments = (sale: any) => {
+    setPaymentTarget(sale);
+    setPaymentsModalVisible(true);
+  };
 
-  useEffect(() => {
-    if (rawSales.length === 0 && rawExpenses.length === 0) {
-      setChartData({ labels: ['Aucune donnée'], datasets: [{ data: [0] }], isPlaceholder: true });
-      return;
-    }
+  const processChartData = (charts: any, selectedPeriod: string) => {
+    if (!charts || !charts.sales || !charts.expenses) return;
 
     let labels: string[] = [];
     let values: number[] = [];
 
-    const getBalance = (start: Date, end: Date) => {
-      const daySales = rawSales.filter((s: any) => {
-        const d = new Date(s.date);
-        return d >= start && d <= end;
-      }).reduce((sum: number, s: any) => sum + parseFloat(s.amount_paid), 0);
+    if (selectedPeriod === 'day') {
+      // Map backend 'Matin', 'Midi', 'Soir' to translations
+      labels = (charts.sales || []).map((s: any) => {
+        if (s.label === 'Matin') return t('common.morning');
+        if (s.label === 'Midi') return t('common.noon');
+        if (s.label === 'Soir') return t('common.evening');
+        return s.label;
+      });
 
-      const dayExpenses = rawExpenses.filter((e: any) => {
-        const d = new Date(e.date);
-        return d >= start && d <= end;
-      }).reduce((sum: number, e: any) => sum + parseFloat(e.amount), 0);
+      values = (charts.sales || []).map((s: any, idx: number) => {
+        const expVal = (charts.expenses && charts.expenses[idx]) ? charts.expenses[idx].value : 0;
+        return (s.value || 0) - expVal;
+      });
+    } else {
+      // Use balance (revenues - expenses) from backend series
+      const salesMap = new Map<string, number>(charts.sales.map((s: any) => [s.day, s.value] as [string, number]));
+      const expMap = new Map<string, number>(charts.expenses.map((e: any) => [e.day, e.value] as [string, number]));
 
-      return daySales - dayExpenses;
-    };
+      // Combine all unique days
+      const allDays = Array.from(new Set<string>([...salesMap.keys(), ...expMap.keys()])).sort();
 
-    if (period === 'Jour') {
-      labels = ['Matin', 'Midi', 'Soir'];
-      const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-      const todayEnd = new Date(); todayEnd.setHours(23,59,59,999);
-      values = [getBalance(todayStart, todayEnd), 0, 0];
-    } else if (period === 'Semaine') {
-      const days = ['Di', 'Lu', 'Ma', 'Me', 'Je', 'Ve', 'Sa'];
-      const last7Days = Array.from({ length: 7 }, (_, i) => {
-        const d = new Date();
-        d.setDate(d.getDate() - (6 - i));
-        return d;
+      if (allDays.length === 0) {
+        setChartData({ labels: [t('common.noData')], datasets: [{ data: [0] }], isPlaceholder: true });
+        return;
+      }
+
+      labels = allDays.map(day => {
+          const date = new Date(day);
+          if (selectedPeriod === 'week') {
+              const days = [t('days.sun'), t('days.mon'), t('days.tue'), t('days.wed'), t('days.thu'), t('days.fri'), t('days.sat')];
+              return days[date.getDay()];
+          } else if (selectedPeriod === 'month' || selectedPeriod === 'quarter') {
+              return date.getDate().toString();
+          } else if (selectedPeriod === 'year') {
+              const months = [t('months.jan'), t('months.feb'), t('months.mar'), t('months.apr'), t('months.may'), t('months.jun'), t('months.jul'), t('months.aug'), t('months.sep'), t('months.oct'), t('months.nov'), t('months.dec')];
+              return months[date.getMonth()];
+          }
+          return day;
       });
-      labels = last7Days.map(d => days[d.getDay()]);
-      values = last7Days.map(d => {
-        const start = new Date(d); start.setHours(0,0,0,0);
-        const end = new Date(d); end.setHours(23,59,59,999);
-        return getBalance(start, end);
-      });
-    } else if (period === 'Mois') {
-      labels = ['S1', 'S2', 'S3', 'S4'];
-      values = Array.from({ length: 4 }, (_, i) => {
-        const start = new Date(); start.setDate(start.getDate() - (28 - i * 7));
-        const end = new Date(start); end.setDate(end.getDate() + 7);
-        return getBalance(start, end);
-      });
-    } else if (period === 'Trimestre') {
-      const monthNames = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
-      const last3Months = Array.from({ length: 3 }, (_, i) => {
-        const d = new Date(); d.setMonth(d.getMonth() - (2 - i));
-        return d;
-      });
-      labels = last3Months.map(d => monthNames[d.getMonth()]);
-      values = last3Months.map(d => {
-        const start = new Date(d.getFullYear(), d.getMonth(), 1);
-        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-        return getBalance(start, end);
-      });
-    } else if (period === 'Année') {
-      labels = ['T1', 'T2', 'T3', 'T4'];
-      const year = new Date().getFullYear();
-      values = [0, 1, 2, 3].map(q => {
-        const start = new Date(year, q * 3, 1);
-        const end = new Date(year, q * 3 + 3, 0, 23, 59, 59);
-        return getBalance(start, end);
-      });
+
+      values = allDays.map(day => (salesMap.get(day) || 0) - (expMap.get(day) || 0));
     }
 
     const hasData = values.some(v => v !== 0);
-    setChartData({ labels, datasets: [{ data: hasData ? values : [0, 0, 0, 0, 0] }], isPlaceholder: !hasData });
-  }, [period, rawSales, rawExpenses]);
+    setChartData({ labels, datasets: [{ data: hasData ? values : [0] }], isPlaceholder: !hasData });
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, [period, selectedFarm, selectedLot]);
+
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchData();
+    });
+    return unsubscribe;
+  }, [navigation]);
 
   const handleExportPDF = async () => {
     try {
       setLoading(true);
+      // We might need full list for PDF, let's fetch it if necessary or use statistics summary
+      const salesRes = await repositoryProvider.api.get('/sales/');
+      const expensesRes = await repositoryProvider.api.get('/expenses/');
+
       await generateConsolidatedFinancePDF({
         revenues: financeData.revenues,
         expenses: financeData.expenses,
-        sales: rawSales,
-        expenses_list: rawExpenses,
+        sales: salesRes.data.filter((s: any) => s.status !== 'ANNULEE'),
+        expenses_list: expensesRes.data.filter((e: any) => e.status !== 'ANNULEE'),
         period: period
-      });
+      }, t);
     } catch (error) {
-      Alert.alert(t('common.error'), "Erreur lors de la génération du PDF");
+      Alert.alert(t('common.error'), t('sales.pdfError'));
     } finally {
       setLoading(false);
     }
   };
 
-  const styles = createStyles(theme, isTablet);
+  const benefice = financeData.revenues - financeData.expenses;
 
   if (loading) {
     return (
@@ -196,8 +231,6 @@ export const FinanceScreen = ({ navigation }: any) => {
       </View>
     );
   }
-
-  const benefice = financeData.revenues - financeData.expenses;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -210,9 +243,11 @@ export const FinanceScreen = ({ navigation }: any) => {
           <TouchableOpacity style={[styles.addTransactionBtn, { backgroundColor: theme.colors.surface, marginRight: 8 }]} onPress={() => navigation.navigate('AddExpense')}>
              <MaterialIcons name="add" size={24} color={theme.colors.primary} />
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.addTransactionBtn, { backgroundColor: theme.colors.surface }]} onPress={handleExportPDF}>
-             <MaterialIcons name="picture-as-pdf" size={24} color={theme.colors.primary} />
-          </TouchableOpacity>
+          {userRole === 'PROPRIETAIRE' && (
+            <TouchableOpacity style={[styles.addTransactionBtn, { backgroundColor: theme.colors.surface }]} onPress={handleExportPDF}>
+               <MaterialIcons name="picture-as-pdf" size={24} color={theme.colors.primary} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -220,6 +255,49 @@ export const FinanceScreen = ({ navigation }: any) => {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
+        {/* Filtre par ferme / lot — même logique que le Dashboard (Ferme -> Lot) */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
+          <TouchableOpacity
+            style={[styles.filterChip, selectedFarm === null && styles.activeChip]}
+            onPress={() => { setSelectedFarm(null); setSelectedLot(null); }}
+          >
+            <Text style={[styles.filterChipText, selectedFarm === null && styles.activeChipText]}>{t('common.allFarms')}</Text>
+          </TouchableOpacity>
+          {farms.map((f: any) => (
+            <TouchableOpacity
+              key={`farm-${f.id}`}
+              style={[styles.filterChip, selectedFarm === f.id && styles.activeChip]}
+              onPress={() => { setSelectedFarm(selectedFarm === f.id ? null : f.id); setSelectedLot(null); }}
+            >
+              <Text style={[styles.filterChipText, selectedFarm === f.id && styles.activeChipText]}>{f.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {/* La ligne des lots n'apparaît QUE lorsqu'une ferme précise est
+            sélectionnée (comme le Dashboard) — sinon on n'affiche que les fermes. */}
+        {selectedFarm !== null && lots.filter((l: any) => Number(l.farm) === selectedFarm).length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filterScroll, { marginTop: 8 }]}>
+            <TouchableOpacity
+              style={[styles.filterChip, selectedLot === null && styles.activeChip]}
+              onPress={() => setSelectedLot(null)}
+            >
+              <Text style={[styles.filterChipText, selectedLot === null && styles.activeChipText]}>{t('common.allLots')}</Text>
+            </TouchableOpacity>
+            {lots.filter((l: any) => Number(l.farm) === selectedFarm).map((l: any) => (
+              <TouchableOpacity
+                key={`lot-${l.id}`}
+                style={[styles.filterChip, selectedLot === l.id && styles.activeChip]}
+                onPress={() => setSelectedLot(selectedLot === l.id ? null : l.id)}
+              >
+                <Text style={[styles.filterChipText, selectedLot === l.id && styles.activeChipText]}>{l.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+        {loadingFilters && (
+          <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginBottom: 8 }} />
+        )}
+
         <Card style={styles.balanceCard}>
           <Text style={styles.balanceLabel}>{t('finance.netProfit')}</Text>
           <Text style={[styles.balanceValue, { color: benefice >= 0 ? theme.colors.text : theme.colors.danger }]}>
@@ -236,10 +314,28 @@ export const FinanceScreen = ({ navigation }: any) => {
         <View style={styles.topCards}>
           <Card style={styles.miniCard}>
             <View style={styles.miniCardHeader}>
-              <MaterialIcons name="arrow-downward" size={16} color="#2E7D32" />
-              <Text style={styles.miniCardLabel}>{t('finance.income')}</Text>
+              <MaterialIcons name="point-of-sale" size={16} color={theme.colors.success} />
+              <Text style={styles.miniCardLabel}>Chiffre d'Affaires</Text>
             </View>
-            <Text style={[styles.miniCardValue, { color: '#2E7D32' }]}>{formatNumber(financeData.revenues)}</Text>
+            <Text style={[styles.miniCardValue, { color: theme.colors.success }]}>{formatNumber(financeData.revenues)}</Text>
+          </Card>
+
+          <Card style={styles.miniCard}>
+            <View style={styles.miniCardHeader}>
+              <MaterialIcons name="account-balance-wallet" size={16} color={theme.colors.success} />
+              <Text style={styles.miniCardLabel}>Encaissements</Text>
+            </View>
+            <Text style={[styles.miniCardValue, { color: theme.colors.success }]}>{formatNumber(financeData.encaissements)}</Text>
+          </Card>
+        </View>
+
+        <View style={styles.topCards}>
+          <Card style={styles.miniCard}>
+            <View style={styles.miniCardHeader}>
+              <MaterialIcons name="hourglass-empty" size={16} color={theme.colors.warning || '#f57c00'} />
+              <Text style={styles.miniCardLabel}>Créances</Text>
+            </View>
+            <Text style={[styles.miniCardValue, { color: theme.colors.warning || '#f57c00' }]}>{formatNumber(financeData.creances)}</Text>
           </Card>
 
           <Card style={styles.miniCard}>
@@ -251,34 +347,71 @@ export const FinanceScreen = ({ navigation }: any) => {
           </Card>
         </View>
 
+        {receivables.length > 0 && (
+          <View style={styles.transactionsHeader}>
+            <Text style={styles.sectionTitle}>Créances Client (Crédit)</Text>
+          </View>
+        )}
+        {receivables.slice(0, 5).map((r: any) => (
+          <Card key={`rec-${r.id}`} style={[styles.transactionCard, { marginBottom: 8 }]}>
+            <View style={[styles.transactionIconCircle, { backgroundColor: theme.colors.warning || '#f57c00' }]}>
+              <MaterialIcons name="account-balance-wallet" size={20} color="#000" />
+            </View>
+            <View style={styles.transactionInfo}>
+              <Text style={styles.transactionTitle}>{r.customer_name || t('common.anonymous')}</Text>
+              <Text style={styles.transactionDate}>
+                {`${t('finance.amountVersed')} : ${formatCurrency(r.amount_paid)} / ${formatCurrency(r.total_amount)}`}
+              </Text>
+              <Text style={[styles.transactionDate, { color: theme.colors.warning || '#f57c00', fontWeight: '700' }]}>
+                {`Reste : ${formatCurrency(r.reste)}`}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.encaisseBtn, { backgroundColor: theme.colors.success }]}
+              onPress={() => openPayments(r)}
+            >
+              <MaterialIcons name="point-of-sale" size={16} color="#fff" />
+              <Text style={styles.encaisseBtnText}>Encaisser</Text>
+            </TouchableOpacity>
+          </Card>
+        ))}
+
         <Card style={styles.chartCard}>
            <View style={styles.chartHeader}>
               <Text style={styles.chartTitle}>{t('finance.cashFlow')}</Text>
               <View style={styles.periodSelector}>
                  {periods.map(p => (
                    <TouchableOpacity
-                     key={p}
-                     style={[styles.periodItem, period === p && styles.periodActive]}
-                     onPress={() => setPeriod(p)}
+                     key={p.key}
+                     style={[styles.periodItem, period === p.key && styles.periodActive]}
+                     onPress={() => setPeriod(p.key)}
                    >
-                     <Text style={period === p ? styles.periodTextActive : styles.periodText}>{p}</Text>
+                     <Text style={period === p.key ? styles.periodTextActive : styles.periodText}>{p.label}</Text>
                    </TouchableOpacity>
                  ))}
               </View>
            </View>
 
            {chartData && chartData.datasets[0].data.length > 0 ? (
-             <LineChart
+               <LineChart
                 data={chartData}
                 width={Dimensions.get('window').width - theme.spacing.m * 4}
                 height={180}
+                yAxisLabel=""
+                yAxisSuffix=""
+                formatYLabel={(yValue) => {
+                  const val = parseFloat(yValue);
+                  if (Math.abs(val) >= 1000000) return (val / 1000000).toFixed(1) + 'M';
+                  if (Math.abs(val) >= 1000) return (val / 1000).toFixed(0) + 'k';
+                  return val.toString();
+                }}
                 chartConfig={{
                   backgroundColor: theme.colors.surface,
                   backgroundGradientFrom: theme.colors.surface,
                   backgroundGradientTo: theme.colors.surface,
                   decimalPlaces: 0,
-                  color: (opacity = 1) => `rgba(249, 215, 96, ${opacity})`,
-                  labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+                  color: (opacity = 1) => isDarkMode ? `rgba(249, 215, 96, ${opacity})` : `rgba(249, 215, 96, ${opacity})`,
+                  labelColor: (opacity = 1) => theme.colors.text,
                   style: { borderRadius: 16 },
                   propsForDots: { r: "4", strokeWidth: "2", stroke: theme.colors.primary }
                 }}
@@ -298,26 +431,45 @@ export const FinanceScreen = ({ navigation }: any) => {
         </View>
 
         <View style={styles.transactionsList}>
-           {financeData.transactions.map((t: any, index: number) => (
-              <Card key={t.id} style={styles.transactionCard}>
-                 <View style={styles.transactionIconCircle}>
+           {financeData.transactions.slice(0, 3).map((transaction: any) => (
+              <Card key={transaction.id} style={[styles.transactionCard, transaction.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
+                 <View style={[styles.transactionIconCircle, transaction.status === 'ANNULEE' && { borderColor: theme.colors.textSecondary, backgroundColor: 'transparent' }]}>
                     <MaterialIcons
-                      name={t.type === 'income' ? 'add-shopping-cart' : 'payments'}
+                      name={transaction.type === 'income' ? 'add-shopping-cart' : 'payments'}
                       size={20}
-                      color={t.type === 'income' ? '#2E7D32' : theme.colors.danger}
+                      color={transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger)}
                     />
                  </View>
                  <View style={styles.transactionInfo}>
-                    <Text style={styles.transactionTitle}>{t.title}</Text>
-                    <Text style={styles.transactionDate}>{new Date(t.date).toLocaleDateString('fr-FR')}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={[styles.transactionTitle, transaction.status === 'ANNULEE' && { textDecorationLine: 'line-through', color: theme.colors.textSecondary }]}>{transaction.title}</Text>
+                      {transaction.status === 'ANNULEE' && (
+                        <View style={styles.cancelledBadge}>
+                           <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString(t('common.dateLocale'))}</Text>
                  </View>
-                 <Text style={[styles.transactionAmount, { color: t.type === 'income' ? '#2E7D32' : theme.colors.danger }]}>
-                    {t.amount > 0 ? '+' : ''}{formatNumber(t.amount)}
+                 <Text style={[styles.transactionAmount, { color: transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger) }]}>
+                    {transaction.amount > 0 ? '+' : ''}{formatNumber(transaction.amount)}
                  </Text>
               </Card>
            ))}
         </View>
       </ScrollView>
+
+      {paymentTarget && (
+        <SalePaymentsModal
+          visible={paymentsModalVisible}
+          onClose={() => setPaymentsModalVisible(false)}
+          saleId={paymentTarget.id}
+          lotId={paymentTarget.lot}
+          farmId={paymentTarget.farm}
+          totalAmount={parseFloat(paymentTarget.total_amount)}
+          onPaymentAdded={() => fetchData()}
+        />
+      )}
     </SafeAreaView>
   );
 };
@@ -336,8 +488,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     alignSelf: isTablet ? 'center' : 'auto',
     width: '100%'
   },
-  headerTitle: { fontSize: 26, fontWeight: 'bold', color: theme.colors.text },
-  headerSubtitle: { fontSize: 13, color: theme.colors.textSecondary },
+  headerTitle: { fontSize: 26, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
+  headerSubtitle: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
   addTransactionBtn: {
     width: 44,
     height: 44,
@@ -345,6 +497,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#000000',
     ...theme.shadows.light,
   },
   scroll: {
@@ -358,12 +512,14 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     padding: theme.spacing.l,
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.primary,
+    borderWidth: 1,
+    borderColor: '#000000',
     marginBottom: theme.spacing.m,
   },
-  balanceLabel: { fontSize: 13, color: theme.colors.text, opacity: 0.7, fontWeight: '600' },
-  balanceValue: { fontSize: 28, fontWeight: 'bold', marginVertical: 8 },
+  balanceLabel: { fontSize: 13, color: '#000000', opacity: 0.8, fontWeight: '900', textTransform: 'uppercase' },
+  balanceValue: { fontSize: 28, fontWeight: '900', marginVertical: 8, color: '#000000' },
   balanceTrend: { flexDirection: 'row', alignItems: 'center' },
-  trendText: { fontSize: 12, color: '#2E7D32', fontWeight: 'bold', marginLeft: 4 },
+  trendText: { fontSize: 12, fontWeight: '900', marginLeft: 4 },
   topCards: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -375,6 +531,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
     borderColor: '#000000',
+    backgroundColor: theme.colors.surface
   },
   miniCardHeader: {
     flexDirection: 'row',
@@ -384,17 +541,21 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   miniCardLabel: {
     fontSize: 12,
     color: theme.colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '900',
     marginLeft: 4,
+    textTransform: 'uppercase'
   },
   miniCardValue: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '900',
   },
   chartCard: {
     padding: theme.spacing.m,
     marginBottom: theme.spacing.l,
     borderRadius: theme.borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#000000',
+    backgroundColor: theme.colors.surface
   },
   chartHeader: {
     flexDirection: 'row',
@@ -403,9 +564,12 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     marginBottom: 15,
   },
   chartTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '900',
     color: theme.colors.text,
+    textTransform: 'uppercase',
+    flexShrink: 1,
+    marginRight: 8,
   },
   periodSelector: {
     flexDirection: 'row',
@@ -416,25 +580,26 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     borderColor: '#000000',
   },
   periodItem: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 5,
     paddingVertical: 4,
     borderRadius: 6,
-    borderWidth: 1,
+    borderWidth: 0.8,
     borderColor: 'transparent',
   },
   periodActive: {
     backgroundColor: theme.colors.primary,
-    borderColor: '#000000',
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
   },
   periodText: {
-    fontSize: 10,
+    fontSize: 9,
     color: theme.colors.textSecondary,
+    fontWeight: '700'
   },
   periodTextActive: {
-    fontSize: 10,
+    fontSize: 9,
     color: theme.colors.text,
-    fontWeight: 'bold',
+    fontWeight: '900',
   },
   transactionsHeader: {
     flexDirection: 'row',
@@ -444,13 +609,14 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 18,
-    fontWeight: 'bold',
+    fontWeight: '900',
     color: theme.colors.text,
+    textTransform: 'uppercase'
   },
   seeAll: {
     fontSize: 13,
     color: theme.colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   transactionsList: {
     gap: theme.spacing.s,
@@ -466,13 +632,14 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
     borderColor: '#000000',
-    width: isTablet ? '49%' : '100%'
+    width: isTablet ? '49%' : '100%',
+    backgroundColor: theme.colors.surface
   },
   transactionIconCircle: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: theme.colors.background,
+    backgroundColor: theme.colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: theme.spacing.m,
@@ -484,16 +651,68 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   },
   transactionTitle: {
     fontSize: 14,
-    fontWeight: 'bold',
+    fontWeight: '900',
     color: theme.colors.text,
   },
   transactionDate: {
     fontSize: 11,
     color: theme.colors.textSecondary,
     marginTop: 2,
+    fontWeight: '600'
   },
   transactionAmount: {
     fontSize: 15,
+    fontWeight: '900',
+  },
+  cancelledBadge: {
+    backgroundColor: '#ffcdd2',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 6
+  },
+  cancelledText: {
+    color: '#c62828',
+    fontSize: 8,
+    fontWeight: 'bold'
+  },
+  encaisseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginLeft: 8,
+  },
+  encaisseBtnText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 13,
+    marginLeft: 4,
+  },
+  filterScroll: {
+    paddingBottom: 8,
+    paddingRight: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    backgroundColor: theme.colors.surface,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  activeChip: {
+    backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
+  },
+  filterChipText: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+  },
+  activeChipText: {
+    color: '#fff',
     fontWeight: 'bold',
   }
 });

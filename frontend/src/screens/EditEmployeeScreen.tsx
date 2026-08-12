@@ -4,7 +4,7 @@ import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
-import { apiClient } from '../api/client';
+import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
 
@@ -67,7 +67,7 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchFarms = async () => {
     try {
-      const res = await apiClient.get('/farms/');
+      const res = await repositoryProvider.api.get('/farms/');
       setFarms(res.data);
     } catch (error) {
       console.error("Erreur fetch farms:", error);
@@ -76,7 +76,7 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchLots = async (farmId: string) => {
     try {
-      const res = await apiClient.get(`/lots/?farm=${farmId}`);
+      const res = await repositoryProvider.api.get(`/lots/?farm=${farmId}`);
       setAvailableLots(res.data);
     } catch (error) {
       console.error("Erreur fetch lots:", error);
@@ -108,9 +108,9 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
         userData.password = password;
       }
 
-      await apiClient.patch(`/users/${employee.user}/`, userData);
+      await repositoryProvider.api.patch(`/users/${employee.user}/`, userData);
 
-      await apiClient.patch(`/employees/${employee.id}/`, {
+      await repositoryProvider.api.patch(`/employees/${employee.id}/`, {
         farm: parseInt(selectedFarm),
         lots: selectedLots,
         position: position,
@@ -175,7 +175,8 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
                     placeholder={t('employees.form.phonePlaceholder')}
                     value={phone}
                     onChangeText={setPhone}
-                    keyboardType="phone-pad"
+                    isPhone
+                    maxLength={9}
                     style={styles.fieldInput}
                   />
                 </View>
@@ -464,8 +465,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: theme.colors.background + '40',
     padding: 12,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   pickerButtonText: {
     fontSize: 14,
@@ -475,14 +476,14 @@ const createStyles = (theme: any) => StyleSheet.create({
     marginTop: 4,
     backgroundColor: theme.colors.surface,
     borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '20',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
   },
   pickerOption: {
     padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border + '10',
+    borderBottomWidth: 0.8,
+    borderBottomColor: theme.colors.border,
   },
   pickerOptionText: {
     fontSize: 14,
@@ -513,8 +514,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: 20,
     marginRight: 8,
     marginBottom: 8,
-    borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderWidth: 0.8,
+    borderColor: theme.colors.border,
   },
   lotChipSelected: {
     borderColor: theme.colors.primary,

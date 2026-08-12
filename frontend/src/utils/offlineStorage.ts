@@ -1,3 +1,9 @@
+import {
+  enqueueSyncQueue,
+  getPendingSyncQueueItems,
+  clearSyncQueue as clearSqlSyncQueue,
+} from '../database/localDatabase';
+import { getTableNameFromEndpoint } from './offlineSyncUtils';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const STORAGE_KEYS = {
@@ -8,7 +14,6 @@ const STORAGE_KEYS = {
   EXPENSES: 'offline_expenses',
   FEED_INVENTORY: 'offline_feed_inventory',
   HEALTH_INVENTORY: 'offline_health_inventory',
-  SYNC_QUEUE: 'sync_queue',
 };
 
 export const saveOfflineData = async (key: string, data: any) => {
@@ -29,51 +34,65 @@ export const getOfflineData = async (key: string) => {
   }
 };
 
-export const addToSyncQueue = async (action: string, endpoint: string, data: any) => {
+export const addToSyncQueue = async (
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'POST' | 'PUT',
+  endpoint: string,
+  data: any,
+  localId: number | null = null,
+  tableName?: string
+) => {
   try {
-    const queue = await getOfflineData(STORAGE_KEYS.SYNC_QUEUE) || [];
-    queue.push({ action, endpoint, data, timestamp: new Date().getTime() });
-    await saveOfflineData(STORAGE_KEYS.SYNC_QUEUE, queue);
+    const operation = action === 'POST' ? 'CREATE' : action === 'PUT' ? 'UPDATE' : action;
+    const resolvedTableName = tableName || getTableNameFromEndpoint(endpoint);
+    if (!resolvedTableName) {
+      throw new Error(`Unable to resolve table name from endpoint: ${endpoint}`);
+    }
+    await enqueueSyncQueue(operation, endpoint, data, localId, resolvedTableName);
   } catch (error) {
-    console.error('Error adding to sync queue:', error);
+    console.error('Error adding to SQLite sync queue:', error);
   }
 };
 
 export const getSyncQueue = async () => {
-  return await getOfflineData(STORAGE_KEYS.SYNC_QUEUE) || [];
+  return await getPendingSyncQueueItems();
 };
 
 export const clearSyncQueue = async () => {
-  await AsyncStorage.removeItem(STORAGE_KEYS.SYNC_QUEUE);
+  return await clearSqlSyncQueue();
 };
 
 export { STORAGE_KEYS };
 
 let isSyncing = false;
 
-export const syncOfflineData = async (apiClient: any) => {
+export const syncOfflineData = async (apiService: {
+  post: (endpoint: string, data: any) => Promise<any>;
+  put: (endpoint: string, data: any) => Promise<any>;
+  patch?: (endpoint: string, data: any) => Promise<any>;
+  delete?: (endpoint: string) => Promise<any>;
+}) => {
   if (isSyncing) return false;
 
-  const queue = await getSyncQueue();
+  const queue = await getPendingSyncQueueItems();
   if (queue.length === 0) return true;
 
   isSyncing = true;
   console.log(`Attempting to sync ${queue.length} items...`);
-  const remainingQueue = [];
+  const remainingQueue: any[] = [];
   let successCount = 0;
 
   try {
     for (const item of queue) {
       try {
-        if (item.action === 'POST') {
-          await apiClient.post(item.endpoint, item.data);
-        } else if (item.action === 'PUT') {
-          await apiClient.put(item.endpoint, item.data);
+        if (item.operation === 'CREATE') {
+          await apiService.post(item.endpoint, JSON.parse(item.payload_json));
+        } else if (item.operation === 'UPDATE') {
+          await apiService.put(item.endpoint, JSON.parse(item.payload_json));
+        } else if (item.operation === 'DELETE' && apiService.delete) {
+          await apiService.delete(item.endpoint);
         }
         successCount++;
       } catch (error: any) {
-        // Si c'est une erreur 4xx (sauf 401), l'élément est probablement invalide,
-        // on ne le garde pas dans la queue pour ne pas bloquer indéfiniment.
         if (error.response && error.response.status >= 400 && error.response.status < 500 && error.response.status !== 401) {
           console.error(`Invalid item skipped:`, item.endpoint, error.response.data);
         } else {
@@ -82,7 +101,10 @@ export const syncOfflineData = async (apiClient: any) => {
       }
     }
 
-    await saveOfflineData(STORAGE_KEYS.SYNC_QUEUE, remainingQueue);
+    await clearSqlSyncQueue();
+    for (const item of remainingQueue) {
+      await enqueueSyncQueue(item.operation, item.endpoint, JSON.parse(item.payload_json), item.local_id, item.table_name);
+    }
     return remainingQueue.length === 0;
   } finally {
     isSyncing = false;

@@ -1,18 +1,20 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useState, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import { toast } from '../../utils/toast';
 import { Input } from '../../components/Input';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { DatePicker } from '../../components/DatePicker';
 import { useTheme } from '../../context/ThemeContext';
 import { useTranslation } from '../../context/LanguageContext';
-import { apiClient } from '../../api/client';
+import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
-import { addToSyncQueue } from '../../utils/offlineStorage';
+import { getErrorMessage } from '../../utils/errors';
 
 export const ActionMouvementScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, lotName, lotPurchaseDate, item } = route.params || {};
   const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
   const [type, setType] = useState(item?.type || 'MORT'); // MORT, MALADE, GUERI
@@ -22,19 +24,23 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
   const [isEdit, setIsEdit] = useState(!!item);
 
   const handleSubmit = async () => {
+    if (loading) return;
     if (!date || !type || !quantity) {
-      Alert.alert(t('common.error'), t('movement.fillRequired') || 'Veuillez remplir les champs obligatoires (Date, Type, Quantité).');
+      toast.error(
+        t('common.error'),
+        t('movement.fillRequired') || 'Veuillez remplir les champs obligatoires (Date, Type, Quantité).'
+      );
       return;
     }
 
     if (lotPurchaseDate && date < lotPurchaseDate) {
-      Alert.alert(t('common.error'), "La date de cette action ne peut pas être antérieure à la date de création du lot.");
+      toast.error(t('common.error'), t('movement.dateBeforeLotError'));
       return;
     }
     
     const uppercaseType = type.toUpperCase();
     if (!['MORT', 'MALADE', 'GUERI', 'AJOUT'].includes(uppercaseType)) {
-      Alert.alert(t('common.error'), t('movement.errorType') || 'Type de mouvement invalide.');
+      toast.error(t('common.error'), t('movement.errorType'));
       return;
     }
 
@@ -49,38 +55,29 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
 
     try {
       if (isEdit) {
-        await apiClient.put(`/movements/${item.id}/`, payload);
-        Alert.alert(t('common.success'), t('movement.updated') || 'Mouvement mis à jour !');
+        await repositoryProvider.api.put(`/movements/${item.id}/`, payload);
+        toast.success(t('common.success'), t('movement.updated'));
       } else {
-        await apiClient.post('/movements/', payload);
-        Alert.alert(t('common.success'), t('movement.success') || 'Mouvement enregistré !');
+        await repositoryProvider.api.post('/movements/', payload);
+        toast.success(t('common.success'), t('movement.success'));
       }
       navigation.goBack();
     } catch (e: any) {
-      if (!e.response) {
-        console.log('Movement post failed, queuing offline:', e);
-        await addToSyncQueue('POST', '/movements/', payload);
-        Alert.alert(
-          t('common.offline'),
-          t('movement.offlineSaved') || 'Connexion instable. Les données ont été enregistrées localement et seront synchronisées plus tard.',
-          [{ text: 'OK', onPress: () => navigation.goBack() }]
-        );
-      } else {
-        Alert.alert(t('common.error'), t('common.errorSave') || "Impossible d'enregistrer le mouvement.");
-      }
+      toast.error(
+        t('common.actionImpossible'),
+        getErrorMessage(e, t('common.errorSave'))
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  const types = [
+  const types = useMemo(() => [
     { id: 'MORT', label: t('movement.types.mort'), icon: 'sentiment-very-dissatisfied', color: '#D32F2F' },
     { id: 'MALADE', label: t('movement.types.malade'), icon: 'sick', color: '#F57C00' },
     { id: 'GUERI', label: t('movement.types.gueri'), icon: 'health-and-safety', color: '#388E3C' },
     { id: 'AJOUT', label: t('movement.types.ajout'), icon: 'add-circle', color: '#1565C0' },
-  ];
-
-  const styles = createStyles(theme);
+  ], [t]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -93,7 +90,7 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
             <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>
-            {isEdit ? (t('movement.edit') || 'Modifier Mouvement') : (t('movement.title') || 'Mouvement du cheptel')}
+            {isEdit ? t('movement.edit') : t('movement.title')}
           </Text>
           <View style={{ width: 40 }} />
         </View>
@@ -118,7 +115,7 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
                 key={t.id}
                 style={[
                   styles.typeButton,
-                  type === t.id && { borderColor: t.color, backgroundColor: t.color + '15' }
+                  type === t.id && { borderColor: t.color, backgroundColor: t.color + '15', borderWidth: 1 }
                 ]}
                 onPress={() => setType(t.id)}
               >
@@ -169,7 +166,7 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
           </Card>
 
           <Button
-            title={isEdit ? (t('common.update') || 'Mettre à jour') : (t('movement.save') || "Enregistrer le mouvement")}
+            title={isEdit ? t('common.update') : t('movement.save')}
             onPress={handleSubmit}
             loading={loading}
             style={styles.submitBtn}
@@ -210,7 +207,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.l,
     borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface
   },
   lotInfoContent: {
     flexDirection: 'row',
@@ -239,9 +237,10 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
+    fontWeight: '900',
     color: theme.colors.text,
     marginBottom: theme.spacing.m,
+    textTransform: 'uppercase'
   },
   typeSelector: {
     flexDirection: 'row',
@@ -256,21 +255,24 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginHorizontal: 4,
-    borderWidth: 2,
-    borderColor: 'transparent',
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     ...theme.shadows.light,
   },
   typeLabel: {
     fontSize: 12,
     marginTop: 6,
     color: theme.colors.textSecondary,
+    fontWeight: '900',
+    textTransform: 'uppercase'
   },
   formCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.xl,
     borderWidth: 1,
-    borderColor: theme.colors.border + '40',
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface
   },
   inputGroup: { marginBottom: theme.spacing.m },
   labelRow: {
@@ -281,18 +283,23 @@ const createStyles = (theme: any) => StyleSheet.create({
   label: {
     fontSize: 13,
     color: theme.colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '900',
     marginLeft: 8,
+    textTransform: 'uppercase'
   },
   fieldInput: {
     marginBottom: 0,
-    backgroundColor: theme.colors.background + '40',
+    backgroundColor: theme.colors.background,
     borderRadius: theme.borderRadius.m,
+    borderWidth: 1,
+    borderColor: theme.colors.border
   },
   submitBtn: {
     height: 56,
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.primary,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.1)',
     ...theme.shadows.medium,
   }
 });
