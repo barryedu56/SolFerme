@@ -60,15 +60,15 @@ export class LocalRepository<T extends { id?: number }> {
     const existingPendingUpdate = await getSyncQueueItemByLocalId(id, this.tableName);
     const serverId = await getServerIdForLocalId(id, this.tableName);
     const targetId = serverId || id;
-    const payload = cleanPayload(payload);
+    const cleanedPayload = cleanPayload(payload);
 
     if (existingPendingUpdate && existingPendingUpdate.operation === 'UPDATE') {
-      const mergedPayload = { ...JSON.parse(existingPendingUpdate.payload_json), ...payload };
+      const mergedPayload = { ...JSON.parse(existingPendingUpdate.payload_json), ...cleanedPayload };
       await updateSyncQueueItem(existingPendingUpdate.id, { payload_json: JSON.stringify(mergedPayload), updated_at: new Date().toISOString() });
       return updatedData as T;
     }
 
-    await enqueueSyncQueue('UPDATE', `${this.endpoint}${targetId}/`, payload, id, this.tableName);
+    await enqueueSyncQueue('UPDATE', `${this.endpoint}${targetId}/`, cleanedPayload, id, this.tableName);
     return updatedData as T;
   }
 

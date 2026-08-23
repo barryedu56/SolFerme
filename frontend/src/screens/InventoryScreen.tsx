@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, ActivityIndicator
+  RefreshControl, ActivityIndicator, useWindowDimensions, Alert, Platform
 } from 'react-native';
 import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -9,7 +9,9 @@ import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { repositoryProvider } from '../repositories';
 import { useTranslation } from '../context/LanguageContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatNumber } from '../utils/formatters';
+import { generateInventoryPDF } from '../utils/reportGenerator';
 
 import { STOCK_THRESHOLDS } from '../constants/InventoryConstants';
 import { EmptyState } from '../components/EmptyState';
@@ -28,6 +30,7 @@ export const InventoryScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { userFarms } = useAuth() as any;
   const { t } = useTranslation();
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -55,15 +58,15 @@ export const InventoryScreen = ({ navigation }: any) => {
       else if (selectedFarm !== 'ALL') params.farm = selectedFarm;
 
       const [rawRes, prepRes, healthRes] = await Promise.all([
-        repositoryProvider.api.get('/feed-inventory/', { params }),
-        repositoryProvider.api.get('/prepared-feed-inventory/', { params }),
-        repositoryProvider.api.get('/health-inventory/', { params }),
+        repositoryProvider.feedInventory.list(params),
+        repositoryProvider.preparedFeedInventory.list(params),
+        repositoryProvider.healthInventory.list(params),
       ]);
 
       setInventory({
-        rawMaterials: rawRes.data,
-        preparedFeeds: prepRes.data,
-        health: healthRes.data,
+        rawMaterials: rawRes,
+        preparedFeeds: prepRes,
+        health: healthRes,
       });
     } catch (e) {
       console.error('Stock error:', e);
@@ -75,6 +78,40 @@ export const InventoryScreen = ({ navigation }: any) => {
 
   useEffect(() => { fetchData(); }, [selectedFarm, selectedLot]);
   const onRefresh = () => { setRefreshing(true); fetchData(); };
+
+  const handleExportPDF = async () => {
+    const hasData = inventory.rawMaterials.length > 0 || inventory.preparedFeeds.length > 0 || inventory.health.length > 0;
+    if (!hasData) {
+      Alert.alert(t('common.info') || 'Info', t('common.noData') || 'Aucune donnée à exporter.');
+      return;
+    }
+
+    const farmName = selectedFarm === 'ALL'
+      ? (t('common.all') || 'Toutes')
+      : userFarms?.find((f: any) => f.id === selectedFarm)?.name || '';
+
+    const currentLots = userFarms?.find((f: any) => f.id === selectedFarm)?.lots || [];
+    const lotName = selectedLot !== 'ALL'
+      ? currentLots.find((l: any) => l.id === selectedLot)?.name
+      : undefined;
+
+    await generateInventoryPDF(
+      {
+        rawMaterials: sortedRaw,
+        preparedFeeds: sortedPrep,
+        health: sortedHealth,
+      },
+      {
+        farmName,
+        lotName,
+        dateStr: new Date().toLocaleString(t('common.dateLocale') || 'fr-FR'),
+        totalFeed,
+        totalHealth,
+        thresholds: STOCK_THRESHOLDS,
+      },
+      t
+    );
+  };
 
   const sortFn = (a: any, b: any, getQty: (x: any) => number, getName: (x: any) => string) => {
     if (sortBy === 'name') return getName(a).localeCompare(getName(b));
@@ -109,12 +146,12 @@ export const InventoryScreen = ({ navigation }: any) => {
   const showFeed = selectedType === 'ALL' || selectedType === 'FEED';
   const showHealth = selectedType === 'ALL' || selectedType === 'HEALTH';
 
-  const S = createStyles(theme, isDarkMode);
+  const S = createStyles(theme, isDarkMode, isDesktop, isTablet, isDesktopOrTablet);
 
   const StockCard = ({ name, qty, unit, statusType, icon, iconLib = 'community', sub }: any) => {
     const st = getStatus(parseFloat(qty), statusType);
     return (
-      <View style={S.stockCard}>
+      <View style={[S.stockCard, isDesktop && S.stockCardDesktop]}>
         <View style={[S.stockIconWrap, { backgroundColor: st.color + '15' }]}>
           {iconLib === 'material'
             ? <MaterialIcons name={icon} size={22} color={st.color} />
@@ -140,87 +177,19 @@ export const InventoryScreen = ({ navigation }: any) => {
     <SafeAreaWrapper style={S.container}>
       {/* ── HEADER ── */}
       <View style={S.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
-          <MaterialIcons name="arrow-back" size={22} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={S.title}>{t('inventory.title')}</Text>
-        <TouchableOpacity onPress={onRefresh} style={S.backBtn}>
-          <MaterialIcons name="refresh" size={22} color={theme.colors.primary} />
-        </TouchableOpacity>
-      </View>
-
-      {/* ── FILTRES ── */}
-      <View style={S.filterBar}>
-        {/* Fermes */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <TouchableOpacity
-            style={[S.chip, selectedFarm === 'ALL' && S.chipActive]}
-            onPress={() => { setSelectedFarm('ALL'); setSelectedLot('ALL'); }}
-          >
-            <MaterialIcons name="domain" size={13} color={selectedFarm === 'ALL' ? '#fff' : theme.colors.textSecondary} />
-            <Text style={[S.chipTxt, selectedFarm === 'ALL' && S.chipTxtActive]}>  {t('common.all')}</Text>
+        <View style={S.headerLeft}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn}>
+            <MaterialIcons name="arrow-back" size={22} color={theme.colors.text} />
           </TouchableOpacity>
-          {userFarms?.map((f: any) => (
-            <TouchableOpacity
-              key={f.id}
-              style={[S.chip, selectedFarm === f.id && S.chipActive]}
-              onPress={() => { setSelectedFarm(f.id); setSelectedLot('ALL'); }}
-            >
-              <Text style={[S.chipTxt, selectedFarm === f.id && S.chipTxtActive]}>{f.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-
-        {/* Lots */}
-        {selectedFarm !== 'ALL' && currentFarmLots.length > 0 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
-            <TouchableOpacity
-              style={[S.chip, S.chipSm, selectedLot === 'ALL' && S.chipSmActive]}
-              onPress={() => setSelectedLot('ALL')}
-            >
-              <Text style={[S.chipTxtSm, selectedLot === 'ALL' && S.chipTxtSmActive]}>{t('lots.allLots')}</Text>
-            </TouchableOpacity>
-            {currentFarmLots.map((lot: any) => (
-              <TouchableOpacity
-                key={lot.id}
-                style={[S.chip, S.chipSm, selectedLot === lot.id && S.chipSmActive]}
-                onPress={() => setSelectedLot(lot.id)}
-              >
-                <Text style={[S.chipTxtSm, selectedLot === lot.id && S.chipTxtSmActive]}>{lot.name}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        )}
-
-        {/* Type + Tri */}
-        <View style={S.controlRow}>
-          <View style={S.typeRow}>
-            {(['ALL', 'FEED', 'HEALTH'] as const).map(type => (
-              <TouchableOpacity
-                key={type}
-                style={[S.typeBtn, selectedType === type && S.typeBtnActive]}
-                onPress={() => setSelectedType(type)}
-              >
-                {type === 'ALL' && <MaterialIcons name="apps" size={13} color={selectedType === type ? theme.colors.primary : theme.colors.textSecondary} />}
-                {type === 'FEED' && <MaterialCommunityIcons name="food-apple-outline" size={13} color={selectedType === type ? theme.colors.primary : theme.colors.textSecondary} />}
-                {type === 'HEALTH' && <MaterialIcons name="medical-services" size={13} color={selectedType === type ? '#E91E63' : theme.colors.textSecondary} />}
-                <Text style={[S.typeTxt, selectedType === type && S.typeTxtActive, type === 'HEALTH' && selectedType === type && { color: '#E91E63' }]}>
-                  {' '}{type === 'ALL' ? t('common.all') : type === 'FEED' ? t('actions.nutrition') : t('actions.health')}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          <View style={S.sortRow}>
-            {([['name', 'sort-by-alpha'], ['qty_desc', 'arrow-downward'], ['qty_asc', 'arrow-upward']] as [string, any][]).map(([val, icon]) => (
-              <TouchableOpacity
-                key={val}
-                style={[S.sortBtn, sortBy === val && S.sortBtnActive]}
-                onPress={() => setSortBy(val as any)}
-              >
-                <MaterialIcons name={icon} size={16} color={sortBy === val ? theme.colors.primary : theme.colors.textSecondary} />
-              </TouchableOpacity>
-            ))}
-          </View>
+          <Text style={S.title}>{t('inventory.title')}</Text>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <TouchableOpacity onPress={onRefresh} style={S.backBtn}>
+            <MaterialIcons name="refresh" size={22} color={theme.colors.primary} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handleExportPDF} style={[S.backBtn, { backgroundColor: theme.colors.primary + '18' }]}>
+            <MaterialIcons name="picture-as-pdf" size={22} color={theme.colors.primary} />
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -231,7 +200,82 @@ export const InventoryScreen = ({ navigation }: any) => {
         {loading && !refreshing ? (
           <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginTop: 60 }} />
         ) : (
-          <>
+          <View style={S.mainLayout}>
+            {/* ── FILTRES ── */}
+            <View style={S.filterBar}>
+              {/* Fermes */}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <TouchableOpacity
+                  style={[S.chip, selectedFarm === 'ALL' && S.chipActive]}
+                  onPress={() => { setSelectedFarm('ALL'); setSelectedLot('ALL'); }}
+                >
+                  <MaterialIcons name="domain" size={13} color={selectedFarm === 'ALL' ? '#fff' : theme.colors.textSecondary} />
+                  <Text style={[S.chipTxt, selectedFarm === 'ALL' && S.chipTxtActive]}>  {t('common.all')}</Text>
+                </TouchableOpacity>
+                {userFarms?.map((f: any) => (
+                  <TouchableOpacity
+                    key={f.id}
+                    style={[S.chip, selectedFarm === f.id && S.chipActive]}
+                    onPress={() => { setSelectedFarm(f.id); setSelectedLot('ALL'); }}
+                  >
+                    <Text style={[S.chipTxt, selectedFarm === f.id && S.chipTxtActive]}>{f.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+
+              {/* Lots */}
+              {selectedFarm !== 'ALL' && currentFarmLots.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                  <TouchableOpacity
+                    style={[S.chip, S.chipSm, selectedLot === 'ALL' && S.chipSmActive]}
+                    onPress={() => setSelectedLot('ALL')}
+                  >
+                    <Text style={[S.chipTxtSm, selectedLot === 'ALL' && S.chipTxtSmActive]}>{t('lots.allLots')}</Text>
+                  </TouchableOpacity>
+                  {currentFarmLots.map((lot: any) => (
+                    <TouchableOpacity
+                      key={lot.id}
+                      style={[S.chip, S.chipSm, selectedLot === lot.id && S.chipSmActive]}
+                      onPress={() => setSelectedLot(lot.id)}
+                    >
+                      <Text style={[S.chipTxtSm, selectedLot === lot.id && S.chipTxtSmActive]}>{lot.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+
+              {/* Type + Tri */}
+              <View style={S.controlRow}>
+                <View style={S.typeRow}>
+                  {(['ALL', 'FEED', 'HEALTH'] as const).map(type => (
+                    <TouchableOpacity
+                      key={type}
+                      style={[S.typeBtn, selectedType === type && S.typeBtnActive]}
+                      onPress={() => setSelectedType(type)}
+                    >
+                      {type === 'ALL' && <MaterialIcons name="apps" size={13} color={selectedType === type ? theme.colors.primary : theme.colors.textSecondary} />}
+                      {type === 'FEED' && <MaterialCommunityIcons name="food-apple-outline" size={13} color={selectedType === type ? theme.colors.primary : theme.colors.textSecondary} />}
+                      {type === 'HEALTH' && <MaterialIcons name="medical-services" size={13} color={selectedType === type ? '#E91E63' : theme.colors.textSecondary} />}
+                      <Text style={[S.typeTxt, selectedType === type && S.typeTxtActive, type === 'HEALTH' && selectedType === type && { color: '#E91E63' }]}>
+                        {' '}{type === 'ALL' ? t('common.all') : type === 'FEED' ? t('actions.nutrition') : t('actions.health')}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <View style={S.sortRow}>
+                  {([['name', 'sort-by-alpha'], ['qty_desc', 'arrow-downward'], ['qty_asc', 'arrow-upward']] as [string, any][]).map(([val, icon]) => (
+                    <TouchableOpacity
+                      key={val}
+                      style={[S.sortBtn, sortBy === val && S.sortBtnActive]}
+                      onPress={() => setSortBy(val as any)}
+                    >
+                      <MaterialIcons name={icon} size={16} color={sortBy === val ? theme.colors.primary : theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            </View>
+
             {/* ── RÉSUMÉ TOTAL ── */}
             <View style={S.summaryRow}>
               {showFeed && (
@@ -260,17 +304,19 @@ export const InventoryScreen = ({ navigation }: any) => {
                   <Text style={S.secTitle}>{t('inventory.rawMaterials')}</Text>
                   <Text style={S.secBadge}>{sortedRaw.length} {t('inventory.productsCount')}</Text>
                 </View>
-                {sortedRaw.map((item, i) => (
-                  <StockCard
-                    key={i}
-                    name={item.feed_type}
-                    qty={item.quantity_kg}
-                    unit={t('common.kg')}
-                    statusType="feed"
-                    icon={getFeedIcon(item.feed_type)}
-                    iconLib="community"
-                  />
-                ))}
+                <View style={S.cardsGrid}>
+                  {sortedRaw.map((item, i) => (
+                    <StockCard
+                      key={i}
+                      name={item.feed_type}
+                      qty={item.quantity_kg}
+                      unit={t('common.kg')}
+                      statusType="feed"
+                      icon={getFeedIcon(item.feed_type)}
+                      iconLib="community"
+                    />
+                  ))}
+                </View>
               </View>
             )}
 
@@ -284,17 +330,19 @@ export const InventoryScreen = ({ navigation }: any) => {
                   <Text style={S.secTitle}>{t('inventory.preparedFeeds')}</Text>
                   <Text style={S.secBadge}>{sortedPrep.length} {t('inventory.mixesCount')}</Text>
                 </View>
-                {sortedPrep.map((item, i) => (
-                  <StockCard
-                    key={i}
-                    name={item.feed_name}
-                    qty={item.quantity_kg}
-                    unit={t('common.kg')}
-                    statusType="feed"
-                    icon="food-variant"
-                    iconLib="community"
-                  />
-                ))}
+                <View style={S.cardsGrid}>
+                  {sortedPrep.map((item, i) => (
+                    <StockCard
+                      key={i}
+                      name={item.feed_name}
+                      qty={item.quantity_kg}
+                      unit={t('common.kg')}
+                      statusType="feed"
+                      icon="food-variant"
+                      iconLib="community"
+                    />
+                  ))}
+                </View>
               </View>
             )}
 
@@ -308,18 +356,20 @@ export const InventoryScreen = ({ navigation }: any) => {
                   <Text style={S.secTitle}>{t('inventory.healthProductsTitle')}</Text>
                   <Text style={[S.secBadge, { color: '#E91E63', backgroundColor: '#E91E63' + '15' }]}>{sortedHealth.length} {t('inventory.productsCount')}</Text>
                 </View>
-                {sortedHealth.map((item, i) => (
-                  <StockCard
-                    key={i}
-                    name={item.product_name}
-                    qty={item.quantity}
-                    unit={item.unit || t('common.unit')}
-                    statusType="health"
-                    icon="pill"
-                    iconLib="community"
-                    sub={item.product_type}
-                  />
-                ))}
+                <View style={S.cardsGrid}>
+                  {sortedHealth.map((item, i) => (
+                    <StockCard
+                      key={i}
+                      name={item.product_name}
+                      qty={item.quantity}
+                      unit={item.unit || t('common.unit')}
+                      statusType="health"
+                      icon="pill"
+                      iconLib="community"
+                      sub={item.product_type}
+                    />
+                  ))}
+                </View>
               </View>
             )}
 
@@ -339,19 +389,42 @@ export const InventoryScreen = ({ navigation }: any) => {
             )}
 
             <View style={{ height: 40 }} />
-          </>
+          </View>
         )}
       </ScrollView>
     </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isDarkMode: boolean, isDesktop: boolean, isTablet: boolean, isDesktopOrTablet: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   backBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: theme.colors.surface, justifyContent: 'center', alignItems: 'center', ...theme.shadows.light },
-  title: { fontSize: 17, fontWeight: '800', color: theme.colors.text },
-  filterBar: { backgroundColor: theme.colors.surface, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
+  title: { fontSize: 17, fontWeight: '800', color: theme.colors.text, marginLeft: 12 },
+  filterBar: {
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    marginBottom: 20,
+  },
   chip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: theme.colors.background, borderWidth: 1, borderColor: theme.colors.border, marginRight: 8 },
   chipActive: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
   chipTxt: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
@@ -361,7 +434,7 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
   chipTxtSm: { fontSize: 11, color: theme.colors.textSecondary },
   chipTxtSmActive: { color: theme.colors.primary, fontWeight: '700' },
   controlRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 },
-  typeRow: { flexDirection: 'row', backgroundColor: theme.colors.background, borderRadius: 10, padding: 3, borderWidth: 1, borderColor: theme.colors.border, flex: 1, marginRight: 8 },
+  typeRow: { flexDirection: 'row', backgroundColor: theme.colors.background, borderRadius: 10, padding: 3, borderWidth: 1, borderColor: theme.colors.border, flex: 1, marginRight: 8, maxWidth: isDesktop ? 400 : 'auto' },
   typeBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 6, borderRadius: 8 },
   typeBtnActive: { backgroundColor: theme.colors.surface, ...theme.shadows.light },
   typeTxt: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '600' },
@@ -370,16 +443,41 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
   sortBtn: { width: 34, height: 34, borderRadius: 10, backgroundColor: theme.colors.background, borderWidth: 1, borderColor: theme.colors.border, justifyContent: 'center', alignItems: 'center' },
   sortBtnActive: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primary + '15' },
   scroll: { padding: 16 },
+  mainLayout: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
   summaryRow: { flexDirection: 'row', gap: 12, marginBottom: 20 },
   summaryCard: { flex: 1, backgroundColor: theme.colors.surface, borderRadius: 16, padding: 14, alignItems: 'center', borderLeftWidth: 4, ...theme.shadows.light },
   summaryValue: { fontSize: 20, fontWeight: '800', color: theme.colors.text, marginTop: 6 },
   summaryLabel: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '600', marginTop: 2 },
-  section: { marginBottom: 20 },
-  secHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  section: { marginBottom: 24 },
+  secHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   secIconWrap: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  secTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: theme.colors.text },
+  secTitle: { flex: 1, fontSize: 16, fontWeight: '700', color: theme.colors.text },
   secBadge: { fontSize: 11, color: theme.colors.primary, backgroundColor: theme.colors.primary + '15', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, fontWeight: '700' },
-  stockCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 0.5, borderColor: theme.colors.border },
+  cardsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -8,
+  },
+  stockCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 0.5,
+    borderColor: theme.colors.border,
+    width: '100%',
+  },
+  stockCardDesktop: {
+    width: '31%',
+    marginHorizontal: '1%',
+    marginBottom: 16,
+  },
   stockIconWrap: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   stockInfo: { flex: 1 },
   stockName: { fontSize: 14, fontWeight: '700', color: theme.colors.text },

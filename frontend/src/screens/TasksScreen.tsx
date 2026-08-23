@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, useWindowDimensions, Modal, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -10,12 +10,14 @@ import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const TasksScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userRole } = useAuth();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
 
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -25,9 +27,7 @@ export const TasksScreen = ({ navigation }: any) => {
   const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const [taskDetails, setTaskDetails] = useState<any>(null);
 
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
-  const numColumns = isTablet ? 2 : 1;
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -105,7 +105,7 @@ export const TasksScreen = ({ navigation }: any) => {
   };
 
   const renderItem = ({ item }: { item: any }) => (
-    <View style={isTablet ? styles.tabletCardContainer : null}>
+    <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
       <TouchableOpacity onPress={() => handleShowDetails(item)} activeOpacity={0.7}>
         <Card style={[styles.taskCard, item.status === 'COMPLETED' && { opacity: 0.7 }]}>
           <View style={styles.taskHeader}>
@@ -194,7 +194,7 @@ export const TasksScreen = ({ navigation }: any) => {
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
           contentContainerStyle={styles.list}
-          columnWrapperStyle={isTablet ? styles.columnWrapper : null}
+          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchTasks} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
             <EmptyState
@@ -282,7 +282,7 @@ export const TasksScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -329,10 +329,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     width: '100%'
   },
   columnWrapper: {
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+    gap: theme.spacing.m,
   },
   tabletCardContainer: {
-    flex: 0.49,
+    flex: 1,
   },
   taskCard: {
     marginBottom: theme.spacing.m,

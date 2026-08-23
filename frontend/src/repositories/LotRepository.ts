@@ -24,4 +24,8 @@ export class LotRepository extends BaseRepository<Lot> {
   constructor() {
     super('/lots/');
   }
+
+  async archive(id: number | string): Promise<void> {
+    await this.api.post<void>(`${this.endpoint}${id}/archive/`);
+  }
 }

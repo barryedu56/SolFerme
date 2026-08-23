@@ -215,6 +215,29 @@ class FarmSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['owner']
 
+    def validate(self, data):
+        capacity = data.get('capacity', getattr(self.instance, 'capacity', None))
+        if capacity is None:
+            return data
+
+        try:
+            capacity = int(capacity)
+        except (TypeError, ValueError):
+            return data
+
+        if capacity < 0:
+            raise serializers.ValidationError({"capacity": "La capacité d'une ferme ne peut pas être négative."})
+
+        farm = self.instance
+        if farm is not None and capacity > 0:
+            current_occupancy = farm.lots.filter(status='ACTIF').aggregate(total=Sum('current_quantity'))['total'] or 0
+            if current_occupancy > capacity:
+                raise serializers.ValidationError({
+                    "capacity": f"La capacité de la ferme ne peut pas être inférieure à son occupation actuelle ({current_occupancy} poules)."
+                })
+
+        return data
+
     def get_has_data(self, obj):
         return (
             obj.lots.exists() or
@@ -750,8 +773,18 @@ class EmployeeSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         request = self.context.get('request')
+        lots = data.get('lots')
+        instance = self.instance
+        farm = data.get('farm', getattr(instance, 'farm', None))
+
+        if lots is not None:
+            if farm is None:
+                farm = getattr(instance, 'farm', None)
+            invalid_lots = [lot for lot in lots if lot.farm_id != getattr(farm, 'id', None)]
+            if invalid_lots:
+                raise serializers.ValidationError({"lots": "Les lots assignés doivent appartenir à la même ferme que l'employé."})
+
         if request and request.user.role != 'PROPRIETAIRE':
-            # Un employé ne peut pas modifier son salaire ou ses lots assignés
             if 'salary' in data:
                 raise serializers.ValidationError({"salary": "Seul un propriétaire peut modifier le salaire."})
             if 'lots' in data:

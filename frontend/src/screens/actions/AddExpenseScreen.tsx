@@ -9,11 +9,18 @@ import { useTranslation } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
+import { toast } from '../../utils/toast';
+import { getErrorMessage } from '../../utils/errors';
 
-export const AddExpenseScreen = ({ navigation }: any) => {
+export const AddExpenseScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole, userFarms } = useAuth() as any;
+  const { isDesktop } = useBreakpoint();
+  // item = Expense existante (mode edition)
+  const { item } = route.params || {};
+  const isEdit = !!item;
 
   useEffect(() => {
     if (userRole === 'EMPLOYE') {
@@ -32,55 +39,83 @@ export const AddExpenseScreen = ({ navigation }: any) => {
     t('expense.catMisc')
   ], [t]);
 
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState(CATEGORIES[6]); // Divers
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [description, setDescription] = useState(isEdit ? (item.description || '') : '');
+  const [category, setCategory] = useState(isEdit ? (item.category || CATEGORIES[6]) : CATEGORIES[6]);
+  const [amount, setAmount] = useState(isEdit ? String(item.amount || '') : '');
+  const [date, setDate] = useState(isEdit ? (item.date || new Date().toISOString().split('T')[0]) : new Date().toISOString().split('T')[0]);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async () => {
     if (loading) return;
     if (!description || !amount) {
-      Alert.alert(t('common.error'), t('expense.fillRequired'));
+      const msg = t('expense.fillRequired');
+      if (Platform.OS === 'web') { toast.error(t('common.error'), msg); }
+      else { Alert.alert(t('common.error'), msg); }
+      return;
+    }
+
+    const parsedAmount = parseFloat(amount.toString().replace(/\s/g, '')) || 0;
+    if (parsedAmount <= 0) {
+      const msg = 'Le montant doit etre superieur a zero.';
+      if (Platform.OS === 'web') { toast.error(t('common.error'), msg); }
+      else { Alert.alert(t('common.error'), msg); }
       return;
     }
 
     setLoading(true);
     try {
-      let farmId = null;
-      try {
-        const farmsRes = await repositoryProvider.api.get<any[]>('/farms/');
-        if (farmsRes.data && farmsRes.data.length > 0) {
-          farmId = farmsRes.data[0].id;
+      if (isEdit) {
+        // Mode edition : PUT sur la depense existante
+        const payload = {
+          category,
+          description,
+          amount: parsedAmount,
+          date,
+        };
+        await repositoryProvider.api.put(`/expenses/${item.id}/`, payload);
+        const successMsg = `Depense mise a jour : ${description} — ${parsedAmount} GNF`;
+        if (Platform.OS === 'web') { toast.success(t('common.success'), successMsg); }
+        else { Alert.alert(t('common.success'), successMsg); }
+      } else {
+        // Mode creation : POST
+        let farmId = null;
+        try {
+          const farmsRes = await repositoryProvider.api.get('/farms/');
+          if (farmsRes.data && farmsRes.data.length > 0) {
+            farmId = farmsRes.data[0].id;
+          }
+        } catch (err) {
+          // API failed, fallback to context
         }
-      } catch (err) {
-        // API failed, fallback to context
+
+        if (!farmId && userFarms && userFarms.length > 0) {
+          farmId = userFarms[0].id;
+        }
+
+        if (!farmId) {
+          const msg = t('expense.noFarmFound');
+          if (Platform.OS === 'web') { toast.error(t('common.error'), msg); }
+          else { Alert.alert(t('common.error'), msg); }
+          setLoading(false);
+          return;
+        }
+
+        const payload = {
+          farm: farmId,
+          category,
+          description,
+          amount: parsedAmount,
+          date,
+        };
+        await repositoryProvider.api.post('/expenses/', payload);
+        if (Platform.OS === 'web') { toast.success(t('common.success'), t('expense.success')); }
+        else { Alert.alert(t('common.success'), t('expense.success')); }
       }
-
-      if (!farmId && userFarms && userFarms.length > 0) {
-        farmId = userFarms[0].id;
-      }
-
-      if (!farmId) {
-        Alert.alert(t('common.error'), t('expense.noFarmFound'));
-        setLoading(false);
-        return;
-      }
-
-      const payload = {
-        farm: farmId,
-        category,
-        description,
-        amount: parseFloat(amount.toString().replace(/\s/g, '')) || 0,
-        date,
-      };
-
-      await repositoryProvider.api.post('/expenses/', payload);
-      Alert.alert(t('common.success'), t('expense.success'));
       navigation.goBack();
-    } catch (e) {
-      console.error(e);
-      Alert.alert(t('common.error'), t('expense.error'));
+    } catch (e: any) {
+      const errorMsg = getErrorMessage(e, t('expense.error') || 'Erreur lors de la sauvegarde de la dépense');
+      if (Platform.OS === 'web') { toast.error(t('common.error'), errorMsg); }
+      else { Alert.alert(t('common.error'), errorMsg); }
     } finally {
       setLoading(false);
     }
@@ -95,11 +130,13 @@ export const AddExpenseScreen = ({ navigation }: any) => {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{t('expense.newExpenseTitle')}</Text>
+          <Text style={styles.headerTitle}>
+            {isEdit ? 'Modifier la Depense' : t('expense.newExpenseTitle')}
+          </Text>
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
                <Text style={styles.label}>{t('expense.category')}</Text>
@@ -129,7 +166,12 @@ export const AddExpenseScreen = ({ navigation }: any) => {
             <DatePicker label={t('expense.date')} value={date} onChange={setDate} />
           </Card>
 
-          <Button title={t('expense.submit')} onPress={handleSubmit} loading={loading} style={styles.submitBtn} />
+          <Button
+            title={isEdit ? t('common.update') : t('expense.submit')}
+            onPress={handleSubmit}
+            loading={loading}
+            style={styles.submitBtn}
+          />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -142,6 +184,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   backButton: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, ...theme.shadows.light },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: { maxWidth: 640, width: '100%', alignSelf: 'center' },
   formCard: { padding: theme.spacing.m, borderRadius: theme.borderRadius.xl, marginBottom: theme.spacing.l },
   inputGroup: { marginBottom: theme.spacing.m },
   label: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: 8, fontWeight: '600' },

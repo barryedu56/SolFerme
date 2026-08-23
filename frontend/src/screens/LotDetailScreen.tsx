@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Pressable, Alert, Platform } from 'react-native';
 import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
@@ -14,12 +14,14 @@ import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
 import { getErrorMessage } from '../utils/errors';
 import { useAutoRefreshData } from '../hooks/useDataChange';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const LotDetailScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
   const { lotName, lotId, farmId, farmName } = route.params || {};
+  const { isDesktop, isTablet } = useBreakpoint();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -201,6 +203,30 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
   };
 
   const handleArchiveLot = () => {
+    console.log('[TEST SOLFERME] ARCHIVE LOT CLICK');
+
+    const executeArchive = async () => {
+      console.log('[TEST SOLFERME] ARCHIVE LOT CONFIRMED');
+      try {
+        setLoading(true);
+        await repositoryProvider.api.post(`/lots/${lotId}/archive/`);
+        toast.success(t('common.success') || 'Succès', t('lots.archiveSuccess') || 'Le lot a été archivé avec succès.');
+        fetchLotData();
+      } catch (error: any) {
+        console.error('[TEST SOLFERME] ARCHIVE LOT ERROR:', error);
+        toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de l\'archivage du lot.'));
+        setLoading(false);
+      }
+    };
+
+    // Sur web, exécuter directement sans Alert.alert
+    if (Platform.OS === 'web') {
+      console.log('[TEST SOLFERME] ARCHIVE LOT: web path - executing directly');
+      executeArchive();
+      return;
+    }
+
+    // Sur native, utiliser Alert.alert pour confirmation
     Alert.alert(
       'Archiver le lot',
       'Voulez-vous vraiment archiver ce lot ? Les données seront conservées mais le lot ne sera plus actif.',
@@ -209,23 +235,37 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
         {
           text: 'Archiver',
           style: 'default',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await repositoryProvider.api.post(`/lots/${lotId}/archive/`);
-              toast.success(t('common.success') || 'Succès', t('lots.archiveSuccess') || 'Le lot a été archivé avec succès.');
-              fetchLotData();
-            } catch (error: any) {
-              toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de l\'archivage du lot.'));
-              setLoading(false);
-            }
-          }
+          onPress: executeArchive
         }
       ]
     );
   };
 
   const handleReactivateLot = () => {
+    const executeReactivate = async () => {
+      try {
+        console.log('[TEST SOLFERME] REACTIVATE LOT: calling API', { lotId, lotStatus: lotData?.status });
+        setLoading(true);
+        const response = await repositoryProvider.api.post(`/lots/${lotId}/reactivate/`);
+        console.log('[TEST SOLFERME] REACTIVATE LOT: API response', response);
+        toast.success(t('common.success') || 'Succès', t('lots.reactivateSuccess') || 'Le lot a été réactivé avec succès.');
+        fetchLotData();
+      } catch (error: any) {
+        console.error('[TEST SOLFERME] REACTIVATE LOT ERROR:', error);
+        console.error('[TEST SOLFERME] REACTIVATE LOT ERROR RESPONSE:', error.response?.data);
+        toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de la réactivation du lot.'));
+        setLoading(false);
+      }
+    };
+
+    // Sur web, exécuter directement sans Alert.alert
+    if (Platform.OS === 'web') {
+      console.log('[TEST SOLFERME] REACTIVATE LOT: web path - executing directly');
+      executeReactivate();
+      return;
+    }
+
+    // Sur native, utiliser Alert.alert pour confirmation
     Alert.alert(
       'Réactiver le lot',
       'Voulez-vous vraiment réactiver ce lot ? Les actions métier redeviendront disponibles.',
@@ -234,23 +274,14 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
         {
           text: 'Réactiver',
           style: 'default',
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await repositoryProvider.api.post(`/lots/${lotId}/reactivate/`);
-              toast.success(t('common.success') || 'Succès', t('lots.reactivateSuccess') || 'Le lot a été réactivé avec succès.');
-              fetchLotData();
-            } catch (error: any) {
-              toast.error(t('common.error'), getErrorMessage(error, 'Erreur lors de la réactivation du lot.'));
-              setLoading(false);
-            }
-          }
+          onPress: executeReactivate
         }
       ]
     );
   };
 
   const handleExportProduction = async () => {
+    console.log('[TEST SOLFERME] EXPORT LOT PRODUCTION CLICK');
     if (allProductions.length === 0) {
       toast.info(t('common.info') || 'Info', t('lots.exportNoData'));
       return;
@@ -258,11 +289,88 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
     try {
       await exportProductionData(allProductions, lotName, t);
     } catch (error) {
+      console.error('[TEST SOLFERME] EXPORT LOT PRODUCTION ERROR:', error);
       toast.error(t('common.error'), t('lots.exportError'));
     }
   };
 
   const handleCancelAction = (item: any) => {
+    console.log('[TEST SOLFERME] CANCEL HISTORY CLICK (LotDetail)', item);
+
+    const executeCancel = async () => {
+      console.log('[TEST SOLFERME] CANCEL HISTORY CONFIRMED (LotDetail)', item);
+      try {
+        let endpoint = '';
+        const actionLower = item.action.toLowerCase();
+        const relatedId = item.related_id || item.id;
+
+        if (actionLower.includes('conversion')) {
+          endpoint = `/egg-conversions/${relatedId}/`;
+        } else if (actionLower.includes('paiement vente') || actionLower.includes('payment')) {
+          endpoint = `/sale-payments/${relatedId}/`;
+        } else if (actionLower.includes('vente poules')) {
+          endpoint = `/sales/${relatedId}/`;
+        } else if (actionLower.includes('vente') || actionLower.includes('sale')) {
+          endpoint = `/sales/${relatedId}/`;
+        } else if (actionLower.includes('salaire')) {
+          endpoint = `/payrolls/${relatedId}/`;
+        } else if (actionLower.includes('prime')) {
+          endpoint = `/bonuses/${relatedId}/`;
+        } else if (actionLower.includes('dépense') || actionLower.includes('expense')) {
+          endpoint = `/expenses/${relatedId}/`;
+        } else if (actionLower.includes('production') || actionLower.includes('casiers')) {
+          endpoint = `/productions/${relatedId}/`;
+        } else if (actionLower.includes('achat aliment') || actionLower.includes('feed purchase')) {
+          endpoint = `/feed-purchases/${relatedId}/`;
+        } else if (actionLower.includes('préparation') || actionLower.includes('preparation')) {
+          endpoint = `/feed-preparations/${relatedId}/`;
+        } else if (actionLower.includes('aliment') || actionLower.includes('nutrition')) {
+          endpoint = `/feeds/${relatedId}/`;
+        } else if (actionLower.includes('achat santé') || actionLower.includes('health purchase')) {
+          endpoint = `/health-purchases/${relatedId}/`;
+        } else if (actionLower.includes('santé') || actionLower.includes('health') || actionLower.includes('traitement') || actionLower.includes('soin')) {
+          endpoint = `/health-records/${relatedId}/`;
+        } else if (actionLower.includes('mouvement') || actionLower.includes('movement')) {
+          endpoint = `/movements/${relatedId}/`;
+        } else if (actionLower.includes('rappel')) {
+          endpoint = `/reminders/${relatedId}/`;
+        }
+
+        if (endpoint) {
+          await repositoryProvider.api.delete(endpoint);
+          
+          import('../utils/dataEvents').then(({ emitDataChange }) => {
+            emitDataChange({ tableName: 'lots' });
+            emitDataChange({ tableName: 'productions' });
+            emitDataChange({ tableName: 'sales' });
+            emitDataChange({ tableName: 'feeds' });
+            emitDataChange({ tableName: 'chicken_movements' });
+            emitDataChange({ tableName: 'health_records' });
+            emitDataChange({ tableName: 'expenses' });
+            emitDataChange({ tableName: 'egg_conversions' });
+            emitDataChange({ tableName: 'feed_purchases' });
+            emitDataChange({ tableName: 'health_purchases' });
+          });
+
+          toast.success(t('common.success'), t('common.cancelSuccess'));
+          fetchLotData();
+        } else {
+          toast.error(t('common.error'), t('common.actionImpossible'));
+        }
+      } catch (error: any) {
+        toast.error(t('common.actionImpossible'), getErrorMessage(error, t('common.cancelError')));
+      }
+    };
+
+    // Sur web, utiliser window.confirm() — Alert.alert avec boutons est ignoré par le navigateur
+    if (Platform.OS === 'web') {
+      if (window.confirm(t('finance.confirmCancelMsg'))) {
+        executeCancel();
+      }
+      return;
+    }
+
+    // Sur native (Android/iOS), utiliser Alert.alert
     Alert.alert(
       t('finance.confirmCancelTitle'),
       t('finance.confirmCancelMsg'),
@@ -271,37 +379,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
         {
           text: t('finance.yesCancel'),
           style: 'destructive',
-          onPress: async () => {
-            try {
-              let endpoint = '';
-              const module = item.module;
-              const relatedId = item.related_id || item.id;
-
-              if (module === 'Production') endpoint = `/productions/${relatedId}/`;
-              else if (module === 'Vente') endpoint = `/sales/${relatedId}/`;
-              else if (module === 'Alimentation') {
-                 if (item.action.includes('Achat')) endpoint = `/feed-purchases/${relatedId}/`;
-                 else if (item.action.includes('PREPARATION')) endpoint = `/feed-preparations/${relatedId}/`;
-                 else endpoint = `/feeds/${relatedId}/`;
-              }
-              else if (module === 'Santé') {
-                 if (item.action.includes('Achat')) endpoint = `/health-purchases/${relatedId}/`;
-                 else endpoint = `/health-records/${relatedId}/`;
-              }
-              else if (module === 'Mouvement') endpoint = `/movements/${relatedId}/`;
-              else if (module === 'Finance') endpoint = `/expenses/${relatedId}/`;
-
-              if (endpoint) {
-                await repositoryProvider.api.delete(endpoint);
-                toast.success(t('common.success'), t('common.cancelSuccess'));
-                fetchLotData();
-              } else {
-                toast.error(t('common.error'), t('common.actionImpossible'));
-              }
-            } catch (error: any) {
-              toast.error(t('common.actionImpossible'), getErrorMessage(error, t('common.cancelError')));
-            }
-          }
+          onPress: executeCancel
         }
       ]
     );
@@ -312,45 +390,66 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       setLoading(true);
       let endpoint = '';
       let screen = '';
-      const module = item.module;
+      const actionLower = item.action.toLowerCase();
       const relatedId = item.related_id || item.id;
 
-      if (module === 'Production') {
-        endpoint = `/productions/${relatedId}/`;
-        screen = 'ActionProduction';
-      } else if (module === 'Vente') {
+      if (actionLower.includes('conversion')) {
+        endpoint = `/egg-conversions/${relatedId}/`;
+        screen = 'ProductionConvert';
+      } else if (actionLower.includes('paiement vente') || actionLower.includes('payment')) {
+        setLoading(false);
+        const msg = "Pour modifier un paiement de vente, veuillez vous rendre sur la carte de la vente correspondante et gérer ses paiements.";
+        if (Platform.OS === 'web') { toast.info(t('common.info'), msg); } else { Alert.alert(t('common.info'), msg); }
+        return;
+      } else if (actionLower.includes('vente poules')) {
+        endpoint = `/sales/${relatedId}/`;
+        screen = 'ActionVentePoules';
+      } else if (actionLower.includes('vente') || actionLower.includes('sale')) {
         endpoint = `/sales/${relatedId}/`;
         screen = 'ActionVente';
-      } else if (module === 'Alimentation') {
-        if (item.action.includes('Achat')) {
-          endpoint = `/feed-purchases/${relatedId}/`;
-          screen = 'Purchase';
-        } else if (item.action.includes('PREPARATION')) {
-          endpoint = `/feed-preparations/${relatedId}/`;
-          screen = 'ActionPreparation';
-        } else {
-          endpoint = `/feeds/${relatedId}/`;
-          screen = 'ActionAlimentation';
-        }
-      } else if (module === 'Santé') {
-        if (item.action.includes('Achat')) {
-          endpoint = `/health-purchases/${relatedId}/`;
-          screen = 'Purchase';
-        } else {
-          endpoint = `/health-records/${relatedId}/`;
-          screen = 'ActionSante';
-        }
-      } else if (module === 'Mouvement') {
-        endpoint = `/movements/${relatedId}/`;
-        screen = 'ActionMouvement';
-      } else if (module === 'Finance') {
+      } else if (actionLower.includes('salaire')) {
+        setLoading(false);
+        const msg = "La modification d'un salaire depuis l'historique sera bientôt disponible. Veuillez l'annuler et le recréer pour le moment.";
+        if (Platform.OS === 'web') { toast.info(t('common.info'), msg); } else { Alert.alert(t('common.info'), msg); }
+        return;
+      } else if (actionLower.includes('prime')) {
+        setLoading(false);
+        const msg = "Les primes ne peuvent pas être modifiées. Veuillez annuler la prime et en créer une nouvelle.";
+        if (Platform.OS === 'web') { toast.info(t('common.info'), msg); } else { Alert.alert(t('common.info'), msg); }
+        return;
+      } else if (actionLower.includes('dépense') || actionLower.includes('depense') || actionLower.includes('expense')) {
         endpoint = `/expenses/${relatedId}/`;
         screen = 'AddExpense';
+      } else if (actionLower.includes('production') || actionLower.includes('casiers')) {
+        endpoint = `/productions/${relatedId}/`;
+        screen = 'ActionProduction';
+      } else if (actionLower.includes('achat aliment') || actionLower.includes('feed purchase')) {
+        endpoint = `/feed-purchases/${relatedId}/`;
+        screen = 'Purchase';
+      } else if (actionLower.includes('préparation') || actionLower.includes('preparation')) {
+        endpoint = `/feed-preparations/${relatedId}/`;
+        screen = 'ActionPreparation';
+      } else if (actionLower.includes('aliment') || actionLower.includes('nutrition')) {
+        endpoint = `/feeds/${relatedId}/`;
+        screen = 'ActionAlimentation';
+      } else if (actionLower.includes('achat santé') || actionLower.includes('achat sante')) {
+        endpoint = `/health-purchases/${relatedId}/`;
+        screen = 'Purchase';
+      } else if (actionLower.includes('santé') || actionLower.includes('sante') || actionLower.includes('traitement') || actionLower.includes('soin')) {
+        endpoint = `/health-records/${relatedId}/`;
+        screen = 'ActionSante';
+      } else if (actionLower.includes('mouvement') || actionLower.includes('movement')) {
+        endpoint = `/movements/${relatedId}/`;
+        screen = 'ActionMouvement';
+      } else if (actionLower.includes('rappel')) {
+        endpoint = `/reminders/${relatedId}/`;
+        screen = 'ActionReminder';
       }
 
       if (!endpoint || !screen) {
         setLoading(false);
-        toast.info(t('common.info'), "La modification de ce type d'action n'est pas encore supportée.");
+        const msg = "La modification de ce type d'action n'est pas encore supportée.";
+        if (Platform.OS === 'web') { toast.info(t('common.info'), msg); } else { Alert.alert(t('common.info'), msg); }
         return;
       }
 
@@ -359,43 +458,84 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       
       // Ajustement dynamique de l'écran pour les ventes de poules
       let finalScreen = screen;
-      if (module === 'Vente' && originalItem.product_type === 'CHICKEN') {
+      if (originalItem.product_type === 'CHICKEN') {
         finalScreen = 'ActionVentePoules';
       }
 
-      navigation.navigate(finalScreen, {
+      // 🔧 Paramètres de navigation en fonction de l'écran cible
+      const navParams: any = {
         item: originalItem,
-        lotId,
-        lotName,
+        lotId: lotId,
+        lotName: lotName,
         farmId: item.farm || originalItem.farm || farmId,
-        category: item.action.includes('Achat') ? (module === 'Santé' ? 'health' : 'feed') : undefined
-      });
+      };
+
+      if (screen === 'ActionReminder') {
+        navParams.reminderId = relatedId;
+      } else if (screen === 'Purchase') {
+        navParams.type = actionLower.includes('santé') || actionLower.includes('sante') ? 'health' : 'feed';
+      }
+
+      navigation.navigate(finalScreen, navParams);
       
     } catch (error: any) {
       console.log('Erreur modification:', error);
-      toast.error(t('common.error'), "Impossible de récupérer les détails de l'action.");
+      if (Platform.OS === 'web') { toast.error(t('common.error'), "Impossible de récupérer les détails de l'action."); }
+      else { Alert.alert(t('common.error'), "Impossible de récupérer les détails de l'action."); }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleActionPress = (item: any) => {
-    if (item.action.toLowerCase().includes('annul')) {
-      toast.info(t('common.info'), t('common.actionImpossible'));
+  const handleActionPress = async (item: any) => {
+    if (item.action.toLowerCase().includes('annul') || item.action.toLowerCase().includes('suppression')) {
+      if (Platform.OS === 'web') { toast.info(t('common.info'), 'Cette action est déjà annulée.'); }
+      else { Alert.alert(t('common.info') || 'Info', 'Cette action est déjà annulée.'); }
       return;
     }
+
+    try {
+      const actionLower = item.action.toLowerCase();
+      const relatedId = item.related_id || item.id;
+      if (relatedId) {
+        let entityEndpoint = '';
+        if (actionLower.includes('conversion')) entityEndpoint = `/egg-conversions/${relatedId}/`;
+        else if (actionLower.includes('paiement vente') || actionLower.includes('payment')) entityEndpoint = `/sale-payments/${relatedId}/`;
+        else if (actionLower.includes('vente')) entityEndpoint = `/sales/${relatedId}/`;
+        else if (actionLower.includes('salaire')) entityEndpoint = `/payrolls/${relatedId}/`;
+        else if (actionLower.includes('prime')) entityEndpoint = `/bonuses/${relatedId}/`;
+        else if (actionLower.includes('dépense') || actionLower.includes('depense') || actionLower.includes('expense')) entityEndpoint = `/expenses/${relatedId}/`;
+        else if (actionLower.includes('production') || actionLower.includes('casiers')) entityEndpoint = `/productions/${relatedId}/`;
+        else if (actionLower.includes('achat aliment')) entityEndpoint = `/feed-purchases/${relatedId}/`;
+        else if (actionLower.includes('préparation') || actionLower.includes('preparation')) entityEndpoint = `/feed-preparations/${relatedId}/`;
+        else if (actionLower.includes('aliment') || actionLower.includes('nutrition')) entityEndpoint = `/feeds/${relatedId}/`;
+        else if (actionLower.includes('achat santé') || actionLower.includes('achat sante')) entityEndpoint = `/health-purchases/${relatedId}/`;
+        else if (actionLower.includes('santé') || actionLower.includes('sante') || actionLower.includes('traitement') || actionLower.includes('soin')) entityEndpoint = `/health-records/${relatedId}/`;
+        else if (actionLower.includes('mouvement') || actionLower.includes('movement')) entityEndpoint = `/movements/${relatedId}/`;
+
+        if (entityEndpoint) {
+          const res = await repositoryProvider.api.get(entityEndpoint).catch(() => null);
+          const entity = res?.data;
+          if (entity && (entity.status === 'ANNULEE' || entity.status === 'ANNULÉ' || entity.status === 'ANNULE')) {
+            if (Platform.OS === 'web') { toast.info(t('common.info') || 'Info', 'Cette action a déjà été annulée.'); }
+            else { Alert.alert(t('common.info') || 'Info', 'Cette action a déjà été annulée. Impossible de modifier ou annuler à nouveau.'); }
+            return;
+          }
+        }
+      }
+    } catch { /* best-effort */ }
 
     Alert.alert(
       t('common.info'),
       t('common.chooseAction') || "Options",
       [
         { text: t('common.cancel'), style: "cancel" },
-        { 
+        {
           text: t('common.edit'),
-          onPress: () => handleEditAction(item) 
+          onPress: () => handleEditAction(item)
         },
         {
-          text: t('common.delete'),
+          text: t('common.cancel') || 'Annuler l\'opération',
           style: 'destructive',
           onPress: () => handleCancelAction(item)
         }
@@ -423,7 +563,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
   //   Vendables actuels  = vendables initiaux + ∑conversions → VENDABLE
   const productionsWithConv = useMemo(() => {
     return allProductions
-      .filter((p: any) => p.status === 'ACTIF')
+      .filter((p: any) => String(p.status || 'ACTIF').toUpperCase() !== 'ANNULEE')
       .map((p: any) => {
         const pId = Number(p.id);
         const prodConvs = conversions.filter((c: any) =>
@@ -493,7 +633,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
 
   const isConvertibleUser = !isArchived && userRole !== 'EMPLOYE';
 
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet), [theme, isDesktop, isTablet]);
 
   if (loading && !refreshing) {
     return (
@@ -503,8 +643,29 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
     );
   }
 
-  const getModuleLabel = (module: string) => {
-    switch (module) {
+  const getModuleLabel = (module: string, action?: string) => {
+    // 🔧 Correction robuste : déduire le module de l'action si le module est incorrect
+    let correctedModule = module;
+    
+    // Si le module est incorrect ou manquant, déduire-le de l'action
+    if (action) {
+      const actionLower = action.toLowerCase();
+      if (actionLower.includes('production') || actionLower.includes('casiers') || actionLower.includes('collect')) {
+        correctedModule = 'Production';
+      } else if (actionLower.includes('vente') || actionLower.includes('sale') || actionLower.includes('client')) {
+        correctedModule = 'Vente';
+      } else if (actionLower.includes('aliment') || actionLower.includes('feed') || actionLower.includes('nutrition')) {
+        correctedModule = 'Alimentation';
+      } else if (actionLower.includes('santé') || actionLower.includes('health') || actionLower.includes('traitement') || actionLower.includes('vaccin')) {
+        correctedModule = 'Santé';
+      } else if (actionLower.includes('mouvement') || actionLower.includes('movement')) {
+        correctedModule = 'Mouvement';
+      } else if (actionLower.includes('dépense') || actionLower.includes('expense') || actionLower.includes('finance')) {
+        correctedModule = 'Finance';
+      }
+    }
+    
+    switch (correctedModule) {
       case 'Production': return t('actions.production');
       case 'Vente': return t('actions.sale');
       case 'Alimentation': return t('actions.nutrition') || 'Alimentation';
@@ -512,7 +673,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       case 'Mouvement': return t('actions.movement');
       case 'Finance': return t('actions.finance') || 'Finance';
       case 'Rappel': return t('actions.reminder');
-      default: return module;
+      default: return correctedModule;
     }
   };
 
@@ -544,6 +705,22 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       case 'ARCHIVE': return theme.colors.danger;
       default: return theme.colors.primary;
     }
+  };
+
+  const lotHasData = (data: any) => {
+    // Check if lot has any business data (productions, sales, feeds, health records, movements, etc.)
+    return (
+      data.totalCasiers > 0 ||
+      data.totalOeufs > 0 ||
+      data.deadCount > 0 ||
+      data.totalSick > 0 ||
+      data.revenues > 0 ||
+      data.expenses > 0 ||
+      data.reminders?.length > 0 ||
+      data.recentActions?.length > 0 ||
+      data.totalFeedConsumed > 0 ||
+      data.totalTreatments > 0
+    );
   };
 
   return (
@@ -589,12 +766,14 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                   <MaterialIcons name="archive" size={22} color={theme.colors.warning} />
                 </TouchableOpacity>
               )}
-              <TouchableOpacity
-                style={[styles.headerActionBtn, { marginRight: 10 }]}
-                onPress={handleDeleteLot}
-              >
-                <MaterialIcons name="delete" size={22} color={theme.colors.danger} />
-              </TouchableOpacity>
+              {lotData && !lotHasData(lotData) && (
+                <TouchableOpacity
+                  style={[styles.headerActionBtn, { marginRight: 10 }]}
+                  onPress={handleDeleteLot}
+                >
+                  <MaterialIcons name="delete" size={22} color={theme.colors.danger} />
+                </TouchableOpacity>
+              )}
             </>
           )}
           {userRole === 'PROPRIETAIRE' && (
@@ -606,7 +785,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
       </View>
       
       <ScrollView 
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, (isDesktop || isTablet) && styles.scrollDesktop]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
         {lotData && (
@@ -1131,6 +1310,10 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                   <Text style={styles.statsLabel}>{t('production.currentSalable')}</Text>
                   <Text style={[styles.statsValue, { color: theme.colors.success }]}>{formatNumber(totals.vendablesActuels)}</Text>
                 </View>
+                <View style={styles.statsItem}>
+                  <Text style={styles.statsLabel}>{t('production.availableSalable')}</Text>
+                  <Text style={[styles.statsValue, { color: theme.colors.primary }]}>{formatNumber(lotData.availableStock)}</Text>
+                </View>
               </View>
 
               {/* Productions ayant encore des casiers en attente → conversion possible */}
@@ -1177,30 +1360,57 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
         {!isArchived && (
           <>
             <Text style={styles.sectionTitle}>{t('lots.quickActions')}</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.actionRow}>
-              {actions.map((action, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.actionCircle}
-                  onPress={() => navigation.navigate(action.screen, {
-                    lotId,
-                    lotName,
-                    farmId,
-                    lotPurchaseDate: lotData?.info?.purchase_date,
-                    currentQuantity: lotData?.info?.current_quantity
-                  })}
-                >
-                  <View style={styles.iconContainer}>
-                    {action.iconType === 'MaterialCommunityIcons' ? (
-                      <MaterialCommunityIcons name={action.icon as any} size={26} color="#000000" />
-                    ) : (
-                      <MaterialIcons name={action.icon as any} size={26} color="#000000" />
-                    )}
-                  </View>
-                  <Text style={styles.actionLabel}>{action.title}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
+            {isDesktop || isTablet ? (
+              <View style={styles.actionRowDesktop}>
+                {actions.map((action, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.actionCircleDesktop}
+                    onPress={() => navigation.navigate(action.screen, {
+                      lotId,
+                      lotName,
+                      farmId,
+                      lotPurchaseDate: lotData?.info?.purchase_date,
+                      currentQuantity: lotData?.info?.current_quantity
+                    })}
+                  >
+                    <View style={styles.iconContainer}>
+                      {action.iconType === 'MaterialCommunityIcons' ? (
+                        <MaterialCommunityIcons name={action.icon as any} size={26} color="#000000" />
+                      ) : (
+                        <MaterialIcons name={action.icon as any} size={26} color="#000000" />
+                      )}
+                    </View>
+                    <Text style={styles.actionLabel}>{action.title}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.actionRow}>
+                {actions.map((action, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.actionCircle}
+                    onPress={() => navigation.navigate(action.screen, {
+                      lotId,
+                      lotName,
+                      farmId,
+                      lotPurchaseDate: lotData?.info?.purchase_date,
+                      currentQuantity: lotData?.info?.current_quantity
+                    })}
+                  >
+                    <View style={styles.iconContainer}>
+                      {action.iconType === 'MaterialCommunityIcons' ? (
+                        <MaterialCommunityIcons name={action.icon as any} size={26} color="#000000" />
+                      ) : (
+                        <MaterialIcons name={action.icon as any} size={26} color="#000000" />
+                      )}
+                    </View>
+                    <Text style={styles.actionLabel}>{action.title}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
           </>
         )}
 
@@ -1227,17 +1437,22 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
             </View>
             {lotData.recentActions.slice(0, 3).map((act: any, i: number) => {
               const isCancelled = act.action.toLowerCase().includes('annul') || act.action.toLowerCase().includes('suppression');
-              return (
-                <View key={i}>
-                <TouchableOpacity
-                  onPress={() => {
-                    if (userRole === 'PROPRIETAIRE') {
-                      handleActionPress(act);
-                    }
-                  }}
-                  disabled={userRole === 'EMPLOYE' || isCancelled}
-                  style={{ opacity: isCancelled ? 0.6 : 1 }}
-                >
+              const isDesktop = Platform.OS === 'web';
+                const CardWrapper = isDesktop ? View : TouchableOpacity;
+                return (
+                  <View key={i}>
+                  <CardWrapper
+                    {...(!isDesktop ? {
+                      onPress: () => {
+                        if (userRole === 'PROPRIETAIRE') {
+                          handleActionPress(act);
+                        }
+                      },
+                      disabled: userRole === 'EMPLOYE' || isCancelled,
+                      activeOpacity: 0.7
+                    } : {})}
+                    style={{ opacity: isCancelled ? 0.6 : 1 }}
+                  >
                   <Card style={[styles.historyCard, isCancelled && { borderColor: theme.colors.textSecondary + '40' }]}>
                     <View style={styles.historyLeft}>
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -1246,7 +1461,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                           numberOfLines={1}
                           ellipsizeMode="tail"
                         >
-                          {getModuleLabel(act.module)} • {act.action}
+                          {getModuleLabel(act.module, act.action)} • {act.action}
                         </Text>
                         <Text style={styles.historyUser} numberOfLines={1} ellipsizeMode="tail"> • {act.user_name}</Text>
                         {isCancelled && (
@@ -1257,7 +1472,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                       </View>
                       <Text style={styles.historyDate}>{new Date(act.date).toLocaleDateString(t('common.dateLocale'))} {new Date(act.date).toLocaleTimeString(t('common.dateLocale'), { hour: '2-digit', minute: '2-digit' })}</Text>
                     </View>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: '40%', justifyContent: 'flex-end' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', maxWidth: isDesktop ? '60%' : '40%', justifyContent: 'flex-end' }}>
                       <Text
                         style={[styles.historyDesc, isCancelled && { textDecorationLine: 'line-through' }]}
                         numberOfLines={1}
@@ -1265,12 +1480,32 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                       >
                         {act.description}
                       </Text>
-                      {!isCancelled && userRole === 'PROPRIETAIRE' && (
+                      {!isCancelled && userRole === 'PROPRIETAIRE' && !isDesktop && (
                         <MaterialIcons name="undo" size={20} color={theme.colors.warning} style={{ marginLeft: 8 }} />
+                      )}
+                      {userRole === 'PROPRIETAIRE' && isDesktop && (
+                        <View style={styles.desktopActions}>
+                          {!isCancelled && (
+                            <>
+                              <Pressable
+                                onPress={() => handleEditAction(act)}
+                                style={({ pressed }) => [styles.actionIconButton, { opacity: pressed ? 0.6 : 1, cursor: 'pointer' } as any]}
+                              >
+                                <MaterialIcons name="edit" size={18} color={theme.colors.primary} />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => handleCancelAction(act)}
+                                style={({ pressed }) => [styles.actionIconButton, { opacity: pressed ? 0.6 : 1, cursor: 'pointer' } as any]}
+                              >
+                                <MaterialIcons name="undo" size={18} color={theme.colors.warning} />
+                              </Pressable>
+                            </>
+                          )}
+                        </View>
                       )}
                     </View>
                   </Card>
-                </TouchableOpacity>
+                  </CardWrapper>
                 </View>
               );
             })}
@@ -1281,7 +1516,7 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -1328,6 +1563,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: 8,
   },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
   kpiGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -1376,6 +1616,16 @@ const createStyles = (theme: any) => StyleSheet.create({
   itemUnit: { fontSize: 12, fontWeight: '600', color: theme.colors.textSecondary },
   actionRow: { marginBottom: theme.spacing.xl, marginHorizontal: -theme.spacing.m, paddingLeft: theme.spacing.m },
   actionCircle: { alignItems: 'center', marginRight: 16, width: 85 },
+  actionRowDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: theme.spacing.xl,
+    gap: 12,
+  },
+  actionCircleDesktop: {
+    alignItems: 'center',
+    width: 90,
+  },
   iconContainer: {
     width: 64,
     height: 64,
@@ -1590,5 +1840,16 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textSecondary,
     marginTop: 2,
+  },
+  desktopActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+    borderLeftWidth: 1,
+    borderLeftColor: theme.colors.border + '40',
+    paddingLeft: 4,
+  },
+  actionIconButton: {
+    padding: 6,
   }
 });

@@ -10,6 +10,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
 
+import { useBreakpoint } from '../hooks/useBreakpoint';
+
 export const FarmsScreen = ({ navigation }: any) => {
   const [farms, setFarms] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -17,11 +19,10 @@ export const FarmsScreen = ({ navigation }: any) => {
   const { userRole } = useAuth();
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isTablet, width } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet), [theme, isDesktop, isTablet]);
 
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
-  const numColumns = isTablet ? 2 : 1;
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const [includeArchived, setIncludeArchived] = useState(false);
 
@@ -31,7 +32,8 @@ export const FarmsScreen = ({ navigation }: any) => {
       const response = await repositoryProvider.api.get('/farms/', {
         params: { status: includeArchived ? 'ARCHIVE' : 'ACTIF' }
       });
-      setFarms(response.data);
+      const farmList = Array.isArray(response.data) ? response.data : response.data?.results || [];
+      setFarms(farmList);
     } catch (error) {
       console.log('Erreur fetch farms:', error);
     } finally {
@@ -141,7 +143,7 @@ export const FarmsScreen = ({ navigation }: any) => {
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
           contentContainerStyle={styles.list}
-          columnWrapperStyle={isTablet ? styles.columnWrapper : null}
+          columnWrapperStyle={numColumns > 1 ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
             <EmptyState
@@ -156,7 +158,7 @@ export const FarmsScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean, isTablet: boolean) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -168,6 +170,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.xl,
     marginBottom: theme.spacing.s,
+    maxWidth: 1000,
+    alignSelf: 'center',
+    width: '100%',
   },
   title: {
     fontSize: 28,
@@ -191,12 +196,16 @@ const createStyles = (theme: any) => StyleSheet.create({
   list: {
     padding: theme.spacing.m,
     paddingBottom: 40,
+    maxWidth: 1000,
+    alignSelf: 'center',
+    width: '100%',
   },
   columnWrapper: {
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+    gap: theme.spacing.m,
   },
   tabletCardContainer: {
-    flex: 0.49, // Presque 50% pour laisser un peu d'espace au milieu
+    flex: isDesktop ? 0.32 : 0.49,
   },
   farmCard: {
     marginBottom: theme.spacing.m,
@@ -204,6 +213,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 0.8,
     borderColor: theme.colors.border,
+    flex: 1,
   },
   cardHeader: {
     flexDirection: 'row',

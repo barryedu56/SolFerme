@@ -4,7 +4,6 @@ import {
   deleteRow,
   deleteSyncQueueItem,
   enqueueSyncQueue,
-  emitDataChange,
   fetchRow,
   fetchRows,
   getNextOfflineId,
@@ -18,6 +17,7 @@ import {
   updateRow,
   updateSyncQueueItem,
 } from '../../database/localDatabase';
+import { emitDataChange } from '../../utils/dataEvents';
 import { ENDPOINT_TABLE_MAP, mapForeignKeyFields } from '../../utils/offlineSyncUtils';
 
 // Paramètres API qui ne correspondent PAS à des colonnes SQLite

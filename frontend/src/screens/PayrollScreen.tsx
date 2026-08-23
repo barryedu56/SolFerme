@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator, Alert, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { useTheme } from '../context/ThemeContext';
@@ -10,13 +10,15 @@ import { formatNumber, formatCurrency } from '../utils/formatters';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { getPeriodInfo } from '../utils/payrollUtils';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const PayrollScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
   const isOwner = userRole === 'PROPRIETAIRE';
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
   const [loading, setLoading] = useState(true);
   const [employees, setEmployees] = useState<any[]>([]);
   const [payrolls, setPayrolls] = useState<any[]>([]);
@@ -146,10 +148,11 @@ export const PayrollScreen = ({ navigation }: any) => {
           employee: emp.user_name || `${t('profile.employee')} #${emp.user}`,
           period: period,
           salary: parseFloat(payment ? payment.amount_paid : emp.salary),
-          status: payment ? t('profile.paidStatus') : t('profile.pendingStatus')
+          status: payment ? t('profile.paidStatus') : t('profile.pendingStatus'),
+          isPaid: !!payment
         };
       });
-      await generateGroupPayrollPDF(data, currentMonth, t);
+      await generateGroupPayrollPDF(data, currentMonth, t, calculateTotalPayroll());
     } catch (error) {
       Alert.alert(t('common.error'), t('payroll.groupReportError'));
     }
@@ -175,7 +178,7 @@ export const PayrollScreen = ({ navigation }: any) => {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.content, isDesktop && styles.contentDesktop]} showsVerticalScrollIndicator={false}>
         <Card style={styles.summaryCard}>
           <View style={styles.summaryHeader}>
             <View style={styles.summaryIconBox}>
@@ -251,30 +254,48 @@ export const PayrollScreen = ({ navigation }: any) => {
                      <TouchableOpacity
                         style={[styles.actionBtn, { flex: 1 }]}
                         onPress={() => {
-                          Alert.alert(
-                            t('employees.messages.cancelSalaryTitle') || "Annuler ce salaire",
-                            t('employees.messages.cancelSalaryMsg') || `Voulez-vous vraiment annuler le paiement de ${emp.user_name} pour ${period} ?`,
-                            [
-                              { text: t('common.no') || "Non", style: "cancel" },
-                              {
-                                text: t('finance.yesCancel') || "Oui, Annuler",
-                                style: "destructive",
-                                onPress: async () => {
-                                  try {
-                                    setLoading(true);
-                                    await repositoryProvider.api.delete(`/payrolls/${payment.id}/`);
-                                    // Rafraîchir tout y compris le summary
-                                    await fetchData();
-                                    Alert.alert(t('common.success') || "Succès", t('employees.messages.cancelSalarySuccess') || "Paiement annulé.");
-                                  } catch (error) {
-                                    Alert.alert(t('common.error') || "Erreur", t('employees.messages.cancelSalaryError') || "Impossible d'annuler.");
-                                  } finally {
-                                    setLoading(false);
-                                  }
-                                }
+                          const title = t('employees.messages.cancelSalaryTitle') || "Annuler ce salaire";
+                          const msg = t('employees.messages.cancelSalaryMsg') || `Voulez-vous vraiment annuler le paiement de ${emp.user_name} pour ${period} ?`;
+                          
+                          const executeCancel = async () => {
+                            try {
+                              setLoading(true);
+                              await repositoryProvider.api.delete(`/payrolls/${payment.id}/`);
+                              await fetchData();
+                              if (Platform.OS === 'web') {
+                                window.alert(t('employees.messages.cancelSalarySuccess') || "Paiement annulé.");
+                              } else {
+                                Alert.alert(t('common.success') || "Succès", t('employees.messages.cancelSalarySuccess') || "Paiement annulé.");
                               }
-                            ]
-                          );
+                            } catch (error) {
+                              if (Platform.OS === 'web') {
+                                window.alert(t('employees.messages.cancelSalaryError') || "Impossible d'annuler.");
+                              } else {
+                                Alert.alert(t('common.error') || "Erreur", t('employees.messages.cancelSalaryError') || "Impossible d'annuler.");
+                              }
+                            } finally {
+                              setLoading(false);
+                            }
+                          };
+
+                          if (Platform.OS === 'web') {
+                            if (window.confirm(`${title}\n\n${msg}`)) {
+                              executeCancel();
+                            }
+                          } else {
+                            Alert.alert(
+                              title,
+                              msg,
+                              [
+                                { text: t('common.no') || "Non", style: "cancel" },
+                                {
+                                  text: t('finance.yesCancel') || "Oui, Annuler",
+                                  style: "destructive",
+                                  onPress: executeCancel
+                                }
+                              ]
+                            );
+                          }
                         }}
                      >
                         <MaterialIcons name="cancel" size={18} color={theme.colors.danger} />
@@ -299,7 +320,7 @@ export const PayrollScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
   header: {
@@ -321,6 +342,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   settingsButton: { padding: 8 },
   content: { padding: theme.spacing.m },
+  contentDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   summaryCard: {
     padding: theme.spacing.l,
     borderRadius: theme.borderRadius.xl,

@@ -11,11 +11,13 @@ import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../../utils/errors';
 import { fetchRows } from '../../database/localDatabase';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const PurchaseScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole, userFarms } = useAuth() as any;
+  const { isDesktop } = useBreakpoint();
   const { type = 'feed', farmId: initialFarmId, lotId: initialLotId, item } = route.params || {};
 
   useEffect(() => {
@@ -139,7 +141,7 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
           <Card style={styles.formCard}>
 
             {/* --- SÉLECTION FERME --- */}
@@ -280,6 +282,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   backButton: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, ...theme.shadows.light },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   formCard: { padding: theme.spacing.m, borderRadius: theme.borderRadius.xl, marginBottom: theme.spacing.l, borderWidth: 0.8, borderColor: theme.colors.border },
   inputGroup: { marginBottom: theme.spacing.m },
   label: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: 8, fontWeight: '900', textTransform: 'uppercase' },

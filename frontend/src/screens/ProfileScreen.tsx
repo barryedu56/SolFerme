@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import Constants from 'expo-constants';
 import { getProfileImageUrl } from '../utils/media';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -20,6 +21,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
   const { language, setLanguage, t } = useTranslation();
   const { logout, updateUser } = useAuth();
   const { width } = useWindowDimensions();
+  const { isDesktop } = useBreakpoint();
   const isTablet = width > 600;
 
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -310,15 +312,17 @@ export const ProfileScreen = ({ navigation, route }: any) => {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, isDesktop && styles.scrollDesktop]} showsVerticalScrollIndicator={false}>
         <LinearGradient
           colors={[theme.colors.primary, theme.colors.primary + '80']}
           style={styles.upperHeader}
         >
           <View style={styles.headerTop}>
-            <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
-              <MaterialIcons name="menu" size={24} color="#000" />
-            </TouchableOpacity>
+            {!isDesktop && Platform.OS !== 'web' && (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
+                <MaterialIcons name="menu" size={24} color="#000" />
+              </TouchableOpacity>
+            )}
             <Text style={styles.headerTitleText}>{t('profile.title')}</Text>
             <TouchableOpacity
               onPress={() => setIsEditing(!isEditing)}
@@ -800,6 +804,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   settingValue: { fontSize: 12, marginTop: 2 },
   sectionCard: { padding: 15, borderRadius: 16, marginBottom: 20 },
   scrollContent: { paddingBottom: 20 },
+  scrollDesktop: { maxWidth: 800, width: '100%', alignSelf: 'center' },
   avatarWrapper: { position: 'relative', width: 100, height: 100, borderRadius: 50, borderWidth: 0.8, padding: 2 },
   avatar: { width: '100%', height: '100%', borderRadius: 50, justifyContent: 'center', alignItems: 'center', overflow: 'hidden' },
   avatarImage: { width: '100%', height: '100%' },

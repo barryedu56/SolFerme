@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Modal, TouchableOpacity, FlatList } from 'react
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 interface DatePickerProps {
   value: string; // Format AAAA-MM-JJ
@@ -13,6 +14,7 @@ interface DatePickerProps {
 export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const [showModal, setShowModal] = useState(false);
 
   // Parse current value or use today
@@ -124,7 +126,7 @@ export const DatePicker: React.FC<DatePickerProps> = ({ value, onChange, label }
         onRequestClose={() => setShowModal(false)}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
+          <View style={[styles.modalContent, isDesktop && styles.modalContentDesktop, { backgroundColor: theme.colors.surface }]}>
             <View style={styles.modalHeader}>
               <TouchableOpacity onPress={() => changeMonth(-1)}>
                 <MaterialIcons name="chevron-left" size={32} color={theme.colors.primary} />
@@ -196,6 +198,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 16,
     elevation: 5,
+  },
+  modalContentDesktop: {
+    maxWidth: 400,
   },
   modalHeader: {
     flexDirection: 'row',

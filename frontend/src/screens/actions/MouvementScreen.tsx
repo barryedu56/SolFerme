@@ -10,10 +10,12 @@ import { useTranslation } from '../../context/LanguageContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../../utils/errors';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const ActionMouvementScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, lotName, lotPurchaseDate, item } = route.params || {};
   const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
@@ -95,7 +97,7 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.lotInfoCard}>
             <View style={styles.lotInfoContent}>
               <View style={[styles.lotIconContainer, { backgroundColor: '#F8BBD0' }]}>
@@ -202,6 +204,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.colors.text
   },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   lotInfoCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

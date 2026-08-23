@@ -9,11 +9,13 @@ import { repositoryProvider } from '../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
 import { toast } from '../utils/toast';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const CreateFarmScreen = ({ navigation, route }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
   const { userId } = useAuth();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
 
   const editFarm = route.params?.farm;
@@ -84,6 +86,7 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
   };
 
   const handleDelete = () => {
+    console.log('[TEST SOLFERME] FARM DELETE/ARCHIVE CLICK', editFarm);
     const isAlreadyArchived = editFarm?.status === 'ARCHIVE';
     const canDeleteDefinitively = !editFarm?.has_data;
 
@@ -95,6 +98,34 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
       ? t('common.deleteConfirm')
       : t('farms.archiveFarmConfirm');
 
+    const executeAction = async () => {
+      console.log('[TEST SOLFERME] FARM DELETE/ARCHIVE CONFIRMED', { canDeleteDefinitively, isAlreadyArchived });
+      try {
+        if (canDeleteDefinitively) {
+          // Suppression définitive si pas de données
+          await repositoryProvider.farm.delete(editFarm.id);
+          toast.success(t('common.success'), t('farms.deleteSuccess'));
+        } else {
+          // Archivage obligatoire si historique existe
+          await repositoryProvider.farm.archive(editFarm.id);
+          toast.success(t('common.success'), t('farms.archiveSuccess'));
+        }
+        navigation.navigate('Farms');
+      } catch (e: any) {
+        console.error('[TEST SOLFERME] FARM DELETE/ARCHIVE ERROR:', e);
+        const errorMsg = e.response?.data?.error || (canDeleteDefinitively ? t('farms.deleteError') : t('farms.archiveError'));
+        toast.error(t('common.error'), errorMsg);
+      }
+    };
+
+    // Sur web, exécuter directement sans Alert.alert
+    if (Platform.OS === 'web') {
+      console.log('[TEST SOLFERME] FARM DELETE/ARCHIVE: web path - executing directly');
+      executeAction();
+      return;
+    }
+
+    // Sur native, utiliser Alert.alert pour confirmation
     Alert.alert(
       actionTitle,
       actionMessage,
@@ -103,23 +134,7 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
         {
           text: actionTitle,
           style: "destructive",
-          onPress: async () => {
-            try {
-                      if (canDeleteDefinitively) {
-                // Suppression définitive si pas de données
-                await repositoryProvider.farm.delete(editFarm.id);
-                toast.success(t('common.success'), t('farms.deleteSuccess'));
-              } else {
-                // Archivage obligatoire si historique existe
-                await repositoryProvider.farm.archive(editFarm.id);
-                toast.success(t('common.success'), t('farms.archiveSuccess'));
-              }
-              navigation.navigate('Farms');
-            } catch (e: any) {
-              const errorMsg = e.response?.data?.error || (canDeleteDefinitively ? t('farms.deleteError') : t('farms.archiveError'));
-              toast.error(t('common.error'), errorMsg);
-            }
-          }
+          onPress: executeAction
         }
       ]
     );
@@ -156,7 +171,7 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
           )}
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           {!isEditing && (
             <View style={styles.illustrationContainer}>
                <View style={styles.iconCircle}>
@@ -288,6 +303,11 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: {
+    maxWidth: 640,
+    width: '100%',
+    alignSelf: 'center',
+  },
   illustrationContainer: {
     alignItems: 'center',
     marginVertical: theme.spacing.xl,

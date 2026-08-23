@@ -436,6 +436,7 @@ class Bonus(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ACTIVE')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='bonuses_created')
     created_at = models.DateTimeField(auto_now_add=True)
+    expense = models.OneToOneField(Expense, on_delete=models.SET_NULL, null=True, blank=True, related_name='bonus_origin')
 
     class Meta:
         ordering = ['-date']

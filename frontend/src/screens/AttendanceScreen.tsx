@@ -7,12 +7,17 @@ import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/Button';
+import { useBreakpoint } from '../hooks/useBreakpoint';
+import { DatePicker } from '../components/DatePicker';
 
 export const AttendanceScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
+  
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -167,16 +172,14 @@ export const AttendanceScreen = ({ navigation }: any) => {
            >
             <Text style={[styles.filterText, selectedFarm === 'ALL' && styles.filterTextActive]}>{t('common.allFarms')}</Text>
            </TouchableOpacity>
-           <TouchableOpacity
-            style={[styles.filterChip, filterDate !== new Date().toISOString().split('T')[0] && styles.filterChipActive]}
-            onPress={() => {}}
-           >
-            <MaterialIcons name="event" size={14} color={filterDate !== new Date().toISOString().split('T')[0] ? "#000" : theme.colors.textSecondary} />
-            <Text style={[styles.filterText, filterDate !== new Date().toISOString().split('T')[0] && styles.filterTextActive, { marginLeft: 4 }]}>
-                {filterDate}
-            </Text>
-           </TouchableOpacity>
         </ScrollView>
+        <View style={styles.datePickerWrap}>
+          <DatePicker
+            label={t('common.date')}
+            value={filterDate}
+            onChange={setFilterDate}
+          />
+        </View>
       </View>
     </View>
   );
@@ -185,7 +188,7 @@ export const AttendanceScreen = ({ navigation }: any) => {
     const attendances = attendanceData.filter(a => a.employee === item.id);
 
     return (
-      <View style={styles.employeeGroup}>
+      <View style={[styles.employeeGroup, isDesktopOrTablet && styles.employeeGroupDesktop]}>
         <View style={styles.employeeHeaderRow}>
             <Text style={styles.ownerEmpName}>{item.user_name}</Text>
             <Text style={styles.ownerEmpPos}>{item.position}</Text>
@@ -236,7 +239,7 @@ export const AttendanceScreen = ({ navigation }: any) => {
   };
 
   const renderIndividualView = () => (
-    <View style={styles.individualContainer}>
+    <View style={[styles.individualContainer, isDesktop && styles.individualContainerDesktop]}>
       <Card style={styles.statusCard}>
         <MaterialIcons name="person-pin-circle" size={48} color={theme.colors.primary} />
         <Text style={styles.statusTitle}>{t('attendance.individualAttendance')}</Text>
@@ -320,10 +323,13 @@ export const AttendanceScreen = ({ navigation }: any) => {
         renderIndividualView()
       ) : (
         <FlatList
+          key={numColumns}
           data={employees}
+          numColumns={numColumns}
           renderItem={renderEmployeeItem}
           keyExtractor={item => item.id.toString()}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isDesktopOrTablet && styles.listDesktop]}
+          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
           ListHeaderComponent={renderOwnerHeader}
           onRefresh={fetchData}
           refreshing={refreshing}
@@ -342,7 +348,7 @@ const getStatusColor = (status: string, theme: any) => {
     }
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -363,7 +369,20 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
   list: { padding: theme.spacing.m },
+  listDesktop: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  columnWrapper: {
+    gap: theme.spacing.m,
+  },
   individualContainer: { flex: 1, padding: theme.spacing.m, justifyContent: 'center' },
+  individualContainerDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   statusCard: {
     width: '100%',
     padding: theme.spacing.xl,
@@ -403,12 +422,14 @@ const createStyles = (theme: any) => StyleSheet.create({
   statValueSmall: { fontSize: 22, fontWeight: '900' },
   filterSection: { marginBottom: 10 },
   filterScroll: { flexDirection: 'row' },
+  datePickerWrap: { marginTop: 8 },
   filterChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, backgroundColor: theme.colors.surface, marginRight: 8, borderWidth: 1, borderColor: theme.colors.border },
   filterChipActive: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
   filterText: { fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary },
   filterTextActive: { color: '#000' },
 
   employeeGroup: { marginBottom: 20 },
+  employeeGroupDesktop: { flex: 1 },
   employeeHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8, paddingHorizontal: 4 },
   ownerEmpName: { fontSize: 16, fontWeight: '900', color: theme.colors.text },
   ownerEmpPos: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600' },

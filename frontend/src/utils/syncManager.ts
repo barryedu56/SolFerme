@@ -1,9 +1,9 @@
-import NetInfo from '@react-native-community/netinfo';
+import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient, fetchAll } from '../api/client';
 import {
   deleteRow,
-  emitDataChange,
   fetchRows,
   getAllTableNames,
   getPendingSyncQueueItems,
@@ -17,7 +17,9 @@ import {
   runSqlAsync,
   deleteSyncQueueItem,
   updateSyncQueueItem,
+  clearSyncQueue,
 } from '../database/localDatabase';
+import { emitDataChange } from './dataEvents';
 import { getLocalReferenceTable, getTableNameFromEndpoint, mapForeignKeyFields, normalizeEndpoint, parseEndpoint } from '../utils/offlineSyncUtils';
 import { CANCELLABLE_TABLES } from '../repositories/dataSources/LocalApiFallback';
 
@@ -228,6 +230,13 @@ export class SyncManager {
     return Boolean(refreshToken);
   }
 
+  private isNetworkOnline(state: NetInfoState): boolean {
+    if (Platform.OS === 'web') {
+      return Boolean(state.isConnected);
+    }
+    return Boolean(state.isConnected && state.isInternetReachable);
+  }
+
   public async initialize(): Promise<void> {
     try {
       await initLocalDatabase();
@@ -249,7 +258,7 @@ export class SyncManager {
     } catch { /* silencieux si la table n'existe pas encore */ }
 
     const state = await NetInfo.fetch();
-    if (state.isConnected && state.isInternetReachable) {
+    if (this.isNetworkOnline(state)) {
       // 🔧 Après un login/reconnexion, le refresh token peut ne pas être encore
       // persisté dans AsyncStorage. On réessaie jusqu'à 5 fois avec 500ms d'intervalle
       // pour éviter que le sync initial soit silencieusement sauté → app vide en offline.
@@ -719,7 +728,7 @@ export class SyncManager {
    */
   public async syncAfterLogin(): Promise<void> {
     const state = await NetInfo.fetch();
-    if (state.isConnected && state.isInternetReachable && await this.hasRefreshToken()) {
+    if (this.isNetworkOnline(state) && await this.hasRefreshToken()) {
       console.info('[Sync] syncAfterLogin déclenché — pull initial...');
       // Forcer pullAllRemoteData pour remplir SQLite (même si push n'est pas nécessaire)
       await this.syncAll();
@@ -740,7 +749,7 @@ export class SyncManager {
         isInitialEvent = false;
         return; // État initial déjà géré par initialize()
       }
-      if (state.isConnected && state.isInternetReachable) {
+      if (this.isNetworkOnline(state)) {
         console.info('[Sync] Changement réseau détecté, tentative de synchronisation...');
         // 🔧 Si _sync_pending est présent (sync initial sauté faute de token),
         // faire un syncAll complet plutôt que juste initialize (qui re-check hasRefreshToken).

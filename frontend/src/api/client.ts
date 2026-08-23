@@ -71,11 +71,33 @@ initApiUrl().catch(() => {
   // Silencieux — utilise le fallback DEFAULT_API_URL
 });
 
+const normalizeStatusToBackend = (data: any): any => {
+  if (data === null || data === undefined) return data;
+  // Ne pas transformer les FormData
+  if (data instanceof FormData) return data;
+  if (Array.isArray(data)) return data.map(normalizeStatusToBackend);
+  if (typeof data === 'object') {
+    const out: any = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k === 'status' && typeof v === 'string' && v.toUpperCase() === 'ACTIF') {
+        out[k] = 'ACTIVE';
+      } else {
+        out[k] = normalizeStatusToBackend(v);
+      }
+    }
+    return out;
+  }
+  return data;
+};
+
 apiClient.interceptors.request.use(
   async (config) => {
     const token = await AsyncStorage.getItem('access_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
+    }
+    if (config.data) {
+      config.data = normalizeStatusToBackend(config.data);
     }
     return config;
   },
@@ -132,8 +154,30 @@ const processFailedQueue = (error: any, token: string | null) => {
   failedQueue = [];
 };
 
+const normalizeStatusInPayload = (data: any): any => {
+  if (data === null || data === undefined) return data;
+  if (Array.isArray(data)) return data.map(normalizeStatusInPayload);
+  if (typeof data === 'object') {
+    const out: any = {};
+    for (const [k, v] of Object.entries(data)) {
+      if (k === 'status' && typeof v === 'string' && v.toUpperCase() === 'ACTIVE') {
+        out[k] = 'ACTIF';
+      } else {
+        out[k] = normalizeStatusInPayload(v);
+      }
+    }
+    return out;
+  }
+  return data;
+};
+
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (response.data) {
+      response.data = normalizeStatusInPayload(response.data);
+    }
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config;
 

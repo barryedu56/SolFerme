@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Image, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { repositoryProvider } from '../repositories';
@@ -9,14 +9,16 @@ import { getProfileImageUrl } from '../utils/media';
 import * as ImagePicker from 'expo-image-picker';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const EmployeeDetailScreen = ({ route, navigation }: any) => {
   const { employeeId, farms } = route.params;
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userRole } = useAuth();
+  const { isDesktop } = useBreakpoint();
   const isOwner = userRole === 'PROPRIETAIRE';
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   const [employee, setEmployee] = useState<any>(null);
   const [attendance, setAttendance] = useState<any[]>([]);
@@ -311,7 +313,7 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
         {activeTab === 'info' && (
           <>
             <View style={styles.profileHeader}>
@@ -787,29 +789,48 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
                     {pay.status === 'ACTIF' && (
                       <TouchableOpacity
                         onPress={() => {
-                          Alert.alert(
-                            t('employees.messages.cancelSalaryTitle'),
-                            t('employees.messages.cancelSalaryMsg'),
-                            [
-                              { text: t('common.no'), style: "cancel" },
-                              {
-                                text: t('finance.yesCancel'),
-                                style: "destructive",
-                                onPress: async () => {
-                                  try {
-                                    setLoading(true);
-                                    await repositoryProvider.api.delete(`/payrolls/${pay.id}/`);
-                                    fetchData();
-                                    Alert.alert(t('common.success'), t('employees.messages.cancelSalarySuccess'));
-                                  } catch (error) {
-                                    Alert.alert(t('common.error'), t('employees.messages.cancelSalaryError'));
-                                  } finally {
-                                    setLoading(false);
-                                  }
-                                }
+                          const title = t('employees.messages.cancelSalaryTitle');
+                          const msg = t('employees.messages.cancelSalaryMsg');
+                          
+                          const executeCancel = async () => {
+                            try {
+                              setLoading(true);
+                              await repositoryProvider.api.delete(`/payrolls/${pay.id}/`);
+                              fetchData();
+                              if (Platform.OS === 'web') {
+                                window.alert(t('employees.messages.cancelSalarySuccess'));
+                              } else {
+                                Alert.alert(t('common.success'), t('employees.messages.cancelSalarySuccess'));
                               }
-                            ]
-                          );
+                            } catch (error) {
+                              if (Platform.OS === 'web') {
+                                window.alert(t('employees.messages.cancelSalaryError'));
+                              } else {
+                                Alert.alert(t('common.error'), t('employees.messages.cancelSalaryError'));
+                              }
+                            } finally {
+                              setLoading(false);
+                            }
+                          };
+
+                          if (Platform.OS === 'web') {
+                            if (window.confirm(`${title}\n\n${msg}`)) {
+                              executeCancel();
+                            }
+                          } else {
+                            Alert.alert(
+                              title,
+                              msg,
+                              [
+                                { text: t('common.no'), style: "cancel" },
+                                {
+                                  text: t('finance.yesCancel'),
+                                  style: "destructive",
+                                  onPress: executeCancel
+                                }
+                              ]
+                            );
+                          }
                         }}
                         style={{ marginTop: 5 }}
                       >
@@ -829,7 +850,7 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
   header: {
@@ -859,6 +880,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
   profileHeader: {
     alignItems: 'center',
     marginBottom: theme.spacing.l,

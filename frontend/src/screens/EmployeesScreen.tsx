@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatCurrency } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
 import { EmptyState } from '../components/EmptyState';
@@ -18,11 +19,10 @@ export const EmployeesScreen = ({ navigation }: any) => {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const { theme } = useTheme();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
 
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
-  const numColumns = isTablet ? 2 : 1;
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const [stats, setStats] = useState({
     total: 0,
@@ -94,7 +94,7 @@ export const EmployeesScreen = ({ navigation }: any) => {
       : null;
 
     return (
-      <View style={isTablet ? styles.tabletCardContainer : null}>
+      <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
         <Card style={styles.employeeCard}>
           <View style={styles.employeeContent}>
             <View style={[styles.avatarPlaceholder, { overflow: 'hidden' }]}>
@@ -157,83 +157,88 @@ export const EmployeesScreen = ({ navigation }: any) => {
       )}
       </View>
 
-      {isOwner && (
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.total}</Text>
-            <Text style={styles.statLabel}>{t('employees.title')}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statValue, { color: theme.colors.success }]}>{stats.presentToday}</Text>
-            <Text style={styles.statLabel}>{t('employees.presentToday')}</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={[styles.statValue, { color: theme.colors.primary }]}>
-              {formatCurrency(stats.payroll)}
-            </Text>
-            <Text style={styles.statLabel}>{t('employees.payrollMass')}</Text>
-          </View>
-        </View>
-      )}
-
-      <View style={styles.quickActions}>
-        <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Attendance')}>
-          <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
-            <MaterialIcons name="event-available" size={26} color={theme.colors.primary} />
-          </View>
-          <Text style={styles.actionLabel}>{t('employees.attendance')}</Text>
-        </TouchableOpacity>
-
+      <View style={styles.mainContent}>
         {isOwner && (
-          <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Payroll')}>
-            <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
-              <MaterialIcons name="payments" size={26} color={theme.colors.primary} />
+          <View style={styles.statsContainer}>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{stats.total}</Text>
+              <Text style={styles.statLabel}>{t('employees.title')}</Text>
             </View>
-            <Text style={styles.actionLabel}>{t('employees.payrollLabel')}</Text>
-          </TouchableOpacity>
+            <View style={styles.statCard}>
+              <Text style={[styles.statValue, { color: theme.colors.success }]}>{stats.presentToday}</Text>
+              <Text style={styles.statLabel}>{t('employees.presentToday')}</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={[styles.statValue, { color: theme.colors.primary }]}>
+                {formatCurrency(stats.payroll)}
+              </Text>
+              <Text style={styles.statLabel}>{t('employees.payrollMass')}</Text>
+            </View>
+          </View>
         )}
 
-        <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Tasks')}>
-          <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
-            <MaterialIcons name="assignment" size={26} color={theme.colors.primary} />
-          </View>
-          <Text style={styles.actionLabel}>{t('employees.tasksLabel')}</Text>
-        </TouchableOpacity>
+        <View style={styles.quickActions}>
+          <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Attendance')}>
+            <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+              <MaterialIcons name="event-available" size={26} color={theme.colors.primary} />
+            </View>
+            <Text style={styles.actionLabel}>{t('employees.attendance')}</Text>
+          </TouchableOpacity>
+
+          {isOwner && (
+            <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Payroll')}>
+              <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+                <MaterialIcons name="payments" size={26} color={theme.colors.primary} />
+              </View>
+              <Text style={styles.actionLabel}>{t('employees.payrollLabel')}</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity style={styles.actionItem} onPress={() => navigation.navigate('Tasks')}>
+            <View style={[styles.actionIcon, { backgroundColor: theme.colors.primary + '15' }]}>
+              <MaterialIcons name="assignment" size={26} color={theme.colors.primary} />
+            </View>
+            <Text style={styles.actionLabel}>{t('employees.tasksLabel')}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {loading && !refreshing ? (
+          <ActivityIndicator size="large" color={theme.colors.primary} style={styles.loader} />
+        ) : (
+          <FlatList
+            key={numColumns}
+            data={employees}
+            numColumns={numColumns}
+            keyExtractor={(item: any) => item.id.toString()}
+            renderItem={renderItem}
+            contentContainerStyle={styles.list}
+            columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
+            ListEmptyComponent={
+              <EmptyState
+                icon="account-group-outline"
+                title={t('common.noData')}
+              />
+            }
+          />
+        )}
       </View>
-      
-      {loading && !refreshing ? (
-        <ActivityIndicator size="large" color={theme.colors.primary} style={styles.loader} />
-      ) : (
-        <FlatList
-          key={numColumns}
-          data={employees}
-          numColumns={numColumns}
-          keyExtractor={(item: any) => item.id.toString()}
-          renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          columnWrapperStyle={isTablet ? styles.columnWrapper : null}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
-          ListEmptyComponent={
-            <EmptyState
-              icon="account-group-outline"
-              title={t('common.noData')}
-            />
-          }
-        />
-      )}
     </SafeAreaView>
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean, isTablet: boolean, isDesktopOrTablet: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: theme.spacing.m,
-    paddingTop: theme.spacing.l,
+    paddingTop: theme.spacing.xl,
     marginBottom: theme.spacing.s,
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
   },
   title: { fontSize: 28, fontWeight: 'bold', color: theme.colors.text },
   subtitle: { fontSize: 14, color: theme.colors.textSecondary },
@@ -245,6 +250,12 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     ...theme.shadows.medium,
+  },
+  mainContent: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+    flex: 1,
   },
   statsContainer: {
     flexDirection: 'row',
@@ -297,10 +308,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   loader: { marginTop: theme.spacing.xl },
   list: { padding: theme.spacing.m, paddingBottom: 40 },
   columnWrapper: {
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+    gap: theme.spacing.m,
   },
   tabletCardContainer: {
-    flex: 0.49,
+    flex: isDesktop ? 0.32 : 0.49,
   },
   employeeCard: {
     padding: theme.spacing.m,
@@ -308,6 +320,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 0.8,
     borderColor: theme.colors.border,
+    flex: 1,
   },
   employeeContent: {
     flexDirection: 'row',

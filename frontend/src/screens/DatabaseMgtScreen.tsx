@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { repositoryProvider } from '../repositories';
@@ -60,6 +60,7 @@ export const DatabaseMgtScreen = ({ navigation }: any) => {
   }
 
   const handleExport = async () => {
+    console.log('[TEST SOLFERME] EXPORT DATABASE CLICK');
     setExporting(true);
     try {
       const [farms, lots, productions, sales, expenses, employees, health, feeds, movements, feedPurchases, healthPurchases] = await Promise.all([
@@ -92,7 +93,7 @@ export const DatabaseMgtScreen = ({ navigation }: any) => {
 
       requestGlobalExportFormat(allData, "SolFerme_Global_Export", t);
     } catch (error) {
-      console.error(error);
+      console.error('[TEST SOLFERME] EXPORT DATABASE ERROR:', error);
       Alert.alert(t('common.error'), t('dbMgt.exportError'));
     } finally {
       setExporting(false);
@@ -116,6 +117,23 @@ export const DatabaseMgtScreen = ({ navigation }: any) => {
   };
 
   const handleClearLocal = () => {
+    const executeClear = async () => {
+      try {
+        await wipeAllLocalTables();
+        await AsyncStorage.multiRemove(['farms_cache', 'lots_cache', 'productions_cache']);
+        Alert.alert(t('common.success'), t('dbMgt.clearSuccess') || 'Base locale vidée avec succès.');
+      } catch (e: any) {
+        Alert.alert(t('common.error'), e?.message || 'Erreur lors du vidage.');
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm((t('dbMgt.clearConfirmDesc') || 'Toutes les données locales seront supprimées. Les données serveur seront re-téléchargées à la prochaine synchronisation.') + '\n\n⚠️ Les modifications non synchronisées seront PERDUES.')) {
+        executeClear();
+      }
+      return;
+    }
+
     Alert.alert(
       t('dbMgt.clearConfirmTitle') || 'Vider la base locale',
       (t('dbMgt.clearConfirmDesc') || 'Toutes les données locales seront supprimées. Les données serveur seront re-téléchargées à la prochaine synchronisation.') + '\n\n⚠️ Les modifications non synchronisées seront PERDUES.',
@@ -124,15 +142,7 @@ export const DatabaseMgtScreen = ({ navigation }: any) => {
         {
           text: t('common.delete') || 'Vider',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              await wipeAllLocalTables();
-              await AsyncStorage.multiRemove(['farms_cache', 'lots_cache', 'productions_cache']);
-              Alert.alert(t('common.success'), t('dbMgt.clearSuccess') || 'Base locale vidée avec succès.');
-            } catch (e: any) {
-              Alert.alert(t('common.error'), e?.message || 'Erreur lors du vidage.');
-            }
-          }
+          onPress: executeClear
         }
       ]
     );

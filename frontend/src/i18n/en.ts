@@ -1086,7 +1086,7 @@ export default {
     remaining: "Remaining to pay",
     footerReceipt: "This document serves as proof of transaction.",
     thanks: "Thank you for your purchase!",
-    slogan: "Tomorrow's agriculture, today.",
+    slogan: "Tomorrow's livestock farming, today.",
     employee: "EMPLOYEE",
     position: "POSITION HELD",
     baseSalary: "Base Salary",

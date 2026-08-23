@@ -94,16 +94,18 @@ export const Input: React.FC<InputProps> = ({ label, error, style, isNumeric, is
       }
 
       // Appliquer la nouvelle position de curseur après le prochain rendu
-      isAdjustingCursor.current = true;
-      setSelection({ start: newCursorPos, end: newCursorPos });
+      if (Platform.OS !== 'web') {
+        isAdjustingCursor.current = true;
+        setSelection({ start: newCursorPos, end: newCursorPos });
 
-      // Remettre selection à undefined après application pour ne pas bloquer la navigation clavier
-      setTimeout(() => {
-        if (isAdjustingCursor.current) {
-          isAdjustingCursor.current = false;
-          setSelection(undefined);
-        }
-      }, 50);
+        // Remettre selection à undefined après application pour ne pas bloquer la navigation clavier
+        setTimeout(() => {
+          if (isAdjustingCursor.current) {
+            isAdjustingCursor.current = false;
+            setSelection(undefined);
+          }
+        }, 50);
+      }
 
       // Appeler onChangeText avec la valeur BRUTE (sans espaces) — l'état parent reste propre
       onChangeText(cleanText);

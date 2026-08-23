@@ -8,6 +8,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { repositoryProvider } from '../repositories';
 import { getErrorMessage } from '../utils/errors';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const RegisterScreen = ({ navigation }: any) => {
   const { t } = useTranslation();
@@ -19,7 +20,8 @@ export const RegisterScreen = ({ navigation }: any) => {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const { theme } = useTheme();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isDesktopOrTablet), [theme, isDesktop, isDesktopOrTablet]);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -162,7 +164,7 @@ export const RegisterScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -170,6 +172,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   scrollContent: {
     flexGrow: 1,
     padding: theme.spacing.m,
+    ...(isDesktopOrTablet && {
+      maxWidth: 600,
+      alignSelf: 'center',
+      width: '100%',
+    }),
   },
   backButton: {
     flexDirection: 'row',

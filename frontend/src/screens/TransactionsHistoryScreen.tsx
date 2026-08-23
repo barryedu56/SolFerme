@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, Alert, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, Alert, Modal, ScrollView, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -9,9 +9,12 @@ import { formatNumber, formatCurrency } from '../utils/formatters';
 import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
 import { SalePaymentsModal } from '../components/SalePaymentsModal';
 
+import { useBreakpoint } from '../hooks/useBreakpoint';
+
 export const TransactionsHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop, isTablet } = useBreakpoint();
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
@@ -235,6 +238,29 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
   }, [transactions, selectedFarm, selectedLot, filterPeriod]);
 
   const handleCancel = (item: any) => {
+    const executeCancel = async () => {
+      try {
+        setLoading(true);
+        await repositoryProvider.api.delete(`/${item.module}/${item.original.id}/`);
+        setModalVisible(false);
+        fetchTransactions();
+        Alert.alert(t('common.success'), t('finance.cancelSuccess'));
+      } catch (error: any) {
+        Alert.alert(t('common.error'), error.response?.data?.detail || t('finance.cancelError'));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    // Sur web, utiliser window.confirm() pour confirmation
+    if (Platform.OS === 'web') {
+      if (window.confirm(t('finance.confirmCancelMsg'))) {
+        executeCancel();
+      }
+      return;
+    }
+
+    // Sur native, utiliser Alert.alert pour confirmation
     Alert.alert(
       t('finance.confirmCancelTitle'),
       t('finance.confirmCancelMsg'),
@@ -243,19 +269,7 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
         {
           text: t('finance.yesCancel'),
           style: "destructive",
-          onPress: async () => {
-            try {
-              setLoading(true);
-              await repositoryProvider.api.delete(`/${item.module}/${item.original.id}/`);
-              setModalVisible(false);
-              fetchTransactions();
-              Alert.alert(t('common.success'), t('finance.cancelSuccess'));
-            } catch (error: any) {
-              Alert.alert(t('common.error'), error.response?.data?.detail || t('finance.cancelError'));
-            } finally {
-              setLoading(false);
-            }
-          }
+          onPress: executeCancel
         }
       ]
     );
@@ -364,7 +378,7 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
     );
   };
 
-  const styles = createStyles(theme);
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -426,64 +440,122 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
       {loading && transactions.length === 0 ? (
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
-        <FlatList
-          data={filteredTransactions}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          refreshing={loading}
-          onRefresh={fetchTransactions}
-          renderItem={({ item }) => (
-            <TouchableOpacity onPress={() => showDetails(item)}>
-              <Card style={[styles.transactionCard, item.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
-                 <View style={styles.transactionIconCircle}>
-                    <MaterialIcons
-                      name={item.type === 'income' ? 'add-shopping-cart' : 'payments'}
-                      size={20}
-                      color={item.status === 'ANNULEE' ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger)}
-                    />
-                 </View>
-                 <View style={styles.transactionInfo}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={[styles.transactionTitle, item.status === 'ANNULEE' && { textDecorationLine: 'line-through' }]}>{item.title}</Text>
-                      {item.status === 'ANNULEE' && (
-                        <View style={styles.cancelledBadge}>
-                          <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
-                        </View>
-                      )}
+        isDesktop ? (
+          <ScrollView contentContainerStyle={styles.list}>
+            <View style={styles.tableContainer}>
+              <View style={styles.tableHeader}>
+                <Text style={[styles.tableHeaderCell, { width: 40 }]}>#</Text>
+                <Text style={[styles.tableHeaderCell, { flex: 2 }]}>{t('common.title')}</Text>
+                <Text style={[styles.tableHeaderCell, { flex: 1 }]}>{t('common.date')}</Text>
+                <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>{t('common.amount')}</Text>
+                <Text style={[styles.tableHeaderCell, { width: 120, textAlign: 'right' }]}>Actions</Text>
+              </View>
+              {filteredTransactions.map((item: any) => {
+                const isCancelled = item.status === 'ANNULEE';
+                return (
+                  <TouchableOpacity key={item.id} onPress={() => showDetails(item)} style={[styles.tableRow, isCancelled && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
+                    <View style={{ width: 40 }}>
+                      <MaterialIcons
+                        name={item.type === 'income' ? 'add-shopping-cart' : 'payments'}
+                        size={18}
+                        color={isCancelled ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger)}
+                      />
                     </View>
-                    {item.subtitle ? (
-                      <Text style={styles.transactionSubtitle}>{item.subtitle}</Text>
-                    ) : null}
-                    <Text style={styles.transactionDate}>{new Date(item.date).toLocaleDateString(t('common.dateLocale'))}</Text>
-                 </View>
-                 <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.transactionAmount, { color: item.status === 'ANNULEE' ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger) }]}>
+                    <View style={{ flex: 2 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.tableCellText, { fontWeight: '700' }, isCancelled && { textDecorationLine: 'line-through' }]}>{item.title}</Text>
+                        {isCancelled && (
+                          <View style={styles.cancelledBadge}>
+                            <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
+                          </View>
+                        )}
+                      </View>
+                      {item.subtitle && <Text style={[styles.tableCellText, { fontSize: 11, color: theme.colors.textSecondary }]}>{item.subtitle}</Text>}
+                    </View>
+                    <Text style={[styles.tableCell, { flex: 1 }]}>
+                      {new Date(item.date).toLocaleDateString(t('common.dateLocale'))}
+                    </Text>
+                    <Text style={[styles.tableCell, { flex: 1, textAlign: 'right', fontWeight: '800', color: isCancelled ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger) }]}>
                       {item.type === 'income' ? '+' : ''}{formatCurrency(item.amount)}
                     </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
-                      {item.module === 'sales' && item.status !== 'ANNULEE' && (
-                        <TouchableOpacity
-                          onPress={() => openPayments(item.original)}
-                          style={{ marginRight: 10, padding: 5 }}
-                        >
+                    <View style={{ width: 120, flexDirection: 'row', justifyContent: 'flex-end' }}>
+                      {item.module === 'sales' && !isCancelled && (
+                        <TouchableOpacity onPress={(e) => { e.stopPropagation(); openPayments(item.original); }} style={styles.actionIconBtn}>
                           <MaterialIcons name="point-of-sale" size={20} color={theme.colors.success} />
                         </TouchableOpacity>
                       )}
-                      {item.status !== 'ANNULEE' && (
-                        <TouchableOpacity
-                          onPress={() => handleCancel(item)}
-                          style={{ marginRight: 10, padding: 5 }}
-                        >
+                      {!isCancelled && (
+                        <TouchableOpacity onPress={(e) => { e.stopPropagation(); handleCancel(item); }} style={styles.actionIconBtn}>
                           <MaterialIcons name="cancel" size={20} color={theme.colors.danger} />
                         </TouchableOpacity>
                       )}
-                      <MaterialIcons name="chevron-right" size={18} color={theme.colors.border} />
+                      <MaterialIcons name="chevron-right" size={18} color={theme.colors.border} style={{ marginLeft: 4 }} />
                     </View>
-                 </View>
-              </Card>
-            </TouchableOpacity>
-          )}
-        />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+        ) : (
+          <FlatList
+            data={filteredTransactions}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.list}
+            refreshing={loading}
+            onRefresh={fetchTransactions}
+            renderItem={({ item }) => (
+              <TouchableOpacity onPress={() => showDetails(item)}>
+                <Card style={[styles.transactionCard, item.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
+                  <View style={styles.transactionIconCircle}>
+                      <MaterialIcons
+                        name={item.type === 'income' ? 'add-shopping-cart' : 'payments'}
+                        size={20}
+                        color={item.status === 'ANNULEE' ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger)}
+                      />
+                  </View>
+                  <View style={styles.transactionInfo}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.transactionTitle, item.status === 'ANNULEE' && { textDecorationLine: 'line-through' }]}>{item.title}</Text>
+                        {item.status === 'ANNULEE' && (
+                          <View style={styles.cancelledBadge}>
+                            <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
+                          </View>
+                        )}
+                      </View>
+                      {item.subtitle ? (
+                        <Text style={styles.transactionSubtitle}>{item.subtitle}</Text>
+                      ) : null}
+                      <Text style={styles.transactionDate}>{new Date(item.date).toLocaleDateString(t('common.dateLocale'))}</Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.transactionAmount, { color: item.status === 'ANNULEE' ? theme.colors.textSecondary : (item.type === 'income' ? '#2E7D32' : theme.colors.danger) }]}>
+                        {item.type === 'income' ? '+' : ''}{formatCurrency(item.amount)}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5 }}>
+                        {item.module === 'sales' && item.status !== 'ANNULEE' && (
+                          <TouchableOpacity
+                            onPress={() => openPayments(item.original)}
+                            style={{ marginRight: 10, padding: 5 }}
+                          >
+                            <MaterialIcons name="point-of-sale" size={20} color={theme.colors.success} />
+                          </TouchableOpacity>
+                        )}
+                        {item.status !== 'ANNULEE' && (
+                          <TouchableOpacity
+                            onPress={() => handleCancel(item)}
+                            style={{ marginRight: 10, padding: 5 }}
+                          >
+                            <MaterialIcons name="cancel" size={20} color={theme.colors.danger} />
+                          </TouchableOpacity>
+                        )}
+                        <MaterialIcons name="chevron-right" size={18} color={theme.colors.border} />
+                      </View>
+                  </View>
+                </Card>
+              </TouchableOpacity>
+            )}
+          />
+        )
       )}
 
       <Modal
@@ -521,7 +593,7 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -534,7 +606,10 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   filterContainer: { paddingVertical: 12, backgroundColor: theme.colors.background, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
-  filterScroll: { paddingHorizontal: theme.spacing.m },
+  filterScroll: { 
+    paddingHorizontal: theme.spacing.m,
+    ...(isDesktop ? { flexDirection: 'row', flexWrap: 'wrap' } : {})
+  },
   filterChip: {
     paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20,
     backgroundColor: theme.colors.surface, marginRight: 8, borderWidth: 1, borderColor: theme.colors.border,
@@ -545,11 +620,51 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   filterChipText: { fontSize: 13, color: theme.colors.textSecondary },
   activeChipText: { color: '#fff', fontWeight: 'bold' },
-  list: { padding: theme.spacing.m, paddingBottom: 40 },
+  list: { padding: theme.spacing.m, paddingBottom: 40, maxWidth: 1000, alignSelf: 'center', width: '100%' },
   transactionCard: {
     flexDirection: 'row', alignItems: 'center', padding: theme.spacing.m,
     marginBottom: theme.spacing.s, borderRadius: theme.borderRadius.xl,
     borderWidth: 0.8, borderColor: theme.colors.border,
+  },
+  tableContainer: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#000000',
+    overflow: 'hidden',
+    marginBottom: theme.spacing.m,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.primary + '15',
+    padding: theme.spacing.m,
+    borderBottomWidth: 1,
+    borderBottomColor: '#000000',
+  },
+  tableHeaderCell: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: theme.colors.text,
+    textTransform: 'uppercase',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    padding: theme.spacing.m,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+    alignItems: 'center',
+  },
+  tableCell: {
+    fontSize: 14,
+    color: theme.colors.text,
+  },
+  tableCellText: {
+    fontSize: 14,
+    color: theme.colors.text,
+  },
+  actionIconBtn: {
+    padding: 8,
+    marginLeft: 4,
   },
   transactionIconCircle: {
     width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.background,
@@ -576,14 +691,19 @@ const createStyles = (theme: any) => StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: isDesktop ? 'center' : 'flex-end',
+    alignItems: isDesktop ? 'center' : 'stretch',
   },
   modalContent: {
     backgroundColor: theme.colors.surface,
     borderTopLeftRadius: 30,
     borderTopRightRadius: 30,
+    borderBottomLeftRadius: isDesktop ? 30 : 0,
+    borderBottomRightRadius: isDesktop ? 30 : 0,
     padding: theme.spacing.l,
     maxHeight: '80%',
+    width: isDesktop ? '100%' : 'auto',
+    maxWidth: isDesktop ? 600 : '100%',
   },
   modalHeader: {
     flexDirection: 'row',

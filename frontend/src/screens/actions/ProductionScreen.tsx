@@ -12,12 +12,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { formatNumber } from '../../utils/formatters';
 import { getErrorMessage } from '../../utils/errors';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 const OEUFS_PAR_CASIER = 30;
 
 export const ActionProductionScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, lotName, lotPurchaseDate, item } = route.params || {};
   const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
@@ -101,7 +103,7 @@ export const ActionProductionScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.lotInfoCard}>
             <View style={styles.lotInfoContent}>
               <View style={styles.lotIconContainer}>
@@ -234,6 +236,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   lotInfoCard: {
     padding: theme.spacing.m, borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.m, borderWidth: 0.8, borderColor: theme.colors.border,

@@ -1,6 +1,6 @@
 import 'react-native-gesture-handler';
 import React, { useEffect, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
@@ -59,10 +59,12 @@ import { InventoryScreen } from '../screens/InventoryScreen';
 import { EmployeeRequestsScreen } from '../screens/EmployeeRequestsScreen';
 import { EmployeePayrollScreen } from '../screens/EmployeePayrollScreen';
 
-import { View, Text, StyleSheet, Image } from 'react-native';
+import { View, Text, StyleSheet, Image, Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../context/LanguageContext';
+import { ResponsiveShell } from '../components/layout/ResponsiveShell';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 const Stack = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
@@ -148,6 +150,8 @@ function FarmsNavigator() {
 function MainTabNavigator({ userRole }: { userRole: string | null }) {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop, isDesktopOrTablet } = useBreakpoint();
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -159,6 +163,7 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
           borderTopColor: theme.colors.border,
           height: 60,
           paddingBottom: 8,
+          display: isDesktopOrTablet && Platform.OS === 'web' ? 'none' : 'flex',
         },
         tabBarIcon: ({ color, size }) => {
           if (route.name === 'Farms') {
@@ -371,9 +376,12 @@ function AuthNavigator() {
   );
 }
 
+export const navigationRef = createNavigationContainerRef<any>();
+
 export const AppNavigator = () => {
   const { userToken, userRole, isLoading } = useAuth();
-  const navigationRef = React.useRef<any>(null);
+  const { isDesktopOrTablet } = useBreakpoint();
+  const [currentRouteName, setCurrentRouteName] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     // expo-notifications n'est pas supporté dans Expo Go (SDK 53+).
@@ -384,8 +392,8 @@ export const AppNavigator = () => {
     try {
       const subscription = Notifications.addNotificationResponseReceivedListener(response => {
         const { screen } = response.notification.request.content.data;
-        if (screen === 'Reminders' && navigationRef.current) {
-          navigationRef.current.navigate('Reminders');
+        if (screen === 'Reminders' && navigationRef.isReady()) {
+          navigationRef.navigate('Reminders');
         }
       });
 
@@ -398,25 +406,35 @@ export const AppNavigator = () => {
   if (isLoading) return null;
 
   return (
-    <NavigationContainer ref={navigationRef}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!userToken ? (
-          <Stack.Screen name="Auth" component={AuthNavigator} />
-        ) : (
-          <>
-            <Stack.Screen name="RootDrawer">
-              {props => <RootDrawerNavigator {...props} userRole={userRole} />}
-            </Stack.Screen>
-            <Stack.Screen name="TransactionsHistory" component={TransactionsHistoryScreen} />
-            <Stack.Screen name="AddExpense" component={AddExpenseScreen} />
-            <Stack.Screen name="Purchase" component={PurchaseScreen} />
-            <Stack.Screen name="HealthAlertDetail" component={HealthAlertDetailScreen} />
-            <Stack.Screen name="Inventory" component={InventoryScreen} />
-            <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} />
-            <Stack.Screen name="EmployeeRequests" component={EmployeeRequestsScreen} />
-          </>
-        )}
-      </Stack.Navigator>
+    <NavigationContainer
+      ref={navigationRef}
+      onReady={() => {
+        setCurrentRouteName(navigationRef.getCurrentRoute()?.name);
+      }}
+      onStateChange={() => {
+        setCurrentRouteName(navigationRef.getCurrentRoute()?.name);
+      }}
+    >
+      <ResponsiveShell enabled={!!userToken} currentRouteName={currentRouteName}>
+        <Stack.Navigator screenOptions={{ headerShown: false }}>
+          {!userToken ? (
+            <Stack.Screen name="Auth" component={AuthNavigator} />
+          ) : (
+            <>
+              <Stack.Screen name="RootDrawer">
+                {props => <RootDrawerNavigator {...props} userRole={userRole} />}
+              </Stack.Screen>
+              <Stack.Screen name="TransactionsHistory" component={TransactionsHistoryScreen} />
+              <Stack.Screen name="AddExpense" component={AddExpenseScreen} />
+              <Stack.Screen name="Purchase" component={PurchaseScreen} />
+              <Stack.Screen name="HealthAlertDetail" component={HealthAlertDetailScreen} />
+              <Stack.Screen name="Inventory" component={InventoryScreen} />
+              <Stack.Screen name="AttendanceHistory" component={AttendanceHistoryScreen} />
+              <Stack.Screen name="EmployeeRequests" component={EmployeeRequestsScreen} />
+            </>
+          )}
+        </Stack.Navigator>
+      </ResponsiveShell>
     </NavigationContainer>
   );
 };

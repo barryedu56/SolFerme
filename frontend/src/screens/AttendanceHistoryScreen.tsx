@@ -5,11 +5,13 @@ import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const AttendanceHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -119,7 +121,7 @@ export const AttendanceHistoryScreen = ({ navigation }: any) => {
           data={history}
           renderItem={renderItem}
           keyExtractor={item => item.date}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isDesktop && styles.listDesktop]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -133,7 +135,7 @@ export const AttendanceHistoryScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -154,6 +156,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   list: { padding: theme.spacing.m },
+  listDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   dateCard: {
     marginBottom: theme.spacing.m,
     padding: theme.spacing.m,

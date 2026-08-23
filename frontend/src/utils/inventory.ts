@@ -38,6 +38,11 @@ export interface StockData {
   conversions?: any[];
 }
 
+const isActiveStatus = (value: any) => {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  return normalized === 'ACTIF' || normalized === 'ACTIVE';
+};
+
 export const calculateAvailableStock = (data: StockData, productType: string, excludeSaleId?: number | string) => {
   const { productions, sales, conversions = [], lotId } = data;
   const targetLotId = Number(lotId);
@@ -51,7 +56,7 @@ export const calculateAvailableStock = (data: StockData, productType: string, ex
   };
 
   let totalProduced = productions
-    .filter((p: any) => getLotId(p) === targetLotId && p.status === 'ACTIF')
+    .filter((p: any) => getLotId(p) === targetLotId && isActiveStatus(p.status))
     .reduce((sum: number, p: any) => {
       if (isNormalEgg(productType)) return sum + (Number(p.casiers_vendables) || 0);
       if (isBrokenEgg(productType)) return sum + ((Number(p.oeufs_casses) || 0) / 30);
@@ -65,9 +70,9 @@ export const calculateAvailableStock = (data: StockData, productType: string, ex
     const convertedToVendable = conversions
       .filter((c: any) => {
         if (getLotId(c) !== targetLotId) return false;
-        const status = (c?.status || 'ACTIF').toUpperCase();
+        const status = (c?.status || 'ACTIVE').toUpperCase();
         const toState = (c?.to_state || '').toUpperCase();
-        return status === 'ACTIF' && toState === 'VENDABLE';
+        return (status === 'ACTIF' || status === 'ACTIVE') && toState === 'VENDABLE';
       })
       .reduce((sum: number, c: any) => sum + (Number(c.quantity) || 0), 0);
     totalProduced += convertedToVendable;
@@ -76,7 +81,7 @@ export const calculateAvailableStock = (data: StockData, productType: string, ex
   const totalSold = sales
     .filter((s: any) => {
       const isSameLot = getLotId(s) === targetLotId;
-      const isActive = s.status === 'ACTIF';
+      const isActive = isActiveStatus(s.status);
       const isNotExcluded = excludeSaleId ? Number(s.id) !== Number(excludeSaleId) : true;
       return isSameLot && isActive && isNotExcluded;
     })

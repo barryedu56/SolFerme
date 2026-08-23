@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, TextInput, Alert, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, TextInput, Alert, Switch, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
@@ -14,6 +14,7 @@ import { useWindowDimensions } from 'react-native';
 import Constants from 'expo-constants';
 import { getProfileImageUrl } from '../utils/media';
 import { formatNumber } from '../utils/formatters';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -22,6 +23,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
   const { logout, updateUser } = useAuth();
   const { t, language, setLanguage } = useTranslation();
   const { width } = useWindowDimensions();
+  const { isDesktop } = useBreakpoint();
   const isTablet = width > 600;
 
   const styles = useMemo(() => createStyles(theme), [theme]);
@@ -269,7 +271,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
@@ -278,9 +280,11 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
           style={styles.upperHeader}
         >
           <View style={styles.headerTop}>
-            <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
-              <MaterialIcons name="menu" size={24} color="#000" />
-            </TouchableOpacity>
+            {!isDesktop && Platform.OS !== 'web' && (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
+                <MaterialIcons name="menu" size={24} color="#000" />
+              </TouchableOpacity>
+            )}
             <Text style={styles.headerTitleText}>{t('profile.title')}</Text>
             <TouchableOpacity
               onPress={() => setIsEditing(!isEditing)}
@@ -816,7 +820,8 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 10,
   },
-  scroll: { paddingBottom: 40 },
+  scroll: { paddingBottom: 20 },
+  scrollDesktop: { maxWidth: 800, width: '100%', alignSelf: 'center' },
   editForm: { width: '100%' },
   inputContainer: {
     flexDirection: 'row',

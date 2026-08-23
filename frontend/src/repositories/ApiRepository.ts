@@ -1,4 +1,5 @@
 import NetInfo from '@react-native-community/netinfo';
+import { Platform } from 'react-native';
 import { apiClient, fetchAll } from '../api/client';
 import { AxiosRequestConfig, AxiosResponse } from 'axios';
 import { buildLocalResponse, getLocalData, handleOfflineWrite, CANCELLABLE_TABLES } from './dataSources/LocalApiFallback';
@@ -83,6 +84,9 @@ export class ApiRepository {
 
   private async isOnline(): Promise<boolean> {
     const state = await NetInfo.fetch();
+    if (Platform.OS === 'web') {
+      return Boolean(state.isConnected);
+    }
     return Boolean(state.isConnected && state.isInternetReachable);
   }
 
@@ -1279,10 +1283,15 @@ export class ApiRepository {
           console.info(`[ApiRepo] DELETE ${endpoint} → 404 (déjà supprimé), nettoyage local`);
           return buildLocalResponse<T>({} as unknown as T);
         }
-        // 400 = déjà annulé côté serveur. Succès fonctionnel.
+        // 400 = peut être une erreur métier (stock) ou déjà annulé.
         if (error.response?.status === 400) {
-          console.info(`[ApiRepo] DELETE ${endpoint} → 400 (déjà annulé), considéré comme succès`);
-          return buildLocalResponse<T>({} as unknown as T);
+          const detail = error.response?.data?.detail || '';
+          if (typeof detail === 'string' && (detail.toLowerCase().includes('déjà annulé') || detail.toLowerCase().includes('deja annule'))) {
+            console.info(`[ApiRepo] DELETE ${endpoint} → 400 (déjà annulé), considéré comme succès`);
+            return buildLocalResponse<T>({} as unknown as T);
+          }
+          // Si c'est une autre erreur 400 (ex: "Impossible d'annuler cette vente..."), on doit la jeter !
+          throw error;
         }
         if (!error.response) {
           const row = await handleOfflineWrite<T>('DELETE', endpoint, null);

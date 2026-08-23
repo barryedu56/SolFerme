@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView, FlatList } from 'react-native';
 import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTranslation } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatNumber } from '../utils/formatters';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
 
@@ -19,7 +20,8 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
   const { t } = useTranslation();
   const { theme, isDarkMode } = useTheme();
   const { userRole } = useAuth();
-  const styles = useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDarkMode, isDesktopOrTablet), [theme, isDarkMode, isDesktopOrTablet]);
 
   const [lots, setLots] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -41,10 +43,13 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
       ]);
 
       setFarm(farmRes.data);
-      const farmLots = lotsRes.data.filter((l: any) => l.farm === farmId);
+      const lotList = Array.isArray(lotsRes.data) ? lotsRes.data : lotsRes.data?.results || [];
+      const productionList = Array.isArray(prodRes.data) ? prodRes.data : prodRes.data?.results || [];
+      const movementList = Array.isArray(movementsRes.data) ? movementsRes.data : movementsRes.data?.results || [];
+      const farmLots = lotList.filter((l: any) => String(l.farm ?? l.farm_id) === String(farmId));
       setLots(farmLots);
-      setProductions(prodRes.data);
-      setMovements(movementsRes.data);
+      setProductions(productionList);
+      setMovements(movementList);
 
       // Filtrer uniquement les lots actifs pour les statistiques opérationnelles
       const activeLots = farmLots.filter((l: any) => l.status === 'ACTIF');
@@ -77,12 +82,17 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
   };
 
   const handleReactivate = async () => {
+    console.log('[TEST SOLFERME] REACTIVATE FARM CLICK', { farmId, farmStatus: farm?.status });
     try {
-      await repositoryProvider.api.post(`/farms/${farmId}/reactivate/`);
+      console.log('[TEST SOLFERME] REACTIVATE FARM: calling API');
+      const response = await repositoryProvider.api.post(`/farms/${farmId}/reactivate/`);
+      console.log('[TEST SOLFERME] REACTIVATE FARM: API response', response);
       toast.success(t('common.success'), t('farms.reactivateSuccess'));
       fetchLots();
     } catch (e: any) {
-      toast.error(t('common.error'), e.response?.data?.error || t('farms.reactivateError'));
+      console.error('[TEST SOLFERME] REACTIVATE FARM ERROR:', e);
+      console.error('[TEST SOLFERME] REACTIVATE FARM ERROR RESPONSE:', e.response?.data);
+      toast.error(t('common.error'), e.response?.data?.error || e.response?.data?.detail || t('farms.reactivateError'));
     }
   };
 
@@ -146,7 +156,7 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
   };
 
   const renderLotItem = (item: any) => (
-    <Card key={item.id} style={styles.lotCard}>
+    <Card key={item.id} style={[styles.lotCard, isDesktop && styles.lotCardDesktop]}>
       <TouchableOpacity
         onPress={() => navigation.navigate('LotDetail', { farmId, farmName, lotId: item.id, lotName: item.name })}
         activeOpacity={0.7}
@@ -157,7 +167,7 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
               <MaterialIcons name="inventory-2" size={20} color={theme.colors.primary} />
             </View>
             <View>
-              <Text style={styles.lotName}>{item.name}</Text>
+              <Text style={styles.lotName} numberOfLines={1}>{item.name}</Text>
               <Text style={styles.lotBreed}>{item.breed || 'ISA Brown'}</Text>
             </View>
           </View>
@@ -216,6 +226,8 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
     </Card>
   );
 
+  const filteredLots = lots.filter((l: any) => showArchived ? l.status === 'ARCHIVE' : l.status !== 'ARCHIVE');
+
   return (
     <SafeAreaWrapper style={styles.container}>
       <View style={styles.header}>
@@ -247,12 +259,13 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
 
       <ScrollView
         style={styles.content}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
         {loading && !refreshing ? (
           <ActivityIndicator size="large" color={theme.colors.primary} />
         ) : (
-          <>
+          <View style={styles.mainLayout}>
             {farm?.status === 'ARCHIVE' && (
                <Card style={styles.archiveAlert}>
                   <MaterialIcons name="info-outline" size={20} color={theme.colors.textSecondary} />
@@ -264,6 +277,7 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
                   </TouchableOpacity>
                </Card>
             )}
+
             <View style={styles.statsOverview}>
               <View style={styles.overviewItem}>
                 <Text style={styles.overviewLabel}>{t('farms.totalBirds')}</Text>
@@ -275,32 +289,36 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
               </View>
             </View>
 
-            <Text style={styles.sectionTitle}>{t('farms.batchesInFarm')}</Text>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>{t('farms.batchesInFarm')}</Text>
 
-            {/* Filtre Actifs / Archivés */}
-            <View style={styles.filterContainer}>
-              <TouchableOpacity
-                style={[styles.filterButton, !showArchived && styles.filterButtonActive]}
-                onPress={() => setShowArchived(false)}
-              >
-                <MaterialIcons name="inventory-2" size={16} color={!showArchived ? theme.colors.primary : theme.colors.textSecondary} />
-                <Text style={[styles.filterButtonText, !showArchived && styles.filterButtonTextActive]}>
-                  {t('lots.status.active') || 'Actifs'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.filterButton, showArchived && styles.filterButtonActive]}
-                onPress={() => setShowArchived(true)}
-              >
-                <MaterialIcons name="archive" size={16} color={showArchived ? theme.colors.primary : theme.colors.textSecondary} />
-                <Text style={[styles.filterButtonText, showArchived && styles.filterButtonTextActive]}>
-                  {t('lots.status.archived') || 'Archivés'}
-                </Text>
-              </TouchableOpacity>
+              {/* Filtre Actifs / Archivés */}
+              <View style={styles.filterContainer}>
+                <TouchableOpacity
+                  style={[styles.filterButton, !showArchived && styles.filterButtonActive]}
+                  onPress={() => setShowArchived(false)}
+                >
+                  <MaterialIcons name="inventory-2" size={16} color={!showArchived ? theme.colors.primary : theme.colors.textSecondary} />
+                  <Text style={[styles.filterButtonText, !showArchived && styles.filterButtonTextActive]}>
+                    {t('lots.status.active') || 'Actifs'}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.filterButton, showArchived && styles.filterButtonActive]}
+                  onPress={() => setShowArchived(true)}
+                >
+                  <MaterialIcons name="archive" size={16} color={showArchived ? theme.colors.primary : theme.colors.textSecondary} />
+                  <Text style={[styles.filterButtonText, showArchived && styles.filterButtonTextActive]}>
+                    {t('lots.status.archived') || 'Archivés'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {lots.filter((l: any) => showArchived ? l.status === 'ARCHIVE' : l.status !== 'ARCHIVE').length > 0 ? (
-              lots.filter((l: any) => showArchived ? l.status === 'ARCHIVE' : l.status !== 'ARCHIVE').map(renderLotItem)
+            {filteredLots.length > 0 ? (
+              <View style={styles.lotsGrid}>
+                {filteredLots.map(renderLotItem)}
+              </View>
             ) : (
               <EmptyState
                 icon={showArchived ? "archive" : "warehouse"}
@@ -318,14 +336,14 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
                 <Text style={styles.bigAddButtonText}>{t('farms.newBatch')}</Text>
               </TouchableOpacity>
             )}
-          </>
+          </View>
         )}
       </ScrollView>
     </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isDarkMode: boolean, isDesktopOrTablet: boolean) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -337,6 +355,9 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.xl,
     backgroundColor: theme.colors.background,
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     padding: 4,
@@ -408,21 +429,27 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
     fontWeight: 'bold',
     color: theme.colors.text,
   },
+  sectionHeader: {
+    flexDirection: isDesktopOrTablet ? 'row' : 'column',
+    justifyContent: 'space-between',
+    alignItems: isDesktopOrTablet ? 'center' : 'flex-start',
+    marginBottom: 15,
+  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: theme.colors.text,
-    marginBottom: 15,
+    marginBottom: isDesktopOrTablet ? 0 : 15,
     marginLeft: 5,
   },
   filterContainer: {
     flexDirection: 'row',
-    marginBottom: 15,
     backgroundColor: theme.colors.surface,
     borderRadius: 12,
     padding: 4,
     borderWidth: 1,
     borderColor: theme.colors.border,
+    width: isDesktopOrTablet ? 300 : '100%',
   },
   filterButton: {
     flex: 1,
@@ -446,7 +473,20 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
     fontWeight: '700',
   },
   content: {
+    flex: 1,
+  },
+  scrollContent: {
     padding: theme.spacing.m,
+  },
+  mainLayout: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  lotsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -theme.spacing.s,
   },
   lotCard: {
     padding: theme.spacing.m,
@@ -454,6 +494,11 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 0.8,
     borderColor: theme.colors.border,
+    width: '100%',
+  },
+  lotCardDesktop: {
+    width: '32%',
+    marginHorizontal: 8,
   },
   lotHeader: {
     flexDirection: 'row',
@@ -464,6 +509,7 @@ const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
   lotTitleContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
   },
   lotIconCircle: {
     width: 40,

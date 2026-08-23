@@ -8,12 +8,14 @@ import { generatePayrollPDF } from '../utils/reportGenerator';
 import { formatCurrency } from '../utils/formatters';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const EmployeePayrollScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userName } = useAuth();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
   const [loading, setLoading] = useState(true);
   const [payrolls, setPayrolls] = useState<any[]>([]);
 
@@ -114,7 +116,7 @@ export const EmployeePayrollScreen = ({ navigation }: any) => {
           data={payrolls}
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isDesktop && styles.listDesktop]}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <MaterialIcons name="payments" size={64} color={theme.colors.textSecondary + '40'} />
@@ -127,7 +129,7 @@ export const EmployeePayrollScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -149,6 +151,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   title: { fontSize: 20, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
   list: { padding: theme.spacing.m, maxWidth: 600, alignSelf: 'center', width: '100%' },
+  listDesktop: { maxWidth: 800 },
   payCard: {
     marginBottom: theme.spacing.m,
     padding: theme.spacing.m,

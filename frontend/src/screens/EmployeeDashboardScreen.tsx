@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -8,14 +8,14 @@ import { repositoryProvider } from '../repositories';
 import { syncManager } from '../utils/syncManager';
 import { formatNumber } from '../utils/formatters';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const EmployeeDashboardScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { userName, userImage } = useAuth();
   const { t } = useTranslation();
-  const { width } = useWindowDimensions();
+  const { isDesktop, isTablet } = useBreakpoint();
 
-  const isTablet = width > 600;
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [employeeData, setEmployeeData] = useState<any>(null);
@@ -77,7 +77,7 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
     fetchDashboardData();
   };
 
-  const styles = useMemo(() => createStyles(theme, isTablet, isDarkMode), [theme, isTablet, isDarkMode]);
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDarkMode), [theme, isDesktop, isTablet, isDarkMode]);
 
   const StatCard = ({ title, value, icon, color, badge, onPress, isCommunityIcon }: any) => (
     <TouchableOpacity style={styles.statCard} onPress={onPress} activeOpacity={0.7}>
@@ -111,6 +111,24 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
     </TouchableOpacity>
   );
 
+  const openLotAction = (screen: string, actionParams?: any) => {
+    const primaryLot = employeeData?.lots?.[0] || employeeData?.lot;
+    if (!primaryLot) {
+      navigation.navigate('Farms');
+      return;
+    }
+
+    navigation.navigate('Farms', {
+      screen,
+      params: {
+        lotId: primaryLot.id || primaryLot.lot_id,
+        lotName: primaryLot.name || primaryLot.lot_name,
+        farmId: primaryLot.farm || employeeData?.farm_id,
+        ...actionParams,
+      },
+    });
+  };
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -143,7 +161,7 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
       </TouchableOpacity>
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
         showsVerticalScrollIndicator={false}
       >
@@ -212,10 +230,10 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
         </View>
         <View style={styles.actionsGrid}>
            <ActionItem label={t('attendance.shortTitle')} icon="access-time" color="#00897B" onPress={() => navigation.getParent()?.navigate('Attendance')} />
-           <ActionItem label={t('actions.production')} icon="egg" color="#FBC02D" onPress={() => navigation.navigate('Farms')} isCommunityIcon />
-           <ActionItem label={t('actions.feed')} icon="grass" color="#039BE5" onPress={() => navigation.navigate('Farms')} />
-           <ActionItem label={t('actions.health')} icon="medication" color="#E91E63" onPress={() => navigation.navigate('Farms')} />
-           <ActionItem label={t('actions.movement')} icon="sync-alt" color="#FF5722" onPress={() => navigation.navigate('Farms')} />
+           <ActionItem label={t('actions.production')} icon="egg" color="#FBC02D" onPress={() => openLotAction('ActionProduction')} isCommunityIcon />
+           <ActionItem label={t('actions.feed')} icon="grass" color="#039BE5" onPress={() => openLotAction('ActionAlimentation')} />
+           <ActionItem label={t('actions.health')} icon="medication" color="#E91E63" onPress={() => openLotAction('ActionSante')} />
+           <ActionItem label={t('actions.movement')} icon="sync-alt" color="#FF5722" onPress={() => openLotAction('ActionMouvement')} />
            <ActionItem label={t('profile.stats.payments')} icon="payments" color="#8E24AA" onPress={() => navigation.getParent()?.navigate('Payroll')} />
         </View>
 
@@ -266,7 +284,7 @@ export const EmployeeDashboardScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDarkMode: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -276,6 +294,9 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     paddingHorizontal: 20,
     paddingTop: 55,
     paddingBottom: 15,
+    maxWidth: 1000,
+    alignSelf: 'center',
+    width: '100%',
   },
   dateText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
   welcomeText: { fontSize: 24, fontWeight: '900', color: theme.colors.text, marginTop: 2 },
@@ -293,6 +314,11 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
   avatarInitial: { fontSize: 20, fontWeight: 'bold', color: '#FFFFFF' },
 
   scroll: { paddingHorizontal: 20, paddingBottom: 40 },
+  scrollDesktop: {
+    maxWidth: 1000,
+    alignSelf: 'center',
+    width: '100%',
+  },
 
   workplaceCard: {
     padding: 15,

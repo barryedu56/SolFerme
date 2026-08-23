@@ -12,10 +12,12 @@ import { useAuth } from '../../context/AuthContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../../utils/errors';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const ActionAlimentationScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, lotName, farmId, lotPurchaseDate, item, activeTab: initialTab } = route.params || {};
   const [date, setDate] = useState(item?.date || item?.purchase_date || new Date().toISOString().split('T')[0]);
@@ -192,7 +194,7 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.lotInfoCard}>
             <View style={styles.lotInfoContent}>
               <View style={[styles.lotIconContainer, { backgroundColor: '#FFF3E0' }]}>
@@ -403,6 +405,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   lotInfoCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

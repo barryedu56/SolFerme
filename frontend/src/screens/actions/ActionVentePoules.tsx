@@ -13,11 +13,13 @@ import { repositoryProvider } from '../../repositories';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { formatCurrency } from '../../utils/formatters';
 import { getErrorMessage } from '../../utils/errors';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const ActionVentePoulesScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth() as any;
+  const { isDesktop } = useBreakpoint();
   const { item, lotId: routeLotId, lotName: routeLotName, lotPurchaseDate, currentQuantity: routeCurrentQuantity } = route.params || {};
 
   useEffect(() => {
@@ -119,7 +121,7 @@ export const ActionVentePoulesScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={[styles.totalCard, { backgroundColor: theme.colors.primary }]}>
             <View style={styles.totalRow}>
               <View>
@@ -300,6 +302,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   totalCard: {
     padding: theme.spacing.l, borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.l, ...theme.shadows.medium,

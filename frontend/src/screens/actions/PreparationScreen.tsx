@@ -10,11 +10,13 @@ import { useAuth } from '../../context/AuthContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../../utils/errors';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const PreparationScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth() as any;
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
   const { lotId, farmId } = route.params || {};
 
@@ -161,7 +163,7 @@ export const PreparationScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.infoCard}>
             <DatePicker value={date} onChange={setDate} />
             <View style={styles.inputGroup}>
@@ -291,6 +293,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   infoCard: { padding: theme.spacing.m, marginBottom: theme.spacing.m, borderRadius: theme.borderRadius.l },
   inputGroup: { marginTop: theme.spacing.m },
   label: { fontSize: 12, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: 'bold', textTransform: 'uppercase' },

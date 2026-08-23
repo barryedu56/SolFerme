@@ -11,11 +11,13 @@ import { getErrorMessage } from '../utils/errors';
 import { toast } from '../utils/toast';
 import { formatCurrency } from '../utils/formatters';
 import { getPeriodInfo } from '../utils/payrollUtils';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const CreatePayrollScreen = ({ navigation, route }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   const initialEmployee = route.params?.employee;
   const initialMonthParam = route.params?.initialMonth;
@@ -95,7 +97,7 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
         bonus: parseFloat(bonus) || 0,
         deduction: parseFloat(deduction) || 0,
         amount_paid: calculateNet(),
-        status: 'ACTIF',
+        status: 'ACTIVE',
         payment_method: paymentMethod
       });
 
@@ -125,7 +127,7 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('payroll.employee')} *</Text>
@@ -227,7 +229,7 @@ export const CreatePayrollScreen = ({ navigation, route }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -247,6 +249,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   formCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, useWindowDimensions, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, useWindowDimensions, Image, Platform } from 'react-native';
 import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
@@ -12,12 +12,13 @@ import { formatNumber, formatCurrency } from '../utils/formatters';
 import { syncManager } from '../utils/syncManager';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
 
+import { useBreakpoint } from '../hooks/useBreakpoint';
+
 export const DashboardScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { userName, userImage, userRole } = useAuth();
   const { t, language } = useTranslation();
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
+  const { isDesktop, isTablet } = useBreakpoint();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({
@@ -349,7 +350,7 @@ export const DashboardScreen = ({ navigation }: any) => {
     fetchDashboardData();
   };
 
-  const styles = useMemo(() => createStyles(theme, isTablet, isDarkMode), [theme, isTablet, isDarkMode]);
+  const styles = useMemo(() => createStyles(theme, isTablet, isDesktop, isDarkMode), [theme, isTablet, isDesktop, isDarkMode]);
 
   const getLogIcon = (module: string) => {
     switch (module) {
@@ -397,6 +398,24 @@ export const DashboardScreen = ({ navigation }: any) => {
     }
   };
 
+  const { width: windowWidth } = useWindowDimensions();
+  const getChartWidth = () => {
+    if (Platform.OS !== 'web') return windowWidth - theme.spacing.m * 4;
+    
+    const hasSidebar = isDesktop || isTablet;
+    const availableWidth = hasSidebar ? windowWidth - 280 : windowWidth;
+    const containerWidth = Math.min(availableWidth, isDesktop ? 1400 : (isTablet ? 1000 : 9999));
+    const padding = theme.spacing.m * 2;
+    const innerWidth = containerWidth - padding;
+
+    if (isDesktop) {
+      // flex 2 vs flex 1 => 2/3 of innerWidth
+      return (innerWidth * 0.66) - theme.spacing.m;
+    }
+    return innerWidth - theme.spacing.m * 2;
+  };
+  const chartWidth = getChartWidth();
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -408,25 +427,33 @@ export const DashboardScreen = ({ navigation }: any) => {
   return (
     <SafeAreaWrapper style={styles.container}>
       <View style={styles.header}>
-        <View>
+        <View style={styles.headerTitleContainer}>
           <Text style={styles.welcomeText}>{t('profile.greeting')} {userName}!</Text>
           <Text style={styles.subWelcomeText}>{t('dashboard.recentActivities')}</Text>
         </View>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.avatarContainer}>
-           {userImage ? (
-             <Image source={{ uri: userImage }} style={styles.avatarImage} />
-           ) : (
-             <MaterialIcons name="account-circle" size={32} color={theme.colors.primary} />
-           )}
-        </TouchableOpacity>
+
+        {!isDesktop && (
+          <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.avatarContainer}>
+            {userImage ? (
+              <Image source={{ uri: userImage }} style={styles.avatarImage} />
+            ) : (
+              <MaterialIcons name="account-circle" size={32} color={theme.colors.primary} />
+            )}
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
-        <View style={styles.filterSection}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
+        <View style={[styles.filterSection, isDesktop && styles.filterSectionDesktop]}>
+          <ScrollView
+            horizontal={!isDesktop}
+            showsHorizontalScrollIndicator={false}
+            style={[styles.filterScroll, isDesktop && styles.filterScrollDesktop]}
+            contentContainerStyle={isDesktop ? styles.filterScrollContentDesktop : null}
+          >
             <TouchableOpacity
               style={[styles.filterChip, selectedFarm === 'ALL' && styles.filterChipActive]}
               onPress={() => { setSelectedFarm('ALL'); setSelectedLot('ALL'); }}
@@ -449,7 +476,12 @@ export const DashboardScreen = ({ navigation }: any) => {
           </ScrollView>
 
           {selectedFarm !== 'ALL' && currentFarmLots.length > 0 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={[styles.filterScroll, { marginTop: 8 }]}>
+            <ScrollView
+              horizontal={!isDesktop}
+              showsHorizontalScrollIndicator={false}
+              style={[styles.filterScroll, { marginTop: 8 }, isDesktop && styles.filterScrollDesktop]}
+              contentContainerStyle={isDesktop ? styles.filterScrollContentDesktop : null}
+            >
               <TouchableOpacity
                 style={[styles.filterChip, selectedLot === 'ALL' && styles.filterChipActive]}
                 onPress={() => setSelectedLot('ALL')}
@@ -604,149 +636,160 @@ export const DashboardScreen = ({ navigation }: any) => {
           )}
         </View>
 
-        <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Statistics')}>
-          <Card style={styles.chartCard}>
-            <Text style={styles.sectionTitle}>{t('dashboard.productionChart')}</Text>
-            <View style={styles.periodSelectorContainer}>
-              <View style={styles.periodSelector}>
-                {periods.map(p => (
-                  <TouchableOpacity
-                    key={p.key}
-                    style={[styles.periodItem, period === p.key && styles.periodActive]}
-                    onPress={() => setPeriod(p.key)}
-                  >
-                    <Text style={period === p.key ? styles.periodTextActive : styles.periodText}>{p.label}</Text>
-                  </TouchableOpacity>
-                ))}
+        <View style={isDesktop ? styles.mainContentRow : null}>
+          <TouchableOpacity
+            style={isDesktop ? styles.chartColumn : null}
+            onPress={() => navigation.getParent()?.navigate('Statistics')}
+          >
+            <Card style={styles.chartCard}>
+              <Text style={styles.sectionTitle}>{t('dashboard.productionChart')}</Text>
+              <View style={styles.periodSelectorContainer}>
+                <View style={styles.periodSelector}>
+                  {periods.map(p => (
+                    <TouchableOpacity
+                      key={p.key}
+                      style={[styles.periodItem, period === p.key && styles.periodActive]}
+                      onPress={() => setPeriod(p.key)}
+                    >
+                      <Text style={period === p.key ? styles.periodTextActive : styles.periodText}>{p.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
-            </View>
-            {chartData ? (
-              <BarChart
-                data={chartData}
-                width={Dimensions.get('window').width - theme.spacing.m * 4}
-                height={220}
-                yAxisLabel=""
-                yAxisSuffix=""
-                chartConfig={{
-                  backgroundColor: theme.colors.surface,
-                  backgroundGradientFrom: theme.colors.surface,
-                  backgroundGradientTo: theme.colors.surface,
-                  decimalPlaces: 0,
-                  color: (opacity = 1) => `rgba(249, 215, 96, ${opacity})`,
-                  labelColor: (opacity = 1) => theme.colors.text,
-                  style: { borderRadius: 16 },
-                  propsForDots: { r: "6", strokeWidth: "2", stroke: theme.colors.primary },
-                  barPercentage: 0.7,
-                }}
-                verticalLabelRotation={0}
-                style={{ marginVertical: 8, borderRadius: 16 }}
-                fromZero
-                showValuesOnTopOfBars
-              />
-            ) : (
-              <ActivityIndicator color={theme.colors.primary} />
-            )}
-          </Card>
-        </TouchableOpacity>
+              {chartData ? (
+                <BarChart
+                  data={chartData}
+                  width={chartWidth}
+                  height={220}
+                  yAxisLabel=""
+                  yAxisSuffix=""
+                  chartConfig={{
+                    backgroundColor: theme.colors.surface,
+                    backgroundGradientFrom: theme.colors.surface,
+                    backgroundGradientTo: theme.colors.surface,
+                    decimalPlaces: 0,
+                    color: (opacity = 1) => `rgba(249, 215, 96, ${opacity})`,
+                    labelColor: (opacity = 1) => theme.colors.text,
+                    style: { borderRadius: 16 },
+                    propsForDots: { r: "6", strokeWidth: "2", stroke: theme.colors.primary },
+                    barPercentage: 0.7,
+                  }}
+                  verticalLabelRotation={0}
+                  style={{ marginVertical: 8, borderRadius: 16 }}
+                  fromZero
+                  showValuesOnTopOfBars
+                />
+              ) : (
+                <ActivityIndicator color={theme.colors.primary} />
+              )}
+            </Card>
+          </TouchableOpacity>
 
-        {recentActions.length > 0 && (
-          <View style={styles.recentActionsSection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{t('dashboard.recentActivitiesSection')}</Text>
-              <TouchableOpacity onPress={() => navigation.getParent()?.navigate('GlobalHistory')}>
-                <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
-              </TouchableOpacity>
-            </View>
-            {recentActions.map((log) => (
-              <TouchableOpacity key={log.id} onPress={() => navigation.getParent()?.navigate('GlobalHistory')}>
-                <Card style={styles.logCard}>
-                  <View style={[styles.logIconBox, { backgroundColor: getLogColor(log.module) + '15' }]}>
-                    <MaterialIcons name={getLogIcon(log.module) as any} size={20} color={getLogColor(log.module)} />
-                  </View>
-                  <View style={styles.logInfo}>
-                    <Text style={styles.logAction}>{getLocalizedAction(log.action)}</Text>
-                    <Text style={styles.logDesc} numberOfLines={1}>{log.description}</Text>
-                    <View style={styles.logFooter}>
-                       <Text style={styles.logUser}><MaterialIcons name="person" size={10} /> {log.user_name}</Text>
-                       <Text style={styles.logDate}>{new Date(log.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+          {reminders.length > 0 && (
+            <View style={[styles.remindersSection, isDesktop && styles.remindersColumn]}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{t('dashboard.priorityReminders')}</Text>
+                <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Reminders')}>
+                  <Text style={styles.seeAllText}>{t('dashboard.myReminders')}</Text>
+                </TouchableOpacity>
+              </View>
+              {reminders.map((reminder) => (
+                <TouchableOpacity key={reminder.id} onPress={() => navigation.getParent()?.navigate('Reminders')}>
+                  <Card style={styles.reminderItem}>
+                    <View style={[styles.reminderIconBox, { backgroundColor: theme.colors.primary + '15' }]}>
+                      <MaterialIcons name="event-note" size={20} color={theme.colors.primary} />
                     </View>
-                  </View>
-                </Card>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-        {reminders.length > 0 && (
-          <View style={styles.remindersSection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{t('dashboard.priorityReminders')}</Text>
-              <TouchableOpacity onPress={() => navigation.getParent()?.navigate('Reminders')}>
-                 <Text style={styles.seeAllText}>{t('dashboard.myReminders')}</Text>
-              </TouchableOpacity>
-            </View>
-            {reminders.map((reminder) => (
-              <TouchableOpacity key={reminder.id} onPress={() => navigation.getParent()?.navigate('Reminders')}>
-                <Card style={styles.reminderItem}>
-                  <View style={[styles.reminderIconBox, { backgroundColor: theme.colors.primary + '15' }]}>
-                    <MaterialIcons name="event-note" size={20} color={theme.colors.primary} />
-                  </View>
-                  <View style={styles.reminderInfo}>
-                    <Text style={styles.reminderTitle}>{reminder.title}</Text>
-                    <Text style={styles.reminderDate}>
-                      {new Date(reminder.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'long' })}
-                    </Text>
-                  </View>
-                  <View style={[styles.typeBadge, { borderColor: theme.colors.primary + '40' }]}>
-                    <Text style={[styles.typeText, { color: theme.colors.primary }]}>{getLocalizedReminderType(reminder.type)}</Text>
-                  </View>
-                </Card>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-
-
-        {userRole !== 'EMPLOYE' && (inventory.raw.length > 0 || inventory.prepared.length > 0 || inventory.health.length > 0) && (
-          <View style={styles.inventorySection}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{t('dashboard.stockStatus')}</Text>
-              <TouchableOpacity onPress={() => navigation.navigate('Inventory')}>
-                <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.inventoryScroll}>
-              {[
-                ...inventory.raw.map((item: any) => ({ ...item, type: 'raw' })),
-                ...inventory.prepared.map((item: any) => ({ ...item, type: 'prepared' })),
-                ...inventory.health.map((item: any) => ({ ...item, type: 'health' }))
-              ].slice(0, 2).map((item: any) => (
-                <Card key={`${item.type}-${item.id}`} style={styles.inventoryCard}>
-                  <View style={styles.inventoryHeader}>
-                    {item.type === 'raw' && <MaterialCommunityIcons name="seed" size={18} color={theme.colors.primary} />}
-                    {item.type === 'prepared' && <MaterialCommunityIcons name="food-apple" size={18} color="#03A9F4" />}
-                    {item.type === 'health' && <MaterialIcons name="medical-services" size={18} color="#E91E63" />}
-                    <Text style={styles.inventoryFarm} numberOfLines={1}>{item.farm_name}</Text>
-                  </View>
-                  <Text style={styles.inventoryName} numberOfLines={1}>
-                    {item.type === 'raw' ? item.feed_type : item.type === 'prepared' ? item.feed_name : item.product_name}
-                  </Text>
-                  <Text style={[styles.inventoryValue, (item.type === 'health' ? item.quantity < 5 : item.quantity_kg < 50) && { color: theme.colors.danger }]}>
-                    {formatNumber(item.type === 'health' ? item.quantity : item.quantity_kg)}
-                    <Text style={styles.unitText}> {item.type === 'health' ? (item.unit || t('common.unit')) : t('common.kg')}</Text>
-                  </Text>
-                </Card>
+                    <View style={styles.reminderInfo}>
+                      <Text style={styles.reminderTitle}>{reminder.title}</Text>
+                      <Text style={styles.reminderDate}>
+                        {new Date(reminder.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'long' })}
+                      </Text>
+                    </View>
+                    <View style={[styles.typeBadge, { borderColor: theme.colors.primary + '40' }]}>
+                      <Text style={[styles.typeText, { color: theme.colors.primary }]}>{getLocalizedReminderType(reminder.type)}</Text>
+                    </View>
+                  </Card>
+                </TouchableOpacity>
               ))}
-            </ScrollView>
-          </View>
-        )}
+            </View>
+          )}
+        </View>
+
+        <View style={isDesktop ? styles.bottomContentRow : null}>
+          {recentActions.length > 0 && (
+            <View style={[styles.recentActionsSection, isDesktop && styles.recentActionsColumn]}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{t('dashboard.recentActivitiesSection')}</Text>
+                <TouchableOpacity onPress={() => navigation.getParent()?.navigate('GlobalHistory')}>
+                  <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
+                </TouchableOpacity>
+              </View>
+              {recentActions.map((log) => (
+                <TouchableOpacity key={log.id} onPress={() => navigation.getParent()?.navigate('GlobalHistory')} style={isDesktop ? styles.logCardWrapperDesktop : null}>
+                  <Card style={styles.logCard}>
+                    <View style={[styles.logIconBox, { backgroundColor: getLogColor(log.module) + '15' }]}>
+                      <MaterialIcons name={getLogIcon(log.module) as any} size={20} color={getLogColor(log.module)} />
+                    </View>
+                    <View style={styles.logInfo}>
+                      <Text style={styles.logAction}>{getLocalizedAction(log.action)}</Text>
+                      <Text style={styles.logDesc} numberOfLines={1}>{log.description}</Text>
+                      <View style={styles.logFooter}>
+                         <Text style={styles.logUser}><MaterialIcons name="person" size={10} /> {log.user_name}</Text>
+                         <Text style={styles.logDate}>{new Date(log.date).toLocaleDateString(t('common.dateLocale'), { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</Text>
+                      </View>
+                    </View>
+                  </Card>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
+          {userRole !== 'EMPLOYE' && (inventory.raw.length > 0 || inventory.prepared.length > 0 || inventory.health.length > 0) && (
+            <View style={[styles.inventorySection, isDesktop && styles.inventoryColumn]}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{t('dashboard.stockStatus')}</Text>
+                <TouchableOpacity onPress={() => navigation.navigate('Inventory')}>
+                  <Text style={styles.seeAllText}>{t('profile.seeAll')}</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                horizontal={!isDesktop}
+                showsHorizontalScrollIndicator={false}
+                style={[styles.inventoryScroll, isDesktop && styles.inventoryScrollDesktop]}
+                contentContainerStyle={isDesktop ? styles.inventoryScrollContentDesktop : null}
+              >
+                {[
+                  ...inventory.raw.map((item: any) => ({ ...item, type: 'raw' })),
+                  ...inventory.prepared.map((item: any) => ({ ...item, type: 'prepared' })),
+                  ...inventory.health.map((item: any) => ({ ...item, type: 'health' }))
+                ].slice(0, isDesktop ? 4 : 2).map((item: any) => (
+                  <Card key={`${item.type}-${item.id}`} style={[styles.inventoryCard, isDesktop && styles.inventoryCardDesktop]}>
+                    <View style={styles.inventoryHeader}>
+                      {item.type === 'raw' && <MaterialCommunityIcons name="seed" size={18} color={theme.colors.primary} />}
+                      {item.type === 'prepared' && <MaterialCommunityIcons name="food-apple" size={18} color="#03A9F4" />}
+                      {item.type === 'health' && <MaterialIcons name="medical-services" size={18} color="#E91E63" />}
+                      <Text style={styles.inventoryFarm} numberOfLines={1}>{item.farm_name}</Text>
+                    </View>
+                    <Text style={styles.inventoryName} numberOfLines={1}>
+                      {item.type === 'raw' ? item.feed_type : item.type === 'prepared' ? item.feed_name : item.product_name}
+                    </Text>
+                    <Text style={[styles.inventoryValue, (item.type === 'health' ? item.quantity < 5 : item.quantity_kg < 50) && { color: theme.colors.danger }]}>
+                      {formatNumber(item.type === 'health' ? item.quantity : item.quantity_kg)}
+                      <Text style={styles.unitText}> {item.type === 'health' ? (item.unit || t('common.unit')) : t('common.kg')}</Text>
+                    </Text>
+                  </Card>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
 
       </ScrollView>
     </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isTablet: boolean, isDesktop: boolean, isDarkMode: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
   header: {
@@ -756,9 +799,12 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     paddingHorizontal: theme.spacing.m,
     paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.s,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
+    maxWidth: isDesktop ? 1000 : (isTablet ? 1000 : '100%'),
+    alignSelf: (isTablet || isDesktop) ? 'center' : 'auto',
     width: '100%'
+  },
+  headerTitleContainer: {
+    flex: 1,
   },
   welcomeText: { fontSize: 24, fontWeight: 'bold', color: theme.colors.text },
   subWelcomeText: { fontSize: 14, color: theme.colors.textSecondary, marginTop: 2 },
@@ -810,8 +856,8 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
   scroll: {
     padding: theme.spacing.m,
     paddingBottom: 40,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
+    maxWidth: isDesktop ? 1000 : (isTablet ? 1000 : '100%'),
+    alignSelf: (isTablet || isDesktop) ? 'center' : 'auto',
     width: '100%'
   },
   grid: {
@@ -821,16 +867,16 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     marginBottom: theme.spacing.s,
   },
   statCard: {
-    width: isTablet ? '23.5%' : '48%',
+    width: isDesktop ? '15.5%' : (isTablet ? '48%' : '48%'),
     padding: theme.spacing.m,
-    height: 90,
+    height: 100,
     justifyContent: 'space-between',
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
     backgroundColor: theme.colors.surface,
     ...theme.shadows.light,
-    marginBottom: theme.spacing.m
+    marginBottom: theme.spacing.m,
   },
   statHeader: {
     flexDirection: 'row',
@@ -874,7 +920,7 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     borderRadius: 12,
     padding: 4,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
     width: '100%',
     justifyContent: 'space-between',
   },
@@ -904,12 +950,24 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: theme.spacing.s,
+    width: '100%',
   },
   filterSection: {
     marginBottom: theme.spacing.m,
   },
+  filterSectionDesktop: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
   filterScroll: {
     paddingBottom: 4,
+  },
+  filterScrollDesktop: {
+    width: '100%',
+  },
+  filterScrollContentDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
   },
   filterChip: {
     paddingHorizontal: 16,
@@ -917,8 +975,9 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     borderRadius: 20,
     backgroundColor: theme.colors.surface,
     marginRight: 8,
+    marginBottom: isDesktop ? 8 : 0,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
   },
   filterChipActive: {
     backgroundColor: theme.colors.primary,
@@ -943,11 +1002,36 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     borderRadius: theme.borderRadius.xl,
     backgroundColor: theme.colors.surface,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
     ...theme.shadows.medium,
   },
-  recentActionsSection: {
+  mainContentRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  chartColumn: {
+    flex: 2,
+    marginRight: theme.spacing.m,
+  },
+  remindersColumn: {
+    flex: 1,
+    marginTop: 0,
+  },
+  bottomContentRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     marginTop: theme.spacing.l,
+  },
+  recentActionsColumn: {
+    flex: 1,
+    marginTop: 0,
+    marginRight: theme.spacing.m,
+  },
+  inventoryColumn: {
+    flex: 1,
+    marginTop: 0,
   },
   logCard: {
     flexDirection: 'row',
@@ -956,8 +1040,15 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     marginBottom: theme.spacing.s,
     borderRadius: theme.borderRadius.l,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
     backgroundColor: theme.colors.surface,
+    width: '100%',
+  },
+  logCardWrapperDesktop: {
+    width: '100%',
+  },
+  recentActionsSection: {
+    marginTop: theme.spacing.l,
   },
   logIconBox: {
     width: 44,
@@ -1031,7 +1122,8 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     marginBottom: theme.spacing.s,
     borderRadius: theme.borderRadius.l,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
+    backgroundColor: theme.colors.surface,
   },
   reminderIconBox: {
     width: 40,
@@ -1042,7 +1134,7 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     alignItems: 'center',
     marginRight: theme.spacing.m,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
   },
   reminderInfo: {
     flex: 1,
@@ -1062,7 +1154,7 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     backgroundColor: theme.colors.background,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#000000',
+    borderColor: isDarkMode ? theme.colors.border : '#000000',
   },
   typeText: {
     fontSize: 10,
@@ -1088,6 +1180,13 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     flexDirection: 'row',
     marginTop: theme.spacing.s,
   },
+  inventoryScrollDesktop: {
+    width: '100%',
+  },
+  inventoryScrollContentDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   inventoryCard: {
     width: 130,
     marginRight: theme.spacing.m,
@@ -1097,6 +1196,10 @@ const createStyles = (theme: any, isTablet: boolean, isDarkMode: boolean) => Sty
     borderColor: isDarkMode ? theme.colors.border : '#000000',
     backgroundColor: theme.colors.surface,
     ...theme.shadows.light,
+  },
+  inventoryCardDesktop: {
+    width: '45%',
+    marginBottom: 8,
   },
   inventoryHeader: {
     flexDirection: 'row',

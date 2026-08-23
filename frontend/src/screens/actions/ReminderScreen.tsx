@@ -11,11 +11,13 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { scheduleReminderNotification, cancelNotification } from '../../utils/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const ActionReminderScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t, language } = useTranslation();
   const { userRole } = useAuth();
+  const { isDesktop } = useBreakpoint();
   const { lotId, lotName, farmId: pFarmId, reminderId } = route.params || {};
 
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
@@ -222,7 +224,7 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('reminders.form.title')}</Text>
@@ -359,6 +361,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: 16 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   formCard: {
     padding: 16,
     marginBottom: 20,

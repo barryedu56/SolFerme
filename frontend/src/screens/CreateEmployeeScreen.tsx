@@ -9,13 +9,15 @@ import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const CreateEmployeeScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
   const isOwner = userRole === 'PROPRIETAIRE';
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
   const { farms: initialFarms } = route.params || { farms: [] };
   
   const [name, setName] = useState('');
@@ -61,10 +63,10 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchFarms = async () => {
     try {
-      const res = await repositoryProvider.api.get('/farms/');
-      setFarms(res.data);
-      if (res.data.length > 0) {
-        setSelectedFarm(res.data[0].id.toString());
+      const data = await repositoryProvider.farm.list();
+      setFarms(data);
+      if (data.length > 0) {
+        setSelectedFarm(data[0].id.toString());
       }
     } catch (error) {
       console.error("Erreur fetch farms:", error);
@@ -79,11 +81,14 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
   const fetchLots = async (farmId: string) => {
     try {
-      const res = await repositoryProvider.api.get(`/lots/?farm=${farmId}`);
-      setAvailableLots(res.data);
-      setSelectedLots([]); // Reset selection when farm changes
+      const data = await repositoryProvider.lot.list({ farm: farmId });
+      const farmLots = (data || []).filter((lot: any) => String(lot.farm ?? lot.farm_id ?? lot.farmId) === String(farmId));
+      setAvailableLots(farmLots);
+      setSelectedLots([]);
     } catch (error) {
       console.error("Erreur fetch lots:", error);
+      setAvailableLots([]);
+      setSelectedLots([]);
     }
   };
 
@@ -119,18 +124,18 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
 
     setLoading(true);
     try {
-      const userRes = await repositoryProvider.api.post('/users/', {
+      const createdUser = await repositoryProvider.user.create({
         name,
         email,
         phone,
         password,
         role: 'EMPLOYE'
-      });
+      } as any);
 
-      const userId = userRes.data.id;
+      const userId = createdUser.id;
 
       const cleanSalary = salary.toString().replace(/\s/g, '');
-      await repositoryProvider.api.post('/employees/', {
+      await repositoryProvider.employee.create({
         user: userId,
         farm: parseInt(selectedFarm),
         lots: selectedLots,
@@ -140,7 +145,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
         address: address,
         hired_at: hiredAt,
         status: 'ACTIF'
-      });
+      } as any);
 
       Alert.alert(t('common.success'), t('employees.messages.createSuccess'));
       navigation.goBack();
@@ -203,7 +208,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionTitle}>{t('employees.form.userAccount')}</Text>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
@@ -442,7 +447,7 @@ export const CreateEmployeeScreen = ({ route, navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   header: {
@@ -464,6 +469,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   filterText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',

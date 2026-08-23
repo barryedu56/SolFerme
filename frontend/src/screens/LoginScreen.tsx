@@ -18,6 +18,7 @@ import { repositoryProvider } from '../repositories';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../context/LanguageContext';
 import { getErrorMessage } from '../utils/errors';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const LoginScreen = ({ navigation }: any) => {
   const [email, setEmail] = useState('');
@@ -31,7 +32,8 @@ export const LoginScreen = ({ navigation }: any) => {
   const { login } = useAuth();
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isDesktopOrTablet), [theme, isDesktop, isDesktopOrTablet]);
 
   // Ref pour passer automatiquement au champ mot de passe
   const passwordRef = useRef<TextInput>(null);
@@ -249,7 +251,7 @@ export const LoginScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: theme.colors.background,
@@ -266,6 +268,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     paddingHorizontal: theme.spacing.l,
     paddingTop: theme.spacing.xl,
     paddingBottom: theme.spacing.xl,
+    ...(isDesktopOrTablet && {
+      maxWidth: 500,
+      alignSelf: 'center',
+      width: '100%',
+    }),
   },
   pressableWrapper: {
     justifyContent: 'center',

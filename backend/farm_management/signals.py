@@ -140,6 +140,11 @@ def handle_sale_change(sender, instance, **kwargs):
         # Mais on appelle au cas où pour être sûr de la synchro sale/movement
         recalculate_lot_quantity(instance.lot)
 
+    # Annuler tous les SalePayments associés si la Sale est annulée (applicable à TOUS les types de vente)
+    if instance.status == 'ANNULEE':
+        from .models import SalePayment
+        SalePayment.objects.filter(sale=instance, status='ACTIVE').update(status='ANNULEE')
+
 @receiver(post_save, sender=ChickenMovement)
 @receiver(post_delete, sender=ChickenMovement)
 def handle_chicken_movement_change(sender, instance, **kwargs):
@@ -163,12 +168,20 @@ def handle_chicken_movement_change(sender, instance, **kwargs):
             is_viewed=True,
             viewed_at=timezone.now()
         )
+        
+        # P1.7 : Cascade annulation ChickenMovement -> Sale
+        # Si ce mouvement est lié à une Sale (type=VENTE), annuler la Sale aussi
+        if instance.type == 'VENTE' and instance.sale:
+            Sale.objects.filter(id=instance.sale.id).update(status='ANNULEE')
 
 @receiver(post_save, sender=FeedPurchase)
 @receiver(post_delete, sender=FeedPurchase)
 def handle_feed_purchase_change(sender, instance, **kwargs):
     if instance.lot:
         recalculate_feed_inventory(instance.lot, instance.feed_type)
+
+    # Recharger pour avoir le lien expense à jour
+    instance.refresh_from_db()
 
     # Synchronisation Dépense
     try:
@@ -190,6 +203,8 @@ def handle_feed_purchase_change(sender, instance, **kwargs):
         else:
             new_expense = Expense.objects.create(**expense_defaults)
             FeedPurchase.objects.filter(id=instance.id).update(expense=new_expense)
+            # Recharger après update pour s'assurer que le lien est persisté
+            instance.refresh_from_db()
     elif instance.status == 'ANNULEE' and expense:
         Expense.objects.filter(id=expense.id).update(status='ANNULEE')
 
@@ -198,6 +213,9 @@ def handle_feed_purchase_change(sender, instance, **kwargs):
 def handle_health_purchase_change(sender, instance, **kwargs):
     if instance.lot:
         recalculate_health_inventory(instance.lot, instance.product_name)
+
+    # Recharger pour avoir le lien expense à jour
+    instance.refresh_from_db()
 
     # Synchronisation Dépense
     try:
@@ -219,6 +237,8 @@ def handle_health_purchase_change(sender, instance, **kwargs):
         else:
             new_expense = Expense.objects.create(**expense_defaults)
             HealthPurchase.objects.filter(id=instance.id).update(expense=new_expense)
+            # Recharger après update pour s'assurer que le lien est persisté
+            instance.refresh_from_db()
     elif instance.status == 'ANNULEE' and expense:
         Expense.objects.filter(id=expense.id).update(status='ANNULEE')
 
@@ -255,6 +275,9 @@ def handle_payroll_change(sender, instance, **kwargs):
     except Exception:
         return
 
+    # Recharger pour avoir le lien expense à jour
+    instance.refresh_from_db()
+
     if instance.status == 'ACTIVE':
         expense_defaults = {
             'farm': instance.employee.farm,
@@ -269,6 +292,8 @@ def handle_payroll_change(sender, instance, **kwargs):
         else:
             new_expense = Expense.objects.create(**expense_defaults)
             Payroll.objects.filter(id=instance.id).update(expense=new_expense)
+            # Recharger après update pour s'assurer que le lien est persisté
+            instance.refresh_from_db()
     elif instance.status == 'ANNULEE' and instance.expense:
         Expense.objects.filter(id=instance.expense.id).update(status='ANNULEE')
 
@@ -284,19 +309,17 @@ def handle_bonus_change(sender, instance, created, **kwargs):
             'date': instance.date,
             'status': 'ACTIVE'
         }
-        # On ne crée pas de OneToOne ici car plusieurs primes peuvent correspondre à une dépense groupée
-        # On crée simplement une dépense dédiée
-        Expense.objects.create(**expense_defaults)
-    elif instance.status == 'ANNULEE':
-        # Marquer les dépenses liées à cette prime comme annulées
-        Expense.objects.filter(
-            farm=instance.employee.farm,
-            category='PRIME',
-            description__icontains=instance.employee.user.name,
-            amount=instance.amount,
-            date=instance.date,
-            status='ACTIVE'
-        ).update(status='ANNULEE')
+        if instance.expense:
+            # Mise à jour si l'Expense existe déjà
+            Expense.objects.filter(id=instance.expense.id).update(**expense_defaults)
+        else:
+            # Création d'une nouvelle Expense
+            new_expense = Expense.objects.create(**expense_defaults)
+            Bonus.objects.filter(id=instance.id).update(expense=new_expense)
+            instance.refresh_from_db()
+    elif instance.status == 'ANNULEE' and instance.expense:
+        # Annuler l'Expense lié directement via OneToOne
+        Expense.objects.filter(id=instance.expense.id).update(status='ANNULEE')
 
 
 @receiver(post_save, sender=Employee)

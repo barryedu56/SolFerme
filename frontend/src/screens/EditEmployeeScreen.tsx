@@ -7,27 +7,82 @@ import { useTheme } from '../context/ThemeContext';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../context/LanguageContext';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const EditEmployeeScreen = ({ route, navigation }: any) => {
-  const { employee, farms: initialFarms } = route.params;
+  const routeEmployee = route?.params?.employee;
+  const routeEmployeeId = route?.params?.employeeId ?? routeEmployee?.id;
+  const initialFarms = route?.params?.farms || [];
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
-  const [name, setName] = useState(employee.user_name || '');
-  const [email, setEmail] = useState(employee.user_email || '');
-  const [phone, setPhone] = useState(employee.user_phone || '');
-  const [address, setAddress] = useState(employee.address || '');
+  const [employee, setEmployee] = useState<any>(routeEmployee || null);
+  const [name, setName] = useState(routeEmployee?.user_name || '');
+  const [email, setEmail] = useState(routeEmployee?.user_email || '');
+  const [phone, setPhone] = useState(routeEmployee?.user_phone || '');
+  const [address, setAddress] = useState(routeEmployee?.address || '');
   const [password, setPassword] = useState('');
-  const [position, setPosition] = useState(employee.position || 'Ouvrier');
-  const [salary, setSalary] = useState(employee.salary?.toString() || '');
-  const [paymentFrequency, setPaymentFrequency] = useState(employee.payment_frequency || 'MENSUEL');
-  const [status, setStatus] = useState(employee.status || 'ACTIF');
-  const [selectedFarm, setSelectedFarm] = useState(employee.farm?.toString() || '');
+  const [position, setPosition] = useState(routeEmployee?.position || 'Ouvrier');
+  const [salary, setSalary] = useState(routeEmployee?.salary?.toString() || '');
+  const [paymentFrequency, setPaymentFrequency] = useState(routeEmployee?.payment_frequency || 'MENSUEL');
+  const [status, setStatus] = useState(routeEmployee?.status || 'ACTIF');
+  const [selectedFarm, setSelectedFarm] = useState(routeEmployee?.farm?.toString() || '');
   const [farms, setFarms] = useState<any[]>(initialFarms || []);
-  const [selectedLots, setSelectedLots] = useState<number[]>(employee.lots || []);
+  const [selectedLots, setSelectedLots] = useState<number[]>(routeEmployee?.lots || routeEmployee?.lots_detail?.map((lot: any) => lot.id) || []);
   const [availableLots, setAvailableLots] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Fonction consolidée pour initialiser les données de l'employé
+  const initializeEmployeeData = (data: any) => {
+    setEmployee(data);
+    setName(data.user_name || '');
+    setEmail(data.user_email || '');
+    setPhone(data.user_phone || '');
+    setAddress(data.address || '');
+    setPosition(data.position || 'Ouvrier');
+    setSalary(data.salary?.toString() || '');
+    setPaymentFrequency(data.payment_frequency || 'MENSUEL');
+    setStatus(data.status || 'ACTIF');
+
+    const farmId = data.farm ? String(data.farm) : '';
+    setSelectedFarm(farmId);
+
+    const rawLots = Array.isArray(data.lots)
+      ? data.lots
+      : (data.lots_detail?.map((lot: any) => lot.id) || []);
+    const normalizedLots = rawLots
+      .map((lotId: any) => Number(lotId))
+      .filter((lotId: number) => !Number.isNaN(lotId));
+    setSelectedLots(normalizedLots);
+
+    if (farmId) {
+      console.log('Chargement lots pour ferme:', farmId);
+      fetchLots(farmId, true);
+    } else {
+      setAvailableLots([]);
+    }
+  };
+
+  // useEffect pour initialiser les données de l'employé
+  useEffect(() => {
+    if (routeEmployee) {
+      console.log('Initialisation avec employé du route:', routeEmployee);
+      initializeEmployeeData(routeEmployee);
+    } else if (routeEmployeeId) {
+      console.log('Récupération employé avec ID:', routeEmployeeId);
+      repositoryProvider.api.get(`/employees/${routeEmployeeId}/`)
+        .then((res: any) => {
+          console.log('Employé récupéré:', res.data);
+          initializeEmployeeData(res.data);
+        })
+        .catch((error: any) => {
+          console.error('Erreur récupération employé:', error);
+          Alert.alert(t('common.error'), 'Impossible de charger l\'employé');
+        });
+    }
+  }, [routeEmployee, routeEmployeeId, t]);
 
   const [showFarmPicker, setShowFarmPicker] = useState(false);
   const [showPositionPicker, setShowPositionPicker] = useState(false);
@@ -60,71 +115,139 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
   }, []);
 
   useEffect(() => {
-    if (selectedFarm) {
-      fetchLots(selectedFarm);
+    if (!selectedFarm) {
+      setAvailableLots([]);
+      return;
     }
+
+    fetchLots(selectedFarm);
   }, [selectedFarm]);
 
   const fetchFarms = async () => {
     try {
-      const res = await repositoryProvider.api.get('/farms/');
-      setFarms(res.data);
+      const data = await repositoryProvider.farm.list();
+      setFarms(data);
     } catch (error) {
       console.error("Erreur fetch farms:", error);
     }
   };
 
-  const fetchLots = async (farmId: string) => {
+  const fetchLots = async (farmId: string, preserveExistingSelection = false) => {
     try {
-      const res = await repositoryProvider.api.get(`/lots/?farm=${farmId}`);
-      setAvailableLots(res.data);
-    } catch (error) {
-      console.error("Erreur fetch lots:", error);
+      console.log('fetchLots appelé avec farmId:', farmId, 'preserveExistingSelection=', preserveExistingSelection);
+      if (!farmId) {
+        console.warn('farmId vide, pas de lots à charger');
+        setAvailableLots([]);
+        setSelectedLots([]);
+        return;
+      }
+
+      const data = await repositoryProvider.lot.list({ farm: farmId });
+      const farmLots = (data || []).filter((lot: any) => String(lot.farm ?? lot.farm_id ?? lot.farmId) === String(farmId));
+      console.log('Lots chargés pour ferme', farmId, ':', farmLots);
+      setAvailableLots(farmLots);
+
+      setSelectedLots((prev) => {
+        const currentSelection = Array.isArray(prev) ? prev : [];
+        const validSelection = currentSelection.filter((lotId) => farmLots.some((lot: any) => lot.id === lotId));
+        if (preserveExistingSelection && validSelection.length > 0) {
+          return validSelection;
+        }
+        return validSelection;
+      });
+    } catch (error: any) {
+      console.error("Erreur fetch lots pour ferme", farmId, ":", error);
+      console.error('Détails erreur:', {
+        message: error?.message,
+        response: error?.response?.data,
+      });
+      setAvailableLots([]);
+      setSelectedLots([]);
     }
   };
 
   const toggleLot = (lotId: number) => {
-    if (selectedLots.includes(lotId)) {
-      setSelectedLots(selectedLots.filter(id => id !== lotId));
-    } else {
-      setSelectedLots([...selectedLots, lotId]);
-    }
+    setSelectedLots((prev) => {
+      if (prev.includes(lotId)) {
+        return prev.filter(id => id !== lotId);
+      }
+      return [...prev, lotId];
+    });
   };
 
   const handleUpdate = async () => {
-    if (!name || !selectedFarm) {
-      Alert.alert(t('common.error'), t('employees.messages.fillRequired'));
+    if (!name) {
+      Alert.alert(t('common.error'), 'Le nom est requis');
       return;
     }
+
+    if (!selectedFarm) {
+      Alert.alert(t('common.error'), 'Une ferme doit être sélectionnée');
+      return;
+    }
+
+    if (!employee || !employee.id || !employee.user) {
+      console.error('Données employé incomplètes:', { employee, selectedFarm, selectedLots });
+      Alert.alert(t('common.error'), 'Les données de l\'employé sont incomplètes. Veuillez actualiser.');
+      return;
+    }
+
+    const cleanedLots = Array.from(new Set((selectedLots || []).map((lotId) => Number(lotId)).filter((lotId) => !Number.isNaN(lotId))));
+    const normalizedFarm = Number(selectedFarm);
+
+    if (!Number.isFinite(normalizedFarm) || normalizedFarm <= 0) {
+      Alert.alert(t('common.error'), 'La ferme sélectionnée est invalide.');
+      return;
+    }
+
+    console.log('Début mise à jour employé:', {
+      employeeId: employee.id,
+      userId: employee.user,
+      selectedFarm: normalizedFarm,
+      selectedLots: cleanedLots,
+      name,
+      position,
+      salary,
+    });
 
     setLoading(true);
     try {
       const userData: any = {
         name,
         phone,
-        email
+        email,
       };
       if (password) {
         userData.password = password;
       }
 
-      await repositoryProvider.api.patch(`/users/${employee.user}/`, userData);
+      console.log('Mise à jour user avec:', userData);
+      await repositoryProvider.user.patch(employee.user, userData);
 
-      await repositoryProvider.api.patch(`/employees/${employee.id}/`, {
-        farm: parseInt(selectedFarm),
-        lots: selectedLots,
-        position: position,
-        salary: parseFloat(salary) || 0,
+      const employeeData = {
+        farm: normalizedFarm,
+        lots: cleanedLots,
+        position,
+        salary: Number.parseFloat(String(salary)) || 0,
         payment_frequency: paymentFrequency,
-        address: address,
-        status: status
-      });
+        address,
+        status,
+      };
+
+      console.log('Mise à jour employee avec:', employeeData);
+      await repositoryProvider.employee.patch(employee.id, employeeData as any);
 
       Alert.alert(t('common.success'), t('employees.messages.updateSuccess'));
       navigation.goBack();
-    } catch (error) {
-      console.error(error);
-      Alert.alert(t('common.error'), t('employees.messages.updateError'));
+    } catch (error: any) {
+      console.error('Erreur lors de la mise à jour:', error);
+      console.error('Détails erreur:', {
+        message: error?.message,
+        response: error?.response?.data,
+        status: error?.response?.status,
+      });
+      const backendMessage = error?.response?.data?.detail || error?.response?.data?.message || error?.response?.data?.error;
+      Alert.alert(t('common.error'), backendMessage || t('employees.messages.updateError'));
     } finally {
       setLoading(false);
     }
@@ -149,7 +272,7 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionTitle}>{t('employees.form.userAccount')}</Text>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
@@ -350,7 +473,11 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
                       <TouchableOpacity
                         key={f.id}
                         style={styles.pickerOption}
-                        onPress={() => { setSelectedFarm(f.id.toString()); setShowFarmPicker(false); }}
+                        onPress={() => {
+                          setSelectedFarm(f.id.toString());
+                          setSelectedLots([]);
+                          setShowFarmPicker(false);
+                        }}
                       >
                         <Text style={[styles.pickerOptionText, selectedFarm === f.id.toString() && styles.selectedOptionText]}>{f.name}</Text>
                       </TouchableOpacity>
@@ -408,7 +535,7 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -428,6 +555,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   sectionTitle: {
     fontSize: 16,
     fontWeight: 'bold',

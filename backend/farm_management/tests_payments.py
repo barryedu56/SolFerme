@@ -178,3 +178,74 @@ class EncaissementTestCase(TestCase):
         sale = self._sale(500000)
         errors = self._serializer_errors(sale, 0)
         self.assertTrue(errors)
+
+
+class ChronologicalValidationTestCase(TestCase):
+    """
+    Tests des règles chronologiques sur les paiements.
+    
+    Vérifie si SalePayment enforce que payment_date >= sale.date.
+    """
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='prop@example.com', name='Test Prop', password='password', role='PROPRIETAIRE'
+        )
+        self.farm = Farm.objects.create(owner=self.user, name='Test Farm')
+        self.lot = Lot.objects.create(
+            farm=self.farm, name='Lot A', breed='Isa Brown',
+            initial_quantity=100, current_quantity=100,
+            purchase_date=timezone.now().date(), purchase_price=1000,
+        )
+        Production.objects.create(
+            lot=self.lot, date=timezone.now().date(),
+            casiers_produits=50, casiers_vendables=50, oeufs_casses=0,
+            created_by=self.user,
+        )
+
+    def test_payment_before_sale_date_allowed_or_rejected(self):
+        """
+        Vérifie si paiement AVANT la date de la vente est accepté ou refusé.
+        
+        Objectif : déterminer si la règle existe réellement.
+        """
+        from datetime import timedelta
+        sale_date = timezone.now().date()
+        sale = Sale.objects.create(
+            lot=self.lot, date=sale_date, product_type='NORMAL',
+            quantity=10, unit_price=50000, total_amount=500000,
+            amount_paid=0, status='ACTIVE', created_by=self.user,
+        )
+        
+        payment_before = sale_date - timedelta(days=1)
+        try:
+            payment = SalePayment.objects.create(
+                sale=sale, farm=self.farm, lot=self.lot, amount=100000,
+                payment_method='CASH', payment_date=payment_before,
+                reference='BEFORE-TEST', created_by=self.user,
+            )
+            # Si on arrive ici, le paiement avant la vente est accepté
+            self.assertTrue(True, "Paiement AVANT la vente est accepté (pas de règle chronologique).")
+        except Exception as e:
+            # Si une exception, il y a une règle
+            self.fail(f"Paiement avant vente rejeté : {str(e)}")
+
+    def test_payment_after_sale_date_allowed(self):
+        """
+        Vérifie que paiement APRÈS la date de la vente est accepté.
+        """
+        from datetime import timedelta
+        sale_date = timezone.now().date()
+        sale = Sale.objects.create(
+            lot=self.lot, date=sale_date, product_type='NORMAL',
+            quantity=10, unit_price=50000, total_amount=500000,
+            amount_paid=0, status='ACTIVE', created_by=self.user,
+        )
+        
+        payment_after = sale_date + timedelta(days=5)
+        payment = SalePayment.objects.create(
+            sale=sale, farm=self.farm, lot=self.lot, amount=100000,
+            payment_method='CASH', payment_date=payment_after,
+            reference='AFTER-TEST', created_by=self.user,
+        )
+        self.assertIsNotNone(payment.id)
+        self.assertEqual(float(payment.amount), 100000.0)

@@ -14,6 +14,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../utils/errors';
 import { toast } from '../utils/toast';
 import { validateFarmCapacity } from '../repositories/dataSources/LocalApiFallback';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 // ─── Type for extra expenses ────────────────────────────────────────────────
 interface LotExpenseItem {
@@ -38,6 +39,7 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
   const editingLotId = paramLotId || lot?.id;
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   // ─── Basic lot fields ───────────────────────────────────────────────────
@@ -78,12 +80,11 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
   useEffect(() => {
     if (!isEditing || !editingLotId) return;
     setLoadingExpenses(true);
-    repositoryProvider.api
-      .get<any[]>(`/lot-expenses/?lot=${editingLotId}`)
+    repositoryProvider.lotExpense
+      .getByLot(editingLotId)
       .then((data) => {
-        const existing = (Array.isArray(data) ? data : (data as any)?.results || []);
         setExpenses(
-          existing.map((e: any) => ({
+          data.map((e: any) => ({
             id: e.id,
             localKey: genKey(),
             name: e.name || '',
@@ -134,20 +135,18 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
     for (const expense of newExpenses) {
       if (!expense.name.trim()) continue;
       const amount = parseFloat(expense.amount) || 0;
+      const payload = {
+        lot: lotServerId,
+        name: expense.name.trim(),
+        amount,
+      };
+
       if (expense.id) {
         // Update existing
-        await repositoryProvider.api.put(`/lot-expenses/${expense.id}/`, {
-          lot: lotServerId,
-          name: expense.name.trim(),
-          amount,
-        });
+        await repositoryProvider.lotExpense.update(expense.id, payload);
       } else {
         // Create new
-        await repositoryProvider.api.post('/lot-expenses/', {
-          lot: lotServerId,
-          name: expense.name.trim(),
-          amount,
-        });
+        await repositoryProvider.lotExpense.create(payload);
       }
     }
   };
@@ -156,7 +155,9 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
     const updatedIds = new Set(updated.filter((e) => e.id).map((e) => e.id));
     const toDelete = original.filter((e) => e.id && !updatedIds.has(e.id));
     for (const expense of toDelete) {
-      await repositoryProvider.api.delete(`/lot-expenses/${expense.id}/`);
+      if (expense.id) {
+        await repositoryProvider.lotExpense.delete(expense.id);
+      }
     }
   };
 
@@ -220,6 +221,7 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
         status,
       };
 
+      let savedLot: any;
       let savedLotId: number;
 
       if (isEditing) {
@@ -228,13 +230,12 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
           setLoading(false);
           return;
         }
-        await repositoryProvider.api.put(`/lots/${editingLotId}/`, payload);
+        savedLot = await repositoryProvider.lot.update(editingLotId, payload);
         savedLotId = editingLotId;
 
         // Manage expense changes
-        const previousExpenses = await repositoryProvider.api
-          .get<any[]>(`/lot-expenses/?lot=${editingLotId}`)
-          .then((d) => (Array.isArray(d) ? d : (d as any)?.results || []))
+        const previousExpenses = await repositoryProvider.lotExpense
+          .getByLot(editingLotId)
           .then((arr) => arr.map((e: any) => ({
             id: e.id, localKey: '', name: e.name, amount: e.amount?.toString() || '',
           })))
@@ -244,8 +245,8 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
         await persistExpenses(savedLotId, expenses);
         toast.success(t('common.success'), t('lots.messages.updateSuccess'));
       } else {
-        const created = await repositoryProvider.api.post<any>('/lots/', payload);
-        savedLotId = created?.data?.id;
+        savedLot = await repositoryProvider.lot.create(payload);
+        savedLotId = savedLot.id;
         // Create all expenses
         if (savedLotId) {
           await persistExpenses(savedLotId, expenses);
@@ -280,9 +281,12 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
         onPress: async () => {
           try {
             if (canDeleteDefinitively) {
-              await repositoryProvider.api.delete(`/lots/${editingLotId}/`);
+              await repositoryProvider.lot.delete(editingLotId);
               toast.success(t('common.success'), t('lots.deleteSuccess'));
             } else {
+              // Note: repositoryProvider.lot doesn't have an archive method,
+              // but we can add it or use direct API if it's a specific action.
+              // For consistency, let's keep it direct for now or add to repo.
               await repositoryProvider.api.post(`/lots/${editingLotId}/archive/`);
               toast.success(t('common.success'), t('lots.archiveSuccess'));
             }
@@ -330,7 +334,7 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
         </View>
 
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
           keyboardShouldPersistTaps="handled"
         >
           {/* Farm context */}
@@ -667,6 +671,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 60 },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   farmContextCard: {
     flexDirection: 'row', alignItems: 'center',
     padding: theme.spacing.m, borderRadius: theme.borderRadius.l,

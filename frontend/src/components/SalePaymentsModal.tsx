@@ -9,6 +9,7 @@ import { getErrorMessage } from '../utils/errors';
 import { Input } from './Input';
 import { Button } from './Button';
 import { toast } from '../utils/toast';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 /**
  * Identifiant d'idempotence envoyé avec chaque paiement.
@@ -38,6 +39,7 @@ interface SalePaymentsModalProps {
 export const SalePaymentsModal = ({ visible, onClose, saleId, lotId, farmId, totalAmount, onPaymentAdded }: SalePaymentsModalProps) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -63,10 +65,13 @@ export const SalePaymentsModal = ({ visible, onClose, saleId, lotId, farmId, tot
     }
   };
 
+  const isPaymentActive = (status?: string) => ['ACTIF', 'ACTIVE'].includes(String(status || '').toUpperCase());
+  const isPaymentCancelled = (status?: string) => ['ANNULEE', 'ANNULÉ', 'CANCELLED'].includes(String(status || '').toUpperCase());
+
   // 🔒 Ne compter QUE les paiements ACTIFS dans le "déjà payé".
   // Un paiement annulé (status='ANNULEE') doit rester visible dans l'historique
   // (opération traçable) mais ne doit PAS contribuer au total payé / à la créance.
-  const activePayments = payments.filter((p: any) => p.status === 'ACTIF');
+  const activePayments = payments.filter((p: any) => isPaymentActive(p.status));
   const amountPaid = activePayments.reduce((acc, curr) => acc + (parseFloat(curr.amount) || 0), 0);
   const reste = totalAmount - amountPaid;
 
@@ -104,7 +109,7 @@ export const SalePaymentsModal = ({ visible, onClose, saleId, lotId, farmId, tot
   };
 
   const renderPaymentItem = ({ item }: { item: any }) => {
-    const isCancelled = item.status === 'ANNULEE';
+    const isCancelled = isPaymentCancelled(item.status);
     return (
       <View style={[styles.paymentItem, isCancelled && { opacity: 0.6 }]}>
         <View>
@@ -128,8 +133,8 @@ export const SalePaymentsModal = ({ visible, onClose, saleId, lotId, farmId, tot
 
   return (
     <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.overlay}>
-        <View style={styles.modalContent}>
+      <View style={[styles.overlay, isDesktop && styles.overlayDesktop]}>
+        <View style={[styles.modalContent, isDesktop && styles.modalContentDesktop]}>
           <View style={styles.header}>
             <Text style={styles.title}>Historique des paiements</Text>
             <TouchableOpacity onPress={onClose}>
@@ -192,12 +197,22 @@ const createStyles = (theme: any) => StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
+  overlayDesktop: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   modalContent: {
     backgroundColor: theme.colors.background,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
     maxHeight: '80%',
+  },
+  modalContentDesktop: {
+    maxWidth: 600,
+    width: '100%',
+    borderRadius: 20,
+    paddingBottom: 20,
   },
   header: {
     flexDirection: 'row',

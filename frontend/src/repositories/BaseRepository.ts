@@ -30,6 +30,11 @@ export abstract class BaseRepository<T> implements Repository<T> {
     return res.data as T;
   }
 
+  async patch(id: number | string, payload: Partial<T>): Promise<T> {
+    const res = await this.api.patch<T>(`${this.endpoint}${id}/`, payload);
+    return res.data as T;
+  }
+
   async delete(id: number | string): Promise<void> {
     await this.api.delete<void>(`${this.endpoint}${id}/`);
   }

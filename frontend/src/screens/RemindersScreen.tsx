@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
@@ -10,6 +10,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { cancelNotification } from '../utils/notifications';
 import { syncReminders } from '../utils/reminderSync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const RemindersScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
@@ -20,10 +21,9 @@ export const RemindersScreen = ({ navigation }: any) => {
   const [reminders, setReminders] = useState<any[]>([]);
   const [filter, setFilter] = useState('ALL');
 
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
-  const numColumns = isTablet ? 2 : 1;
-  const styles = useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
 
   const fetchReminders = async () => {
     try {
@@ -161,7 +161,7 @@ export const RemindersScreen = ({ navigation }: any) => {
     const statusInfo = getStatusInfo();
 
     return (
-      <View style={isTablet ? styles.tabletCardContainer : null}>
+      <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
         <Card style={[styles.reminderCard, isOverdue && { borderColor: '#FF5252', borderWidth: 0.8 }]}>
           <View style={styles.cardHeader}>
             <View style={[styles.statusBadge, { backgroundColor: statusInfo.color }]}>
@@ -230,9 +230,11 @@ export const RemindersScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.menuButton}>
-          <MaterialIcons name="menu" size={28} color={theme.colors.text} />
-        </TouchableOpacity>
+        {!isDesktop && Platform.OS !== 'web' && (
+          <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.menuButton}>
+            <MaterialIcons name="menu" size={28} color={theme.colors.text} />
+          </TouchableOpacity>
+        )}
         <Text style={[styles.title, { color: theme.colors.text }]}>{t('reminders.title')}</Text>
         {userRole === 'PROPRIETAIRE' ? (
           <TouchableOpacity onPress={() => navigation.navigate('ActionReminder')} style={styles.addButton}>
@@ -271,8 +273,8 @@ export const RemindersScreen = ({ navigation }: any) => {
           numColumns={numColumns}
           renderItem={renderItem}
           keyExtractor={item => item.id.toString()}
-          contentContainerStyle={styles.list}
-          columnWrapperStyle={isTablet ? styles.columnWrapper : null}
+          contentContainerStyle={[styles.list, isDesktopOrTablet && styles.listDesktop]}
+          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -286,7 +288,7 @@ export const RemindersScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16 },
   menuButton: { padding: 4 },
@@ -296,8 +298,13 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   filterChip: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginRight: 8 },
   filterChipText: { fontSize: 13 },
   list: { padding: 16, paddingBottom: 40 },
-  columnWrapper: { justifyContent: 'space-between' },
-  tabletCardContainer: { flex: 0.49 },
+  listDesktop: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  columnWrapper: { gap: theme.spacing.m, justifyContent: 'flex-start' },
+  tabletCardContainer: { flex: 1 },
   reminderCard: { padding: 16, marginBottom: 12, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
   cardHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, marginBottom: 8, alignSelf: 'flex-start' },

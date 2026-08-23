@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Dimensions, Alert, useWindowDimensions, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
@@ -11,13 +11,14 @@ import { formatNumber, formatCurrency } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
 import { SalePaymentsModal } from '../components/SalePaymentsModal';
 
+import { useBreakpoint } from '../hooks/useBreakpoint';
+
 export const FinanceScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
-  const { width } = useWindowDimensions();
-  const isTablet = width > 600;
-  const styles = useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
+  const { isDesktop, isTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isTablet, isDesktop), [theme, isTablet, isDesktop]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [financeData, setFinanceData] = useState({
@@ -202,6 +203,7 @@ export const FinanceScreen = ({ navigation }: any) => {
   }, [navigation]);
 
   const handleExportPDF = async () => {
+    console.log('[TEST SOLFERME] EXPORT FINANCE CLICK');
     try {
       setLoading(true);
       // We might need full list for PDF, let's fetch it if necessary or use statistics summary
@@ -216,6 +218,7 @@ export const FinanceScreen = ({ navigation }: any) => {
         period: period
       }, t);
     } catch (error) {
+      console.error('[TEST SOLFERME] EXPORT FINANCE ERROR:', error);
       Alert.alert(t('common.error'), t('sales.pdfError'));
     } finally {
       setLoading(false);
@@ -223,6 +226,18 @@ export const FinanceScreen = ({ navigation }: any) => {
   };
 
   const benefice = financeData.revenues - financeData.expenses;
+
+  const { width: windowWidth } = useWindowDimensions();
+  const getChartWidth = () => {
+    if (Platform.OS !== 'web') return windowWidth - theme.spacing.m * 4;
+    
+    const hasSidebar = isDesktop || isTablet;
+    const availableWidth = hasSidebar ? windowWidth - 280 : windowWidth;
+    const containerWidth = Math.min(availableWidth, isDesktop || isTablet ? 1200 : 9999);
+    const padding = theme.spacing.m * 2;
+    return containerWidth - padding;
+  };
+  const chartWidth = getChartWidth();
 
   if (loading) {
     return (
@@ -327,54 +342,107 @@ export const FinanceScreen = ({ navigation }: any) => {
             </View>
             <Text style={[styles.miniCardValue, { color: theme.colors.success }]}>{formatNumber(financeData.encaissements)}</Text>
           </Card>
+
+          {isDesktop && (
+            <>
+              <Card style={styles.miniCard}>
+                <View style={styles.miniCardHeader}>
+                  <MaterialIcons name="hourglass-empty" size={16} color={theme.colors.warning || '#f57c00'} />
+                  <Text style={styles.miniCardLabel}>Créances</Text>
+                </View>
+                <Text style={[styles.miniCardValue, { color: theme.colors.warning || '#f57c00' }]}>{formatNumber(financeData.creances)}</Text>
+              </Card>
+
+              <Card style={styles.miniCard}>
+                <View style={styles.miniCardHeader}>
+                  <MaterialIcons name="arrow-upward" size={16} color={theme.colors.danger} />
+                  <Text style={styles.miniCardLabel}>{t('finance.expenses')}</Text>
+                </View>
+                <Text style={[styles.miniCardValue, { color: theme.colors.danger }]}>{formatNumber(financeData.expenses)}</Text>
+              </Card>
+            </>
+          )}
         </View>
 
-        <View style={styles.topCards}>
-          <Card style={styles.miniCard}>
-            <View style={styles.miniCardHeader}>
-              <MaterialIcons name="hourglass-empty" size={16} color={theme.colors.warning || '#f57c00'} />
-              <Text style={styles.miniCardLabel}>Créances</Text>
-            </View>
-            <Text style={[styles.miniCardValue, { color: theme.colors.warning || '#f57c00' }]}>{formatNumber(financeData.creances)}</Text>
-          </Card>
+        {!isDesktop && (
+          <View style={styles.topCards}>
+            <Card style={styles.miniCard}>
+              <View style={styles.miniCardHeader}>
+                <MaterialIcons name="hourglass-empty" size={16} color={theme.colors.warning || '#f57c00'} />
+                <Text style={styles.miniCardLabel}>Créances</Text>
+              </View>
+              <Text style={[styles.miniCardValue, { color: theme.colors.warning || '#f57c00' }]}>{formatNumber(financeData.creances)}</Text>
+            </Card>
 
-          <Card style={styles.miniCard}>
-            <View style={styles.miniCardHeader}>
-              <MaterialIcons name="arrow-upward" size={16} color={theme.colors.danger} />
-              <Text style={styles.miniCardLabel}>{t('finance.expenses')}</Text>
-            </View>
-            <Text style={[styles.miniCardValue, { color: theme.colors.danger }]}>{formatNumber(financeData.expenses)}</Text>
-          </Card>
-        </View>
+            <Card style={styles.miniCard}>
+              <View style={styles.miniCardHeader}>
+                <MaterialIcons name="arrow-upward" size={16} color={theme.colors.danger} />
+                <Text style={styles.miniCardLabel}>{t('finance.expenses')}</Text>
+              </View>
+              <Text style={[styles.miniCardValue, { color: theme.colors.danger }]}>{formatNumber(financeData.expenses)}</Text>
+            </Card>
+          </View>
+        )}
 
         {receivables.length > 0 && (
           <View style={styles.transactionsHeader}>
             <Text style={styles.sectionTitle}>Créances Client (Crédit)</Text>
           </View>
         )}
-        {receivables.slice(0, 5).map((r: any) => (
-          <Card key={`rec-${r.id}`} style={[styles.transactionCard, { marginBottom: 8 }]}>
-            <View style={[styles.transactionIconCircle, { backgroundColor: theme.colors.warning || '#f57c00' }]}>
-              <MaterialIcons name="account-balance-wallet" size={20} color="#000" />
+        {isDesktop && receivables.length > 0 ? (
+          <View style={styles.tableContainer}>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Client</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>Versé / Total</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1 }]}>Reste</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>Action</Text>
             </View>
-            <View style={styles.transactionInfo}>
-              <Text style={styles.transactionTitle}>{r.customer_name || t('common.anonymous')}</Text>
-              <Text style={styles.transactionDate}>
-                {`${t('finance.amountVersed')} : ${formatCurrency(r.amount_paid)} / ${formatCurrency(r.total_amount)}`}
-              </Text>
-              <Text style={[styles.transactionDate, { color: theme.colors.warning || '#f57c00', fontWeight: '700' }]}>
-                {`Reste : ${formatCurrency(r.reste)}`}
-              </Text>
-            </View>
-            <TouchableOpacity
-              style={[styles.encaisseBtn, { backgroundColor: theme.colors.success }]}
-              onPress={() => openPayments(r)}
-            >
-              <MaterialIcons name="point-of-sale" size={16} color="#fff" />
-              <Text style={styles.encaisseBtnText}>Encaisser</Text>
-            </TouchableOpacity>
-          </Card>
-        ))}
+            {receivables.slice(0, 8).map((r: any) => (
+              <View key={`rec-${r.id}`} style={styles.tableRow}>
+                <Text style={[styles.tableCell, { flex: 2, fontWeight: '700' }]}>{r.customer_name || t('common.anonymous')}</Text>
+                <Text style={[styles.tableCell, { flex: 2 }]}>
+                  {`${formatCurrency(r.amount_paid)} / ${formatCurrency(r.total_amount)}`}
+                </Text>
+                <Text style={[styles.tableCell, { flex: 1, color: theme.colors.warning || '#f57c00', fontWeight: '800' }]}>
+                  {formatCurrency(r.reste)}
+                </Text>
+                <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                  <TouchableOpacity
+                    style={[styles.encaisseBtn, { backgroundColor: theme.colors.success, paddingVertical: 4 }]}
+                    onPress={() => openPayments(r)}
+                  >
+                    <MaterialIcons name="point-of-sale" size={14} color="#fff" />
+                    <Text style={[styles.encaisseBtnText, { fontSize: 11 }]}>Encaisser</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          receivables.slice(0, 5).map((r: any) => (
+            <Card key={`rec-${r.id}`} style={[styles.transactionCard, { marginBottom: 8 }]}>
+              <View style={[styles.transactionIconCircle, { backgroundColor: theme.colors.warning || '#f57c00' }]}>
+                <MaterialIcons name="account-balance-wallet" size={20} color="#000" />
+              </View>
+              <View style={styles.transactionInfo}>
+                <Text style={styles.transactionTitle}>{r.customer_name || t('common.anonymous')}</Text>
+                <Text style={styles.transactionDate}>
+                  {`${t('finance.amountVersed')} : ${formatCurrency(r.amount_paid)} / ${formatCurrency(r.total_amount)}`}
+                </Text>
+                <Text style={[styles.transactionDate, { color: theme.colors.warning || '#f57c00', fontWeight: '700' }]}>
+                  {`Reste : ${formatCurrency(r.reste)}`}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.encaisseBtn, { backgroundColor: theme.colors.success }]}
+                onPress={() => openPayments(r)}
+              >
+                <MaterialIcons name="point-of-sale" size={16} color="#fff" />
+                <Text style={styles.encaisseBtnText}>Encaisser</Text>
+              </TouchableOpacity>
+            </Card>
+          ))
+        )}
 
         <Card style={styles.chartCard}>
            <View style={styles.chartHeader}>
@@ -395,7 +463,7 @@ export const FinanceScreen = ({ navigation }: any) => {
            {chartData && chartData.datasets[0].data.length > 0 ? (
                <LineChart
                 data={chartData}
-                width={Dimensions.get('window').width - theme.spacing.m * 4}
+                width={chartWidth}
                 height={180}
                 yAxisLabel=""
                 yAxisSuffix=""
@@ -430,33 +498,76 @@ export const FinanceScreen = ({ navigation }: any) => {
            <TouchableOpacity onPress={() => navigation.navigate('TransactionsHistory')}><Text style={styles.seeAll}>{t('finance.seeAll')}</Text></TouchableOpacity>
         </View>
 
-        <View style={styles.transactionsList}>
-           {financeData.transactions.slice(0, 3).map((transaction: any) => (
-              <Card key={transaction.id} style={[styles.transactionCard, transaction.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
-                 <View style={[styles.transactionIconCircle, transaction.status === 'ANNULEE' && { borderColor: theme.colors.textSecondary, backgroundColor: 'transparent' }]}>
+        {isDesktop ? (
+          <View style={styles.tableContainer}>
+            <View style={styles.tableHeader}>
+              <Text style={[styles.tableHeaderCell, { width: 40 }]}>#</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 2 }]}>{t('common.title')}</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1 }]}>{t('common.date')}</Text>
+              <Text style={[styles.tableHeaderCell, { flex: 1, textAlign: 'right' }]}>{t('common.amount')}</Text>
+            </View>
+            {financeData.transactions.slice(0, 10).map((transaction: any) => {
+               const isCancelled = transaction.status === 'ANNULEE';
+               return (
+                <View key={transaction.id} style={[styles.tableRow, isCancelled && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
+                  <View style={{ width: 40 }}>
                     <MaterialIcons
                       name={transaction.type === 'income' ? 'add-shopping-cart' : 'payments'}
-                      size={20}
-                      color={transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger)}
+                      size={18}
+                      color={isCancelled ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger)}
                     />
-                 </View>
-                 <View style={styles.transactionInfo}>
+                  </View>
+                  <View style={{ flex: 2 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={[styles.transactionTitle, transaction.status === 'ANNULEE' && { textDecorationLine: 'line-through', color: theme.colors.textSecondary }]}>{transaction.title}</Text>
-                      {transaction.status === 'ANNULEE' && (
+                      <Text style={[styles.tableCellText, { fontWeight: '700' }, isCancelled && { textDecorationLine: 'line-through', color: theme.colors.textSecondary }]}>
+                        {transaction.title}
+                      </Text>
+                      {isCancelled && (
                         <View style={styles.cancelledBadge}>
                            <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
                         </View>
                       )}
                     </View>
-                    <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString(t('common.dateLocale'))}</Text>
-                 </View>
-                 <Text style={[styles.transactionAmount, { color: transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger) }]}>
+                  </View>
+                  <Text style={[styles.tableCell, { flex: 1 }]}>
+                    {new Date(transaction.date).toLocaleDateString(t('common.dateLocale'))}
+                  </Text>
+                  <Text style={[styles.tableCell, { flex: 1, textAlign: 'right', fontWeight: '800', color: isCancelled ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger) }]}>
                     {transaction.amount > 0 ? '+' : ''}{formatNumber(transaction.amount)}
-                 </Text>
-              </Card>
-           ))}
-        </View>
+                  </Text>
+                </View>
+               );
+            })}
+          </View>
+        ) : (
+          <View style={styles.transactionsList}>
+            {financeData.transactions.slice(0, 3).map((transaction: any) => (
+                <Card key={transaction.id} style={[styles.transactionCard, transaction.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
+                  <View style={[styles.transactionIconCircle, transaction.status === 'ANNULEE' && { borderColor: theme.colors.textSecondary, backgroundColor: 'transparent' }]}>
+                      <MaterialIcons
+                        name={transaction.type === 'income' ? 'add-shopping-cart' : 'payments'}
+                        size={20}
+                        color={transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger)}
+                      />
+                  </View>
+                  <View style={styles.transactionInfo}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={[styles.transactionTitle, transaction.status === 'ANNULEE' && { textDecorationLine: 'line-through', color: theme.colors.textSecondary }]}>{transaction.title}</Text>
+                        {transaction.status === 'ANNULEE' && (
+                          <View style={styles.cancelledBadge}>
+                            <Text style={styles.cancelledText}>{t('common.cancelled')}</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text style={styles.transactionDate}>{new Date(transaction.date).toLocaleDateString(t('common.dateLocale'))}</Text>
+                  </View>
+                  <Text style={[styles.transactionAmount, { color: transaction.status === 'ANNULEE' ? theme.colors.textSecondary : (transaction.type === 'income' ? theme.colors.success : theme.colors.danger) }]}>
+                      {transaction.amount > 0 ? '+' : ''}{formatNumber(transaction.amount)}
+                  </Text>
+                </Card>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {paymentTarget && (
@@ -474,7 +585,7 @@ export const FinanceScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
+const createStyles = (theme: any, isTablet: boolean, isDesktop: boolean) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.background },
   header: {
@@ -484,8 +595,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.xl,
     marginBottom: theme.spacing.s,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
+    maxWidth: (isDesktop || isTablet) ? 1000 : '100%',
+    alignSelf: (isDesktop || isTablet) ? 'center' : 'auto',
     width: '100%'
   },
   headerTitle: { fontSize: 26, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
@@ -504,8 +615,8 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   scroll: {
     padding: theme.spacing.m,
     paddingBottom: 40,
-    maxWidth: isTablet ? 1000 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
+    maxWidth: (isDesktop || isTablet) ? 1000 : '100%',
+    alignSelf: (isDesktop || isTablet) ? 'center' : 'auto',
     width: '100%'
   },
   balanceCard: {
@@ -515,6 +626,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     borderWidth: 1,
     borderColor: '#000000',
     marginBottom: theme.spacing.m,
+    width: isDesktop ? '100%' : '100%',
   },
   balanceLabel: { fontSize: 13, color: '#000000', opacity: 0.8, fontWeight: '900', textTransform: 'uppercase' },
   balanceValue: { fontSize: 28, fontWeight: '900', marginVertical: 8, color: '#000000' },
@@ -526,7 +638,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     marginBottom: theme.spacing.m,
   },
   miniCard: {
-    width: isTablet ? '48.5%' : '48%',
+    width: isDesktop ? '24%' : (isTablet ? '48.5%' : '48%'),
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
@@ -620,9 +732,9 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   },
   transactionsList: {
     gap: theme.spacing.s,
-    flexDirection: isTablet ? 'row' : 'column',
-    flexWrap: isTablet ? 'wrap' : 'nowrap',
-    justifyContent: isTablet ? 'space-between' : 'flex-start'
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between'
   },
   transactionCard: {
     flexDirection: 'row',
@@ -632,7 +744,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     borderRadius: theme.borderRadius.xl,
     borderWidth: 1,
     borderColor: '#000000',
-    width: isTablet ? '49%' : '100%',
+    width: isDesktop ? '32.5%' : (isTablet ? '49%' : '100%'),
     backgroundColor: theme.colors.surface
   },
   transactionIconCircle: {
@@ -664,6 +776,42 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
   },
+  tableContainer: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#000000',
+    overflow: 'hidden',
+    marginBottom: theme.spacing.m,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: theme.colors.primary + '15',
+    padding: theme.spacing.m,
+    borderBottomWidth: 1,
+    borderBottomColor: '#000000',
+  },
+  tableHeaderCell: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: theme.colors.text,
+    textTransform: 'uppercase',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    padding: theme.spacing.m,
+    borderBottomWidth: 0.5,
+    borderBottomColor: theme.colors.border,
+    alignItems: 'center',
+  },
+  tableCell: {
+    fontSize: 14,
+    color: theme.colors.text,
+  },
+  tableCellText: {
+    fontSize: 14,
+    color: theme.colors.text,
+  },
   cancelledBadge: {
     backgroundColor: '#ffcdd2',
     paddingHorizontal: 4,
@@ -693,6 +841,7 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
   filterScroll: {
     paddingBottom: 8,
     paddingRight: 8,
+    ...(isDesktop ? { flexDirection: 'row', flexWrap: 'wrap' } : {})
   },
   filterChip: {
     paddingHorizontal: 14,

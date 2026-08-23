@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity,
-  ActivityIndicator, useWindowDimensions, RefreshControl
+  ActivityIndicator, useWindowDimensions, RefreshControl, Alert
 } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
@@ -12,14 +12,16 @@ import { repositoryProvider } from '../repositories';
 import { LineChart, BarChart } from 'react-native-chart-kit';
 import { formatNumber, formatCurrency } from '../utils/formatters';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
-import { generateConsolidatedFinancePDF, generateConsolidatedReport } from '../utils/reportGenerator';
+import { generateConsolidatedFinancePDF, generateConsolidatedReport, generateProductionExcel } from '../utils/reportGenerator';
 import { Button } from '../components/Button';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const StatisticsScreen = ({ navigation }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
   const { userRole, userFarms } = useAuth() as any;
   const { width } = useWindowDimensions();
+  const { isDesktop } = useBreakpoint();
 
   const PERIODS = [
     { label: t('common.today'), value: 'day' },
@@ -114,7 +116,7 @@ export const StatisticsScreen = ({ navigation }: any) => {
     [lots, selectedFarm]
   );
 
-  const S = createStyles(theme, isDarkMode, width);
+  const S = createStyles(theme, isDarkMode, width, isDesktop);
 
   const perf = summary ? (summary.performance ?? 0) : 0;
   const perfInfo = getPerformanceLabel(perf, (k: string) => k);
@@ -233,7 +235,7 @@ export const StatisticsScreen = ({ navigation }: any) => {
       </View>
 
       <ScrollView
-        contentContainerStyle={S.scroll}
+        contentContainerStyle={[S.scroll, isDesktop && S.scrollDesktop]}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
       >
@@ -283,16 +285,18 @@ export const StatisticsScreen = ({ navigation }: any) => {
                 )}
               </View>
               {charts?.production?.length > 0 && (
-                <LineChart
-                  data={formatChartData(charts.production)}
-                  width={width - 72}
-                  height={220}
-                  chartConfig={chartCfg}
-                  bezier
-                  style={S.chart}
-                  withInnerLines={false}
-                  xLabelsOffset={-10}
-                />
+                <View style={{ width: '100%', overflow: 'hidden' }}>
+                  <LineChart
+                    data={formatChartData(charts.production)}
+                    width={Math.min(width - 72, 600)}
+                    height={220}
+                    chartConfig={chartCfg}
+                    bezier
+                    style={S.chart}
+                    withInnerLines={false}
+                    xLabelsOffset={-10}
+                  />
+                </View>
               )}
             </Card>
 
@@ -324,16 +328,18 @@ export const StatisticsScreen = ({ navigation }: any) => {
                 <RowStat label={t('statistics.lastDistribution')} value={summary.last_distribution_date ? new Date(summary.last_distribution_date).toLocaleDateString(t('common.dateLocale')) : '—'} />
               </View>
               {charts?.feeding?.length > 0 && (
-                <BarChart
-                  data={formatChartData(charts.feeding)}
-                  width={width - 72}
-                  height={220}
-                  chartConfig={chartCfg}
-                  style={S.chart}
-                  yAxisLabel=""
-                  yAxisSuffix=" kg"
-                  xLabelsOffset={-10}
-                />
+                <View style={{ width: '100%', overflow: 'hidden' }}>
+                  <BarChart
+                    data={formatChartData(charts.feeding)}
+                    width={Math.min(width - 72, 600)}
+                    height={220}
+                    chartConfig={chartCfg}
+                    style={S.chart}
+                    yAxisLabel=""
+                    yAxisSuffix=" kg"
+                    xLabelsOffset={-10}
+                  />
+                </View>
               )}
             </Card>
 
@@ -379,60 +385,79 @@ export const StatisticsScreen = ({ navigation }: any) => {
                     <RowStat label={t('statistics.healthCost')} value={formatCurrency(summary.health_cost || 0)} />
                   </View>
                   {charts?.finance?.length > 0 && (
-                    <BarChart
-                      data={formatChartData(charts.finance)}
-                      width={width - 72}
-                      height={220}
-                      chartConfig={{ ...chartCfg, color: (o = 1) => theme.colors.success }}
-                      style={S.chart}
-                      yAxisLabel=""
-                      yAxisSuffix=""
-                      fromZero
-                      xLabelsOffset={-5}
-                    />
+                    <View style={{ width: '100%', overflow: 'hidden' }}>
+                      <BarChart
+                        data={formatChartData(charts.finance)}
+                        width={Math.min(width - 72, 600)}
+                        height={220}
+                        chartConfig={{ ...chartCfg, color: (o = 1) => theme.colors.success }}
+                        style={S.chart}
+                        yAxisLabel=""
+                        yAxisSuffix=""
+                        fromZero
+                        xLabelsOffset={-5} // Correction appliquée
+                      />
+                    </View>
                   )}
                 </Card>
-              </>
-            )}
 
-            {userRole === 'PROPRIETAIRE' && (
-              <View style={{ marginTop: 20, alignItems: 'center' }}>
+                <View style={{ marginTop: 20, alignItems: 'center' }}>
                 <Button
                   title={t('statistics.exportGlobalReport')}
-                  onPress={() => generateConsolidatedReport(stats, period, t, userRole)}
+                  onPress={async () => {
+                    console.log('[TEST SOLFERME] EXPORT GLOBAL REPORT CLICK', { stats, period, userRole });
+                    try {
+                      if (!stats || !stats.summary) {
+                        Alert.alert(t('common.error'), t('common.noData') || "Aucune donnée disponible pour l'export");
+                        return;
+                      }
+                      setExporting(true);
+                      const exportStats = {
+                        global: {
+                          farms: stats.summary.farms_count || 0,
+                          lots: stats.summary.lots_count || 0,
+                          alive: stats.summary.current_birds || 0,
+                          performance: stats.summary.performance || 0
+                        },
+                        production: {
+                          totalTrays: stats.summary.production_total || 0,
+                          salable: stats.summary.production_salable || 0,
+                          sold: stats.summary.production_sold || 0
+                        },
+                        feeding: {
+                          consumed: stats.summary.feeding_consumed || 0,
+                          stock: stats.summary.feed_stock || 0
+                        },
+                        health: {
+                          dead: stats.summary.dead_birds || 0,
+                          sick: stats.summary.sick_birds || 0,
+                          treatments: stats.summary.health_treatments || 0
+                        },
+                        finance: {
+                          income: stats.summary.revenues || 0,
+                          expenses: stats.summary.expenses || 0,
+                          profit: (stats.summary.revenues || 0) - (stats.summary.expenses || 0)
+                        }
+                      };
+                      await generateConsolidatedReport(exportStats, period, t, userRole);
+                    } catch (error) {
+                      console.error('[TEST SOLFERME] EXPORT GLOBAL REPORT ERROR:', error);
+                      Alert.alert(t('common.error'), t('lots.exportError'));
+                    } finally {
+                      setExporting(false);
+                    }
+                  }}
                   loading={exporting}
                   variant="primary"
                   style={{ width: '100%', height: 50 }}
                   leftIcon={<MaterialIcons name="picture-as-pdf" size={20} color={isDarkMode ? "#FFF" : "#000"} />}
                 />
 
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 12 }}>
-                  <Button
-                    title={t('statistics.excelProd')}
-                    onPress={() => {}}
-                    variant="outline"
-                    style={{ width: '48%' }}
-                    leftIcon={<MaterialCommunityIcons name="file-excel" size={20} color={theme.colors.text} />}
-                  />
-                  <Button
-                    title={t('statistics.financePdf')}
-                    onPress={() => generateConsolidatedFinancePDF({
-                      revenues: summary.revenues,
-                      expenses: summary.expenses,
-                      sales: [],
-                      expenses_list: [],
-                      period: period
-                    }, t)}
-                    variant="outline"
-                    style={{ width: '48%' }}
-                    leftIcon={<MaterialIcons name="account-balance" size={20} color={theme.colors.text} />}
-                  />
-                </View>
-
                 <Text style={{ fontSize: 11, color: theme.colors.textSecondary, marginTop: 12 }}>
                   Les rapports utilisent les données filtrées à l'écran.
                 </Text>
               </View>
+              </>
             )}
 
             <View style={{ height: 40 }} />
@@ -443,7 +468,7 @@ export const StatisticsScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any, isDarkMode: boolean, w: number) => StyleSheet.create({
+const createStyles = (theme: any, isDarkMode: boolean, w: number, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12 },
   backBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: theme.colors.surface, justifyContent: 'center', alignItems: 'center', ...theme.shadows.light },
@@ -463,6 +488,11 @@ const createStyles = (theme: any, isDarkMode: boolean, w: number) => StyleSheet.
   periodTabText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600' },
   periodTabTextActive: { color: theme.colors.primary, fontWeight: '800' },
   scroll: { padding: 16, paddingBottom: 60 },
+  scrollDesktop: {
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
+  },
   groupLabel: { fontSize: 11, fontWeight: '800', color: theme.colors.textSecondary, letterSpacing: 1.2, marginBottom: 10, marginTop: 8, textTransform: 'uppercase' },
   card: { padding: 16, marginBottom: 16, borderRadius: 18, borderWidth: 0.5, borderColor: theme.colors.border },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },

@@ -8,12 +8,16 @@ import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const EmployeeRequestsScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userRole } = useAuth();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
+
+  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -89,6 +93,26 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
   const handleAction = async (requestId: number, action: 'approve' | 'reject') => {
     const confirmMsg = action === 'approve' ? t('requests.confirmApprove') : t('requests.confirmReject');
 
+    const executeAction = async () => {
+      try {
+        const endpoint = action === 'approve' ? 'approve' : 'reject';
+        await repositoryProvider.api.post(`/employee-requests/${requestId}/${endpoint}/`);
+        fetchRequests();
+      } catch (error) {
+        console.log(`Erreur ${action} request:`, error);
+        Alert.alert(t('common.error'), t('common.errorSave'));
+      }
+    };
+
+    // Web: utiliser window.confirm()
+    if (typeof window !== 'undefined') {
+      if (window.confirm(confirmMsg)) {
+        await executeAction();
+      }
+      return;
+    }
+
+    // Mobile: utiliser Alert.alert()
     Alert.alert(
       t('common.confirm'),
       confirmMsg,
@@ -96,16 +120,7 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
         { text: t('common.cancel'), style: 'cancel' },
         {
           text: action === 'approve' ? t('requests.approve') : t('requests.reject'),
-          onPress: async () => {
-            try {
-              const endpoint = action === 'approve' ? 'approve' : 'reject';
-              await repositoryProvider.api.post(`/employee-requests/${requestId}/${endpoint}/`);
-              fetchRequests();
-            } catch (error) {
-              console.log(`Erreur ${action} request:`, error);
-              Alert.alert(t('common.error'), t('common.errorSave'));
-            }
-          }
+          onPress: executeAction
         }
       ]
     );
@@ -121,6 +136,7 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
   };
 
   const renderItem = ({ item }: { item: any }) => (
+    <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
     <Card style={styles.requestCard}>
       <View style={styles.requestHeader}>
         <View style={styles.typeContainer}>
@@ -172,6 +188,7 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
         </View>
       )}
     </Card>
+    </View>
   );
 
   return (
@@ -199,10 +216,13 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
         </View>
       ) : (
         <FlatList
+          key={numColumns}
           data={requests}
+          numColumns={numColumns}
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isDesktopOrTablet && styles.listDesktop]}
+          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchRequests} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -274,7 +294,7 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -315,6 +335,11 @@ const createStyles = (theme: any) => StyleSheet.create({
     ...theme.shadows.medium,
   },
   list: { padding: theme.spacing.m, maxWidth: 800, alignSelf: 'center', width: '100%' },
+  listDesktop: {
+    maxWidth: 1000,
+  },
+  columnWrapper: { gap: theme.spacing.m, justifyContent: 'flex-start' },
+  tabletCardContainer: { flex: 1 },
   requestCard: {
     marginBottom: theme.spacing.m,
     padding: theme.spacing.m,

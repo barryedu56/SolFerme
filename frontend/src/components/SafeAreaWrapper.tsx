@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { SafeAreaView as SafeAreaContextView } from 'react-native-safe-area-context';
-import { ViewStyle, StyleProp, View, Text, StyleSheet } from 'react-native';
+import { ViewStyle, StyleProp, View, Text, StyleSheet, Platform } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 
 /**
@@ -17,20 +17,27 @@ interface SafeAreaWrapperProps {
 export const SafeAreaWrapper: React.FC<SafeAreaWrapperProps> = ({ children, style, edges }) => {
   const [isOffline, setIsOffline] = useState(false);
 
+  const checkIsOffline = (state: any) => {
+    if (Platform.OS === 'web') {
+      return !state.isConnected;
+    }
+    return !(state.isConnected && state.isInternetReachable);
+  };
+
   useEffect(() => {
     // Vérification initiale
     NetInfo.fetch().then(state => {
-      setIsOffline(!(state.isConnected && state.isInternetReachable));
+      setIsOffline(checkIsOffline(state));
     });
     // Écouteur de changement de connectivité
     const unsubscribe = NetInfo.addEventListener(state => {
-      setIsOffline(!(state.isConnected && state.isInternetReachable));
+      setIsOffline(checkIsOffline(state));
     });
     return () => unsubscribe();
   }, []);
 
   return (
-    <SafeAreaContextView style={style} edges={edges}>
+    <SafeAreaContextView style={[style, Platform.OS === 'web' && { flex: 1 }]} edges={edges}>
       {isOffline && (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>⚠️ Mode hors-ligne — les modifications seront synchronisées au retour du réseau</Text>

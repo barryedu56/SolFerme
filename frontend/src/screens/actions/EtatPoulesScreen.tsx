@@ -7,11 +7,13 @@ import { useTheme } from '../../context/ThemeContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from '../../context/LanguageContext';
+import { useBreakpoint } from '../../hooks/useBreakpoint';
 
 export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
   const { lotId, lotName } = route.params || { lotId: 1, lotName: 'Lot (B)' };
   const { theme } = useTheme();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
 
   const [deadCount, setDeadCount] = useState('0');
@@ -60,7 +62,7 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll}>
+      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
         <Card style={styles.infoCard}>
           <View style={styles.infoRow}>
             <View style={styles.infoTexts}>
@@ -162,6 +164,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.colors.text
   },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
+  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
   infoCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

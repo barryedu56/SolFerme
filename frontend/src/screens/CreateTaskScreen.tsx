@@ -10,13 +10,15 @@ import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { TASK_TYPES, TASK_TITLES_BY_TYPE } from '../constants/TaskConstants';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const CreateTaskScreen = ({ navigation, route }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
   const isOwner = userRole === 'PROPRIETAIRE';
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   const initialEmployeeId = route.params?.employeeId?.toString() || '';
   const [employees, setEmployees] = useState<any[]>([]);
@@ -199,7 +201,7 @@ export const CreateTaskScreen = ({ navigation, route }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Type de tâche</Text>
@@ -374,7 +376,7 @@ export const CreateTaskScreen = ({ navigation, route }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   header: {
@@ -397,6 +399,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   sectionTitle: { fontSize: 18, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
   filterText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   formCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

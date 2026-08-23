@@ -438,12 +438,24 @@ class LotViewSet(viewsets.ModelViewSet):
     serializer_class = LotSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    def get_permissions(self):
+        # Réserver destroy, archive, reactivate aux propriétaires
+        if self.action in ['destroy', 'archive', 'reactivate']:
+            return [permissions.IsAuthenticated(), IsProprietaire()]
+        return [permissions.IsAuthenticated()]
+
     def get_queryset(self):
         user = self.request.user
         if user.role == 'PROPRIETAIRE':
-            return Lot.objects.filter(farm__owner=user)
+            queryset = Lot.objects.filter(farm__owner=user)
         else:
-            return Lot.objects.filter(employees__user=user)
+            queryset = Lot.objects.filter(employees__user=user)
+
+        farm_id = self.request.query_params.get('farm')
+        if farm_id:
+            queryset = queryset.filter(farm_id=farm_id)
+
+        return queryset
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -482,7 +494,6 @@ class LotViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validation métier : la ferme du lot doit être ACTIF pour permettre la réactivation
         try:
             farm_status = lot.farm.status
         except Exception:
@@ -493,18 +504,25 @@ class LotViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Validation métier : un lot avec 0 poules ne peut pas être réactivé
         if lot.current_quantity <= 0:
             return Response(
                 {"detail": "Impossible de réactiver ce lot : il n'a plus de poules vivantes. Veuillez d'abord ajouter des sujets via un mouvement d'ajout."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        if lot.farm.capacity > 0:
+            active_total = Lot.objects.filter(farm=lot.farm, status='ACTIF').exclude(pk=lot.pk).aggregate(total=Sum('current_quantity'))['total'] or 0
+            projected_total = active_total + lot.current_quantity
+            if projected_total > lot.farm.capacity:
+                return Response(
+                    {"detail": f"La réactivation du lot dépasserait la capacité de la ferme ({projected_total} > {lot.farm.capacity})."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         lot.status = 'ACTIF'
         lot.motif_fin = None
         lot.save()
-        
-        # Log l'action
+
         ActivityLog.objects.create(
             user=request.user,
             farm=lot.farm,
@@ -513,7 +531,7 @@ class LotViewSet(viewsets.ModelViewSet):
             module="Lots",
             description=f"Le lot {lot.name} a été réactivé"
         )
-        
+
         return Response(
             {"detail": f"Le lot {lot.name} a été réactivé avec succès."},
             status=status.HTTP_200_OK
@@ -717,28 +735,57 @@ class ProductionViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         instance = serializer.save(created_by=self.request.user)
-        ActivityLog.objects.create(
-            user=self.request.user,
-            farm=instance.lot.farm,
-            lot=instance.lot,
-            action="Ajout Production",
-            module="Production",
+        # Vérifier si un log existe déjà pour éviter les doublons
+        existing_log = ActivityLog.objects.filter(
             related_id=instance.id,
-            description=f"Production : {instance.casiers_produits} casiers collectés (Lot {instance.lot.name})"
-        )
+            module="Production",
+            action="Ajout Production"
+        ).first()
+        
+        if not existing_log:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=instance.lot.farm,
+                lot=instance.lot,
+                action="Ajout Production",
+                module="Production",
+                related_id=instance.id,
+                description=f"Production : {instance.casiers_produits} casiers collectés (Lot {instance.lot.name})"
+            )
 
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        description = f"Production modifiée (Lot {new_instance.lot.name}) : {old_instance.casiers_produits} -> {new_instance.casiers_produits} casiers"
+        print(f"[TEST SOLFERME] PRODUCTION UPDATE: id={new_instance.id}, old={old_instance.casiers_produits}, new={new_instance.casiers_produits}")
+
+        # Chercher spécifiquement les logs de modification existants
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Production",
+            action="Modification Production"
+        ).update(
             user=self.request.user,
             farm=new_instance.lot.farm,
             lot=new_instance.lot,
-            action="Modification Production",
-            module="Production",
-            related_id=new_instance.id,
-            description=f"Production modifiée (Lot {new_instance.lot.name}) : {old_instance.casiers_produits} -> {new_instance.casiers_produits} casiers"
+            description=description
         )
+
+        print(f"[TEST SOLFERME] PRODUCTION UPDATE: ActivityLog updated={updated}")
+
+        if not updated:
+            print(f"[TEST SOLFERME] PRODUCTION UPDATE: Creating new ActivityLog")
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.lot.farm,
+                lot=new_instance.lot,
+                action="Modification Production",
+                module="Production",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -831,15 +878,32 @@ class EggConversionViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Conversion du {instance.conversion_date} modifiée : {instance.quantity} casiers ({instance.from_state}→{instance.to_state})"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=instance.id,
+            module="Production"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=instance.farm,
             lot=instance.lot,
             action="Modification Conversion",
-            module="Production",
-            related_id=instance.id,
-            description=f"Conversion du {instance.conversion_date} modifiée : {instance.quantity} casiers ({instance.from_state}→{instance.to_state})"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=instance.farm,
+                lot=instance.lot,
+                action="Modification Conversion",
+                module="Production",
+                related_id=instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -918,15 +982,23 @@ class SaleViewSet(viewsets.ModelViewSet):
             product_label = 'Normaux' if instance.product_type == 'NORMAL' else 'Cassés'
             desc = f"Vente : {instance.quantity} casiers ({product_label}) à {instance.customer_name or 'Client inconnu'}"
 
-        ActivityLog.objects.create(
-            user=self.request.user,
-            farm=instance.lot.farm,
-            lot=instance.lot,
-            action=action_name,
-            module="Vente",
+        # Vérifier si un log existe déjà pour éviter les doublons
+        existing_log = ActivityLog.objects.filter(
             related_id=instance.id,
-            description=desc
-        )
+            module="Vente",
+            action=action_name
+        ).first()
+        
+        if not existing_log:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=instance.lot.farm,
+                lot=instance.lot,
+                action=action_name,
+                module="Vente",
+                related_id=instance.id,
+                description=desc
+            )
 
     def perform_update(self, serializer):
         old_instance = self.get_object()
@@ -944,23 +1016,45 @@ class SaleViewSet(viewsets.ModelViewSet):
 
         unit = "sujets" if new_instance.product_type == 'CHICKEN' else "casiers"
 
+        print(f"[TEST SOLFERME] SALE UPDATE: id={new_instance.id}, customer={new_instance.customer_name}")
+
         if old_instance.quantity != new_instance.quantity:
             changes.append(f"Quantité : {old_instance.quantity} -> {new_instance.quantity} {unit}")
         if old_instance.status != new_instance.status:
             status_map = {'ACTIVE': 'Active', 'ANNULEE': 'Annulée'}
             changes.append(f"Statut : {status_map.get(old_instance.status, old_instance.status)} -> {status_map.get(new_instance.status, new_instance.status)}")
 
+        print(f"[TEST SOLFERME] SALE UPDATE: changes={changes}")
+
         if changes:
             action_name = "Modification Vente Poules" if new_instance.product_type == 'CHICKEN' else "Modification Vente"
-            ActivityLog.objects.create(
+            description = f"Vente à {new_instance.customer_name or 'Client'} modifiée : " + ", ".join(changes)
+
+            # Chercher spécifiquement les logs de modification existants
+            updated = ActivityLog.objects.filter(
+                related_id=new_instance.id,
+                module="Vente",
+                action=action_name
+            ).update(
                 user=self.request.user,
                 farm=new_instance.lot.farm,
                 lot=new_instance.lot,
-                action=action_name,
-                module="Vente",
-                related_id=new_instance.id,
-                description=f"Vente à {new_instance.customer_name or 'Client'} modifiée : " + ", ".join(changes)
+                description=description
             )
+
+            print(f"[TEST SOLFERME] SALE UPDATE: ActivityLog updated={updated}")
+
+            if not updated:
+                print(f"[TEST SOLFERME] SALE UPDATE: Creating new ActivityLog")
+                ActivityLog.objects.create(
+                    user=self.request.user,
+                    farm=new_instance.lot.farm,
+                    lot=new_instance.lot,
+                    action=action_name,
+                    module="Vente",
+                    related_id=new_instance.id,
+                    description=description
+                )
 
     def destroy(self, request, *args, **kwargs):
         # ⚠️ CORRECTION (BUG B2) : SaleViewSet n'avait AUCUN destroy → ModelViewSet.destroy()
@@ -1160,15 +1254,32 @@ class FeedViewSet(viewsets.ModelViewSet):
         old_instance = self.get_object()
         new_instance = serializer.save()
         if old_instance.quantity_kg != new_instance.quantity_kg or old_instance.status != new_instance.status:
-            ActivityLog.objects.create(
+            description = f"Distribution modifiée (Lot {new_instance.lot.name}) : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg"
+            
+            # Update existing ActivityLog instead of creating a new one to avoid duplication
+            updated = ActivityLog.objects.filter(
+                related_id=new_instance.id,
+                module="Alimentation"
+            ).exclude(
+                action__icontains="Annul"
+            ).update(
                 user=self.request.user,
                 farm=new_instance.lot.farm,
                 lot=new_instance.lot,
                 action="Modification Alimentation",
-                module="Alimentation",
-                related_id=new_instance.id,
-                description=f"Distribution modifiée (Lot {new_instance.lot.name}) : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg"
+                description=description
             )
+            
+            if not updated:
+                ActivityLog.objects.create(
+                    user=self.request.user,
+                    farm=new_instance.lot.farm,
+                    lot=new_instance.lot,
+                    action="Modification Alimentation",
+                    module="Alimentation",
+                    related_id=new_instance.id,
+                    description=description
+                )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1246,15 +1357,32 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Soin {new_instance.product_name} modifié (Lot {new_instance.lot.name})"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Santé"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.lot.farm,
             lot=new_instance.lot,
-            action="Modification Soin",
-            module="Santé",
-            related_id=new_instance.id,
-            description=f"Soin {new_instance.product_name} modifié (Lot {new_instance.lot.name})"
+            action="Modification Santé",
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.lot.farm,
+                lot=new_instance.lot,
+                action="Modification Santé",
+                module="Santé",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1324,15 +1452,32 @@ class ChickenMovementViewSet(viewsets.ModelViewSet):
         old_instance = self.get_object()
         new_instance = serializer.save()
         type_map = {'MORT': 'Mortalité', 'MALADE': 'Maladie', 'GUERI': 'Guérison', 'AJOUT': 'Ajout'}
-        ActivityLog.objects.create(
+        description = f"Mouvement {type_map.get(new_instance.type, new_instance.type)} modifié : {old_instance.quantity} -> {new_instance.quantity} sujets (Lot {new_instance.lot.name})"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Mouvement"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.lot.farm,
             lot=new_instance.lot,
             action="Modification Mouvement",
-            module="Mouvement",
-            related_id=new_instance.id,
-            description=f"Mouvement {type_map.get(new_instance.type, new_instance.type)} modifié : {old_instance.quantity} -> {new_instance.quantity} sujets (Lot {new_instance.lot.name})"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.lot.farm,
+                lot=new_instance.lot,
+                action="Modification Mouvement",
+                module="Mouvement",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1446,10 +1591,8 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_permissions(self):
-        if self.action in ['destroy', 'create']:
+        if self.action in ['destroy', 'create', 'update', 'partial_update']:
             return [permissions.IsAuthenticated(), IsProprietaire()]
-        if self.action in ['update', 'partial_update']:
-             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated()]
 
     def perform_update(self, serializer):
@@ -1641,14 +1784,30 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Dépense '{new_instance.description}' modifiée : {old_instance.amount} -> {new_instance.amount} GNF"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Finance"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.farm,
             action="Modification Dépense",
-            module="Finance",
-            related_id=new_instance.id,
-            description=f"Dépense '{new_instance.description}' modifiée : {old_instance.amount} -> {new_instance.amount} GNF"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.farm,
+                action="Modification Dépense",
+                module="Finance",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1720,6 +1879,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             user=self.request.user,
             farm=instance.farm,
             lot=instance.lot,
+            related_id=instance.id,
             action="Nouveau Rappel",
             module="Rappel",
             description=f"Rappel : {instance.title} prévu le {instance.date}"
@@ -1732,6 +1892,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             user=self.request.user,
             farm=new_instance.farm,
             lot=new_instance.lot,
+            related_id=new_instance.id,
             action="Rappel Modifié",
             module="Rappel",
             description=f"Modification du rappel : {new_instance.title}"
@@ -1743,6 +1904,7 @@ class ReminderViewSet(viewsets.ModelViewSet):
             user=self.request.user,
             farm=instance.farm,
             lot=instance.lot,
+            related_id=instance.id,
             action="Rappel Retiré",
             module="Rappel",
             description=f"Rappel supprimé : {instance.title}"
@@ -1862,14 +2024,30 @@ class PayrollViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Fiche de paie de {new_instance.employee.user.name} modifiée : {old_instance.amount_paid} -> {new_instance.amount_paid} GNF"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Finance"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.employee.farm,
             action="Modification Salaire",
-            module="Finance",
-            related_id=new_instance.id,
-            description=f"Fiche de paie de {new_instance.employee.user.name} modifiée : {old_instance.amount_paid} -> {new_instance.amount_paid} GNF"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.employee.farm,
+                action="Modification Salaire",
+                module="Finance",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -1975,15 +2153,32 @@ class LotExpenseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old = self.get_object()
         instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Frais '{old.name}' modifié : {old.amount} → {instance.amount} GNF"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=instance.id,
+            module="Gestion Lot"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=instance.lot.farm,
             lot=instance.lot,
             action="Frais Lot Modifié",
-            module="Gestion Lot",
-            related_id=instance.id,
-            description=f"Frais '{old.name}' modifié : {old.amount} → {instance.amount} GNF"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=instance.lot.farm,
+                lot=instance.lot,
+                action="Frais Lot Modifié",
+                module="Gestion Lot",
+                related_id=instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -2222,6 +2417,12 @@ class EmployeeRequestViewSet(viewsets.ModelViewSet):
 
         return queryset.order_by('-created_at')
 
+    def destroy(self, request, *args, **kwargs):
+        return Response(
+            {"detail": "La suppression définitive d'une demande historique est désactivée pour préserver l'historique métier."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
     def perform_create(self, serializer):
         if self.request.user.role == 'EMPLOYE':
             try:
@@ -2231,8 +2432,6 @@ class EmployeeRequestViewSet(viewsets.ModelViewSet):
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError("Profil employé introuvable pour cet utilisateur.")
         else:
-            # Pour un propriétaire, il doit théoriquement spécifier l'employé,
-            # mais dans ce flux, seuls les employés créent des demandes.
             serializer.save()
 
     @action(detail=True, methods=['post'])
@@ -2240,6 +2439,8 @@ class EmployeeRequestViewSet(viewsets.ModelViewSet):
         if request.user.role != 'PROPRIETAIRE':
             return Response({"detail": "Non autorisé."}, status=status.HTTP_403_FORBIDDEN)
         instance = self.get_object()
+        if instance.status in ['APPROVED', 'REJECTED']:
+            return Response({"detail": "Cette demande a déjà été clôturée et ne peut pas être approuvée à nouveau."}, status=status.HTTP_400_BAD_REQUEST)
         instance.status = 'APPROVED'
         instance.save()
         return Response({'status': 'APPROVED'})
@@ -2249,6 +2450,8 @@ class EmployeeRequestViewSet(viewsets.ModelViewSet):
         if request.user.role != 'PROPRIETAIRE':
             return Response({"detail": "Non autorisé."}, status=status.HTTP_403_FORBIDDEN)
         instance = self.get_object()
+        if instance.status in ['APPROVED', 'REJECTED']:
+            return Response({"detail": "Cette demande a déjà été clôturée et ne peut pas être refusée à nouveau."}, status=status.HTTP_400_BAD_REQUEST)
         instance.status = 'REJECTED'
         instance.save()
         return Response({'status': 'REJECTED'})
@@ -2337,15 +2540,32 @@ class FeedPurchaseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Achat {new_instance.feed_type} modifié : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Alimentation"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.farm,
             lot=new_instance.lot,
             action="Modification Achat Aliment",
-            module="Alimentation",
-            related_id=new_instance.id,
-            description=f"Achat {new_instance.feed_type} modifié : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.farm,
+                lot=new_instance.lot,
+                action="Modification Achat Aliment",
+                module="Alimentation",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -2408,15 +2628,32 @@ class HealthPurchaseViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        ActivityLog.objects.create(
+        description = f"Achat {new_instance.product_name} modifié : {old_instance.quantity} -> {new_instance.quantity} {new_instance.unit}"
+        
+        # Update existing ActivityLog instead of creating a new one to avoid duplication
+        updated = ActivityLog.objects.filter(
+            related_id=new_instance.id,
+            module="Santé"
+        ).exclude(
+            action__icontains="Annul"
+        ).update(
             user=self.request.user,
             farm=new_instance.farm,
             lot=new_instance.lot,
             action="Modification Achat Santé",
-            module="Santé",
-            related_id=new_instance.id,
-            description=f"Achat {new_instance.product_name} modifié : {old_instance.quantity} -> {new_instance.quantity} {new_instance.unit}"
+            description=description
         )
+        
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.farm,
+                lot=new_instance.lot,
+                action="Modification Achat Santé",
+                module="Santé",
+                related_id=new_instance.id,
+                description=description
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

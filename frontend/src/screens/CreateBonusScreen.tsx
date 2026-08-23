@@ -12,6 +12,7 @@ import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { formatCurrency } from '../utils/formatters';
 import { getErrorMessage } from '../utils/errors';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 const BONUS_TYPES = [
   { value: 'PERFORMANCE', label: 'Prime performance', icon: 'trending-up' },
@@ -22,7 +23,8 @@ const BONUS_TYPES = [
 export const CreateBonusScreen = ({ navigation, route }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktop } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   const preselectedEmployee = route.params?.employee;
 
@@ -119,7 +121,7 @@ export const CreateBonusScreen = ({ navigation, route }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} showsVerticalScrollIndicator={false}>
           {/* Sélection employé */}
           <Card style={styles.card}>
             <Text style={styles.sectionLabel}>{t('employees.employeeLabel').toUpperCase()} *</Text>
@@ -238,7 +240,7 @@ export const CreateBonusScreen = ({ navigation, route }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   header: {
     flexDirection: 'row',
@@ -255,6 +257,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
+  scrollDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   card: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

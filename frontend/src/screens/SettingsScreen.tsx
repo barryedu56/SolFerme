@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Switch, TouchableOpacity, Alert, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, Switch, TouchableOpacity, Alert, useWindowDimensions, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { Card } from '../components/Card';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const SettingsScreen = ({ navigation }: any) => {
   const { themeMode, setThemeMode, isDarkMode, notifications, toggleNotifications, theme } = useTheme();
   const { language, setLanguage, t } = useTranslation();
   const { width } = useWindowDimensions();
+  const { isDesktop } = useBreakpoint();
   const isTablet = width > 600;
   const styles = React.useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
   const [autoBackup, setAutoBackup] = useState(true);
@@ -107,14 +109,16 @@ export const SettingsScreen = ({ navigation }: any) => {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.menuButton}>
-          <MaterialIcons name="menu" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
+        {!isDesktop && Platform.OS !== 'web' && (
+          <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.menuButton}>
+            <MaterialIcons name="menu" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+        )}
         <Text style={[styles.title, { color: theme.colors.text }]}>{t('settings.title')}</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} showsVerticalScrollIndicator={false}>
         <Text style={styles.sectionLabel}>{t('settings.appearance')}</Text>
         <Card style={styles.card}>
           <SettingItem
@@ -254,12 +258,14 @@ const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
     ...theme.shadows.light,
   },
   title: { fontSize: 22, fontWeight: 'bold', color: theme.colors.text },
-  content: {
+  scroll: {
     padding: theme.spacing.m,
     paddingBottom: 40,
-    maxWidth: isTablet ? 800 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
-    width: '100%'
+  },
+  scrollDesktop: {
+    maxWidth: 700,
+    width: '100%',
+    alignSelf: 'center',
   },
   sectionLabel: {
     fontSize: 13,

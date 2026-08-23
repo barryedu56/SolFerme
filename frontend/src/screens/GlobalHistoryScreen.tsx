@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, RefreshControl, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, Pressable, RefreshControl, Alert, ScrollView, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -8,11 +8,13 @@ import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../context/LanguageContext';
 import { formatNumber } from '../utils/formatters';
 import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const GlobalHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { userRole, userName } = useAuth();
   const { t } = useTranslation();
+  const { isDesktop } = useBreakpoint();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [logs, setLogs] = useState<any[]>([]);
@@ -46,11 +48,9 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
       setLots(lotsRes.data.results || lotsRes.data);
 
       const rawLogsRaw = logsRes.data.results || logsRes.data;
-      // 🔧 Déduplication par entité : on ne garde que l'action la plus récente
-      // pour une entité donnée (module + related_id).
-      const sortedLogs = rawLogsRaw.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      // 🔧 Déduplication uniquement des doublons exacts (même id) pour conserver l'historique complet
       const seenGlobal = new Map<number, any>();
-      for (const log of sortedLogs) {
+      for (const log of rawLogsRaw) {
         const existing = seenGlobal.get(log.id);
         if (!existing) {
           seenGlobal.set(log.id, log);
@@ -128,6 +128,26 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
   const handleDeleteLog = (logId: number) => {
     if (userRole !== 'PROPRIETAIRE') return;
 
+    const executeDelete = async () => {
+      try {
+        await repositoryProvider.api.delete(`/activity-logs/${logId}/`);
+        setLogs(prev => prev.filter(log => log.id !== logId));
+        Alert.alert(t('common.success'), t('history.deleteSuccess'));
+      } catch (error) {
+        console.log('Erreur suppression log:', error);
+        Alert.alert(t('common.error'), t('history.deleteError'));
+      }
+    };
+
+    // Sur web, utiliser window.confirm() pour confirmation
+    if (Platform.OS === 'web') {
+      if (window.confirm(t('history.deleteConfirm'))) {
+        executeDelete();
+      }
+      return;
+    }
+
+    // Sur native, utiliser Alert.alert pour confirmation
     Alert.alert(
       t('common.confirm'),
       t('history.deleteConfirm'),
@@ -136,16 +156,7 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
         {
           text: t('common.delete'),
           style: 'destructive',
-          onPress: async () => {
-            try {
-              await repositoryProvider.api.delete(`/activity-logs/${logId}/`);
-              setLogs(prev => prev.filter(log => log.id !== logId));
-              Alert.alert(t('common.success'), t('history.deleteSuccess'));
-            } catch (error) {
-              console.log('Erreur suppression log:', error);
-              Alert.alert(t('common.error'), t('history.deleteError'));
-            }
-          }
+          onPress: executeDelete
         }
       ]
     );
@@ -250,7 +261,7 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
     fetchLogs();
   };
 
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -332,7 +343,7 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
         <FlatList
           data={filteredLogs}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={[styles.list, isDesktop && styles.listDesktop]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
@@ -344,11 +355,11 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
             const isCancelled =
               item.action.toLowerCase().includes('annul') ||
               item.action.toLowerCase().includes('suppression');
+            const isDesktop = Platform.OS === 'web';
+            const CardWrapper = isDesktop ? View : TouchableOpacity;
             return (
-              <TouchableOpacity
-                onLongPress={() => userRole === 'PROPRIETAIRE' && handleDeleteLog(item.id)}
-                delayLongPress={500}
-                activeOpacity={0.7}
+              <CardWrapper
+                {...(!isDesktop ? { activeOpacity: 0.7 } : {})}
               >
                 <View style={{ opacity: isCancelled ? 0.6 : 1 }}>
                   <Card style={[styles.logCard, isCancelled && styles.cancelledCard]}>
@@ -393,16 +404,16 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
                       </View>
                     </View>
                     {userRole === 'PROPRIETAIRE' && (
-                      <TouchableOpacity
+                      <Pressable
                         onPress={() => handleDeleteLog(item.id)}
-                        style={styles.deleteIconButton}
+                        style={({ pressed }) => [styles.deleteIconButton, { opacity: pressed ? 0.6 : 1, cursor: 'pointer' } as any]}
                       >
-                        <MaterialIcons name="delete-outline" size={20} color={theme.colors.textSecondary + '80'} />
-                      </TouchableOpacity>
+                        <MaterialIcons name="delete-outline" size={20} color={theme.colors.danger + '80'} />
+                      </Pressable>
                     )}
                   </Card>
                 </View>
-              </TouchableOpacity>
+              </CardWrapper>
             );
           }}
         />
@@ -411,7 +422,7 @@ export const GlobalHistoryScreen = ({ navigation }: any) => {
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
+const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
@@ -435,6 +446,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   activeChipText: { color: '#fff', fontWeight: 'bold' },
   divider: { width: 1, height: 20, backgroundColor: theme.colors.border, alignSelf: 'center', marginHorizontal: 4, marginRight: 12 },
   list: { padding: theme.spacing.m, paddingBottom: 40 },
+  listDesktop: {
+    maxWidth: 800,
+    width: '100%',
+    alignSelf: 'center',
+  },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', marginTop: 100, opacity: 0.5 },
   emptyText: { marginTop: 10, fontSize: 16, color: theme.colors.textSecondary, fontWeight: '600' },
   logCard: {

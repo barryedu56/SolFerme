@@ -3,7 +3,140 @@ from django.utils import timezone
 from django.db.models import Sum
 from rest_framework import status
 from rest_framework.test import APIClient
-from .models import User, Farm, Lot, Sale, Production, FeedPurchase, Expense, FeedInventory, ChickenMovement, HealthPurchase, HealthInventory, HealthRecord, Feed
+from .models import User, Farm, Lot, Sale, Production, FeedPurchase, Expense, FeedInventory, ChickenMovement, HealthPurchase, HealthInventory, HealthRecord, Feed, Payroll, Employee
+
+
+class FinancialDoubleCounting(TestCase):
+    """
+    Tests de détection du double comptage financier.
+    
+    Vérifie que l'annulation d'une FeedPurchase/Payroll annule aussi l'Expense lié.
+    """
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='prop@example.com', name='Prop', password='password', role='PROPRIETAIRE'
+        )
+        self.farm = Farm.objects.create(owner=self.user, name='Test Farm')
+        self.lot = Lot.objects.create(
+            farm=self.farm, name='Lot A', breed='ISA Brown',
+            initial_quantity=100, current_quantity=100,
+            purchase_date=timezone.now().date(), purchase_price=1000
+        )
+        self.employee = Employee.objects.create(
+            user=self.user, farm=self.farm, position='Worker', salary=10000
+        )
+
+    def test_feed_purchase_cancellation_cascades_expense(self):
+        """
+        Vérifie que l'annulation d'une FeedPurchase annule aussi l'Expense lié.
+        
+        Scénario de double comptage :
+        1. Créer FeedPurchase → crée automatiquement un Expense (via signal)
+        2. Annuler FeedPurchase → doit aussi annuler l'Expense
+        3. Si l'Expense reste ACTIVE, c'est du double comptage
+        """
+        # Créer une FeedPurchase
+        purchase = FeedPurchase.objects.create(
+            farm=self.farm, lot=self.lot,
+            date=timezone.now().date(),
+            feed_type='Maïs',
+            quantity_kg=100,
+            total_price=50000,
+            supplier='Fournisseur A',
+            status='ACTIVE',
+            created_by=self.user
+        )
+        
+        # Vérifier qu'un Expense a été créé (via signal post_save)
+        purchase.refresh_from_db()
+        self.assertIsNotNone(purchase.expense, "Expense doit être créé automatiquement")
+        expense_id = purchase.expense.id
+        
+        # Vérifier l'Expense est ACTIVE
+        expense = Expense.objects.get(id=expense_id)
+        self.assertEqual(expense.status, 'ACTIVE')
+        self.assertEqual(float(expense.amount), 50000.0)
+        
+        # Annuler la FeedPurchase
+        purchase.status = 'ANNULEE'
+        purchase.save()
+        
+        # Vérifier que l'Expense est aussi annulé (via signal post_save)
+        expense.refresh_from_db()
+        self.assertEqual(expense.status, 'ANNULEE', 
+                        "Expense doit être annulé quand FeedPurchase est annulé (pas de double comptage)")
+
+    def test_payroll_cancellation_cascades_expense(self):
+        """
+        Vérifie que l'annulation d'une paie annule aussi l'Expense lié.
+        """
+        # Créer une paie
+        payroll = Payroll.objects.create(
+            employee=self.employee,
+            date=timezone.now().date(),
+            base_salary=100000,
+            bonus=10000,
+            deduction=5000,
+            amount_paid=105000,
+            status='ACTIVE'
+        )
+        
+        # Vérifier qu'un Expense a été créé
+        payroll.refresh_from_db()
+        self.assertIsNotNone(payroll.expense, "Expense doit être créé automatiquement")
+        expense_id = payroll.expense.id
+        
+        # Vérifier l'Expense est ACTIVE
+        expense = Expense.objects.get(id=expense_id)
+        self.assertEqual(expense.status, 'ACTIVE')
+        self.assertEqual(float(expense.amount), 105000.0)
+        
+        # Annuler la paie
+        payroll.status = 'ANNULEE'
+        payroll.save()
+        
+        # Vérifier que l'Expense est aussi annulé
+        expense.refresh_from_db()
+        self.assertEqual(expense.status, 'ANNULEE',
+                        "Expense doit être annulé quand Payroll est annulé (pas de double comptage)")
+
+    def test_health_purchase_cancellation_cascades_expense(self):
+        """
+        Vérifie que l'annulation d'une HealthPurchase annule aussi l'Expense lié.
+        """
+        # Créer une HealthPurchase
+        purchase = HealthPurchase.objects.create(
+            farm=self.farm, lot=self.lot,
+            date=timezone.now().date(),
+            product_name='Vaccin',
+            product_type='Vaccin',
+            quantity=10,
+            unit='Flacon',
+            total_price=30000,
+            supplier='Pharma Lab',
+            status='ACTIVE',
+            created_by=self.user
+        )
+        
+        # Vérifier qu'un Expense a été créé
+        purchase.refresh_from_db()
+        self.assertIsNotNone(purchase.expense, "Expense doit être créé automatiquement")
+        expense_id = purchase.expense.id
+        
+        # Vérifier l'Expense est ACTIVE
+        expense = Expense.objects.get(id=expense_id)
+        self.assertEqual(expense.status, 'ACTIVE')
+        self.assertEqual(float(expense.amount), 30000.0)
+        
+        # Annuler la HealthPurchase
+        purchase.status = 'ANNULEE'
+        purchase.save()
+        
+        # Vérifier que l'Expense est aussi annulé
+        expense.refresh_from_db()
+        self.assertEqual(expense.status, 'ANNULEE',
+                        "Expense doit être annulé quand HealthPurchase est annulé (pas de double comptage)")
+
 
 class CancellationSystemTestCase(TestCase):
     def setUp(self):
@@ -80,7 +213,7 @@ class CancellationSystemTestCase(TestCase):
         self.assertEqual(sale.status, 'ANNULEE')
         self.assertTrue(Sale.objects.filter(id=sale.id).exists())
 
-        activity_log = sale.lot.activitylog_set.filter(related_id=sale.id, module='Vente').order_by('-id').first()
+        activity_log = sale.lot.activity_logs.filter(related_id=sale.id, module='Vente').order_by('-id').first()
         self.assertIsNotNone(activity_log)
         self.assertIn('Annulée', activity_log.action)
 
