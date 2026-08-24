@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -11,6 +11,8 @@ import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { toast } from '../utils/toast';
+import { getErrorMessage } from '../utils/errors';
 
 export const TasksScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
@@ -70,9 +72,17 @@ export const TasksScreen = ({ navigation }: any) => {
       return;
     }
 
+    const confirmationMessage = `${t('common.confirm')} : ${task.title}?`;
+    if (Platform.OS === 'web') {
+      if (window.confirm(`${t('tasks.completeTask')}\n\n${confirmationMessage}`)) {
+        performCompleteTask(task);
+      }
+      return;
+    }
+
     Alert.alert(
       t('tasks.completeTask'),
-      `${t('common.confirm')} : ${task.title}?`,
+      confirmationMessage,
       [
         { text: t('common.cancel'), style: 'cancel' },
         {
@@ -93,7 +103,9 @@ export const TasksScreen = ({ navigation }: any) => {
       );
     } catch (error: any) {
       console.log('Erreur complete task:', error);
-      Alert.alert(t('common.error'), t('tasks.updateError'));
+      const message = getErrorMessage(error, t('tasks.updateError'));
+      if (Platform.OS === 'web') toast.error(t('common.error'), message);
+      else Alert.alert(t('common.error'), message);
     } finally {
       setLoading(false);
     }

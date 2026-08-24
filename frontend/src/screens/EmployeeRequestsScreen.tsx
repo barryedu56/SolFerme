@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -9,6 +9,8 @@ import { useAuth } from '../context/AuthContext';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { toast } from '../utils/toast';
+import { getErrorMessage } from '../utils/errors';
 
 export const EmployeeRequestsScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
@@ -58,7 +60,8 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
 
   const handleSubmit = async () => {
     if (!description.trim()) {
-      Alert.alert(t('common.error'), t('auth.fillRequired'));
+      if (Platform.OS === 'web') toast.error(t('common.error'), t('auth.fillRequired'));
+      else Alert.alert(t('common.error'), t('auth.fillRequired'));
       return;
     }
 
@@ -70,21 +73,19 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
       };
 
       // Si hors-ligne, on ajoute à la queue et on enregistre localement
-      try {
-        await repositoryProvider.api.post('/employee-requests/', requestData);
-        Alert.alert(t('common.success'), t('requests.success'));
-      } catch (error: any) {
-        console.log('Erreur creation request:', error);
-        Alert.alert(t('common.error'), t('requests.error'));
-      }
+      await repositoryProvider.api.post('/employee-requests/', requestData);
+      if (Platform.OS === 'web') toast.success(t('common.success'), t('requests.success'));
+      else Alert.alert(t('common.success'), t('requests.success'));
 
       setModalVisible(false);
       setDescription('');
       setRequestType('CONGE');
       fetchRequests();
-    } catch (error) {
+    } catch (error: any) {
       console.log('Erreur creation request:', error);
-      Alert.alert(t('common.error'), t('requests.error'));
+      const message = getErrorMessage(error, t('requests.error'));
+      if (Platform.OS === 'web') toast.error(t('common.error'), message);
+      else Alert.alert(t('common.error'), message);
     } finally {
       setSubmitting(false);
     }
@@ -98,9 +99,11 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
         const endpoint = action === 'approve' ? 'approve' : 'reject';
         await repositoryProvider.api.post(`/employee-requests/${requestId}/${endpoint}/`);
         fetchRequests();
-      } catch (error) {
+      } catch (error: any) {
         console.log(`Erreur ${action} request:`, error);
-        Alert.alert(t('common.error'), t('common.errorSave'));
+        const message = getErrorMessage(error, t('common.errorSave'));
+        if (Platform.OS === 'web') toast.error(t('common.error'), message);
+        else Alert.alert(t('common.error'), message);
       }
     };
 

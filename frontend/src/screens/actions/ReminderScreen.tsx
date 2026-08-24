@@ -12,6 +12,8 @@ import { useAuth } from '../../context/AuthContext';
 import { scheduleReminderNotification, cancelNotification } from '../../utils/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useBreakpoint } from '../../hooks/useBreakpoint';
+import { toast } from '../../utils/toast';
+import { getErrorMessage } from '../../utils/errors';
 
 export const ActionReminderScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
@@ -136,23 +138,32 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
     }
   };
 
+  const showReminderMessage = (title: string, message: string, isError = false) => {
+    if (Platform.OS === 'web') {
+      if (isError) toast.error(title, message);
+      else toast.success(title, message);
+    } else {
+      Alert.alert(title, message);
+    }
+  };
+
   const handleSubmit = async () => {
     if (loading) return;
     if (!title || !date || !selectedFarm) {
-      Alert.alert(t('common.error'), t('reminders.fillRequired'));
+      showReminderMessage(t('common.error'), t('reminders.fillRequired'), true);
       return;
     }
 
     // Validate that reminder date/time is in the future
     if (!validateReminderDateTime(date, time)) {
-      Alert.alert(t('common.error'), "Impossible de créer ce rappel : la date et l'heure doivent être dans le futur.");
+      showReminderMessage(t('common.error'), "Impossible de créer ce rappel : la date et l'heure doivent être dans le futur.", true);
       return;
     }
 
     if (selectedLot) {
       const lot = lots.find(l => l.id === selectedLot);
       if (lot && date < lot.purchase_date) {
-        Alert.alert(t('common.error'), t('reminders.dateErrorBeforeLot'));
+        showReminderMessage(t('common.error'), t('reminders.dateErrorBeforeLot'), true);
         return;
       }
     }
@@ -198,12 +209,12 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
         }
       }
 
-      Alert.alert(t('common.success'), t('reminders.saved'));
+      showReminderMessage(t('common.success'), t('reminders.saved'));
       navigation.goBack();
     } catch (e: any) {
       console.error("Erreur handleSubmit Rappel:", e);
-      const errorMessage = e.response?.data?.detail || t('common.error');
-      Alert.alert(t('common.error'), errorMessage);
+      const errorMessage = getErrorMessage(e, t('common.error'));
+      showReminderMessage(t('common.actionImpossible'), errorMessage, true);
     } finally {
       setLoading(false);
     }

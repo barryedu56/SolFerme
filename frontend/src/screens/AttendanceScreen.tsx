@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, Alert, ScrollView, RefreshControl, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -9,6 +9,8 @@ import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/Button';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { DatePicker } from '../components/DatePicker';
+import { toast } from '../utils/toast';
+import { getErrorMessage } from '../utils/errors';
 
 export const AttendanceScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
@@ -117,7 +119,9 @@ export const AttendanceScreen = ({ navigation }: any) => {
       setMyAttendance(res.data);
       Alert.alert(t('common.success'), t('attendance.clockInSuccess', { time: res.data.clock_in }));
     } catch (e: any) {
-      Alert.alert(t('common.error'), e.response?.data?.detail || "Erreur lors du pointage.");
+      const message = getErrorMessage(e, "Erreur lors du pointage.");
+      if (Platform.OS === 'web') toast.error(t('common.error'), message);
+      else Alert.alert(t('common.error'), message);
     } finally {
       setLoading(false);
     }
@@ -131,7 +135,9 @@ export const AttendanceScreen = ({ navigation }: any) => {
       setMyAttendance(res.data);
       Alert.alert(t('common.success'), t('attendance.clockOutSuccess', { time: res.data.clock_out }));
     } catch (e: any) {
-      Alert.alert(t('common.error'), e.response?.data?.detail || "Erreur lors du pointage.");
+      const message = getErrorMessage(e, "Erreur lors du pointage.");
+      if (Platform.OS === 'web') toast.error(t('common.error'), message);
+      else Alert.alert(t('common.error'), message);
     } finally {
       setLoading(false);
     }
@@ -140,11 +146,65 @@ export const AttendanceScreen = ({ navigation }: any) => {
   const updateAttendanceStatus = async (attendanceId: number, newStatus: string) => {
     try {
       const res = await repositoryProvider.api.patch(`/attendances/${attendanceId}/`, { status: newStatus });
+      const previousAttendance = attendanceData.find(a => a.id === attendanceId);
       setAttendanceData(prev => prev.map(a => a.id === attendanceId ? res.data : a));
-      fetchData(); // Refresh stats
-    } catch (e) {
-      Alert.alert(t('common.error'), t('attendance.statusUpdateError'));
+
+      if (previousAttendance?.status !== newStatus) {
+        setStats(prev => {
+          const present = prev.today.present
+            - (previousAttendance?.status === 'PRESENT' ? 1 : 0)
+            + (newStatus === 'PRESENT' ? 1 : 0);
+          const late = prev.today.late
+            - (previousAttendance?.status === 'RETARD' ? 1 : 0)
+            + (newStatus === 'RETARD' ? 1 : 0);
+          return {
+            ...prev,
+            today: {
+              present,
+              late,
+              absent: Math.max(0, employees.length - present - late),
+            },
+          };
+        });
+      }
+    } catch (e: any) {
+      const message = getErrorMessage(e, t('attendance.statusUpdateError'));
+      if (Platform.OS === 'web') toast.error(t('common.error'), message);
+      else Alert.alert(t('common.error'), message);
     }
+  };
+
+  const handleEditAttendance = (attendance: any) => {
+    if (Platform.OS === 'web') {
+      const choice = window.prompt(
+        `${t('attendance.changeStatusTitle')}\n${t('attendance.changeStatusMessage')}\n\n1. ${t('attendance.present')}\n2. ${t('attendance.late')}\n3. ${t('attendance.absent')}`,
+        attendance.status
+      );
+      if (choice === null) return;
+
+      const statusByChoice: Record<string, string> = {
+        '1': 'PRESENT',
+        '2': 'RETARD',
+        '3': 'ABSENT',
+        PRESENT: 'PRESENT',
+        RETARD: 'RETARD',
+        ABSENT: 'ABSENT',
+      };
+      const newStatus = statusByChoice[choice.trim().toUpperCase()];
+      if (newStatus) updateAttendanceStatus(attendance.id, newStatus);
+      return;
+    }
+
+    Alert.alert(
+      t('attendance.changeStatusTitle'),
+      t('attendance.changeStatusMessage'),
+      [
+        { text: t('attendance.present'), onPress: () => updateAttendanceStatus(attendance.id, 'PRESENT') },
+        { text: t('attendance.late'), onPress: () => updateAttendanceStatus(attendance.id, 'RETARD') },
+        { text: t('attendance.absent'), onPress: () => updateAttendanceStatus(attendance.id, 'ABSENT') },
+        { text: t('attendance.cancel'), style: 'cancel' }
+      ]
+    );
   };
 
   const renderOwnerHeader = () => (
@@ -212,18 +272,7 @@ export const AttendanceScreen = ({ navigation }: any) => {
                  <Text style={styles.attTimeText}>{t('attendance.outLabel')} <Text style={{fontWeight:'700'}}>{att.clock_out?.substring(0,5) || '--:--'}</Text></Text>
 
                  <TouchableOpacity
-                  onPress={() => {
-                    Alert.alert(
-                      t('attendance.changeStatusTitle'),
-                      t('attendance.changeStatusMessage'),
-                      [
-                        { text: t('attendance.present'), onPress: () => updateAttendanceStatus(att.id, 'PRESENT') },
-                        { text: t('attendance.late'), onPress: () => updateAttendanceStatus(att.id, 'RETARD') },
-                        { text: t('attendance.absent'), onPress: () => updateAttendanceStatus(att.id, 'ABSENT') },
-                        { text: t('attendance.cancel'), style: 'cancel' }
-                      ]
-                    )
-                  }}
+                  onPress={() => handleEditAttendance(att)}
                   style={styles.editBtnSmall}
                  >
                     <MaterialIcons name="edit" size={16} color={theme.colors.primary} />

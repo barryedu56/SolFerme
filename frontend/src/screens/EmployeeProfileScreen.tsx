@@ -15,6 +15,7 @@ import Constants from 'expo-constants';
 import { getProfileImageUrl } from '../utils/media';
 import { formatNumber } from '../utils/formatters';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { getErrorMessage } from '../utils/errors';
 
 import { LinearGradient } from 'expo-linear-gradient';
 
@@ -74,8 +75,9 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
       setPayrolls(myPayrolls);
       await AsyncStorage.setItem('employee_payrolls', JSON.stringify(myPayrolls));
 
-    } catch (error) {
+    } catch (error: any) {
       console.log('Erreur fetch profil employé:', error);
+      toast.error(t('common.error'), getErrorMessage(error, t('profile.updateError')));
       const cachedData = await AsyncStorage.getItem('employee_data');
       if (cachedData) {
         const parsed = JSON.parse(cachedData);
@@ -147,9 +149,9 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
       await fetchProfile();
       await updateUser();
       toast.success(t('common.success'), t('profile.updatePhotoSuccess'));
-    } catch (e) {
+    } catch (e: any) {
       console.error('Upload error:', e);
-      toast.error(t('common.error'), t('profile.updatePhotoError'));
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.updatePhotoError')));
     } finally {
       setUpdating(false);
     }
@@ -162,9 +164,9 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
       await fetchProfile();
       await updateUser();
       toast.success(t('common.success'), t('profile.removePhotoSuccess'));
-    } catch (e) {
+    } catch (e: any) {
       console.error('Remove error:', e);
-      toast.error(t('common.error'), t('profile.removePhotoError'));
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.removePhotoError')));
     } finally {
       setUpdating(false);
     }
@@ -196,23 +198,29 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
     setUpdating(true);
     try {
       // 1. Update user info
-      await repositoryProvider.api.patch('/auth/user/', {
+      const userResponse = await repositoryProvider.api.patch('/auth/user/', {
         name: editData.name,
         email: editData.email,
         phone: editData.phone
       });
 
       // 2. Update employee address
-      await repositoryProvider.api.patch(`/employees/${employeeData.id}/`, {
+      const employeeResponse = await repositoryProvider.api.patch(`/employees/${employeeData.id}/`, {
         address: editData.address
       });
 
-      await fetchProfile();
+      setEmployeeData((current: any) => ({
+        ...current,
+        user_name: userResponse.data.name,
+        user_email: userResponse.data.email,
+        user_phone: userResponse.data.phone,
+        address: employeeResponse.data.address,
+      }));
       await updateUser();
       setIsEditing(false);
       toast.success(t('common.success'), t('profile.saveChangesSuccess'));
-    } catch (e) {
-      toast.error(t('common.error'), t('profile.updateError'));
+    } catch (e: any) {
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.updateError')));
     } finally {
       setUpdating(false);
     }
@@ -240,7 +248,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
       setIsChangingPassword(false);
       toast.success(t('common.success'), t('profile.passwordSuccess'));
     } catch (e: any) {
-      const errorMsg = e.response?.data?.error || t('profile.passwordError');
+      const errorMsg = getErrorMessage(e, t('profile.passwordError'));
       toast.error(t('common.error'), errorMsg);
     } finally {
       setUpdating(false);
@@ -529,16 +537,26 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                   <TouchableOpacity
                     style={styles.compactBtn}
                     onPress={() => {
-                      Alert.alert(
-                        t('profile.chooseTheme'),
-                        "",
-                        [
-                          { text: t('settings.themeLight'), onPress: () => setThemeMode('light') },
-                          { text: t('settings.themeDark'), onPress: () => setThemeMode('dark') },
-                          { text: t('settings.themeAuto'), onPress: () => setThemeMode('auto') },
-                          { text: t('common.cancel'), style: 'cancel' }
-                        ]
-                      );
+                      if (Platform.OS === 'web') {
+                        const choice = window.prompt(
+                          `${t('profile.chooseTheme')}\n\n1: ${t('settings.themeLight')}\n2: ${t('settings.themeDark')}\n3: ${t('settings.themeAuto')}\n\nEntrez 1, 2 ou 3:`,
+                          ''
+                        );
+                        if (choice === '1') setThemeMode('light');
+                        else if (choice === '2') setThemeMode('dark');
+                        else if (choice === '3') setThemeMode('auto');
+                      } else {
+                        Alert.alert(
+                          t('profile.chooseTheme'),
+                          "",
+                          [
+                            { text: t('settings.themeLight'), onPress: () => setThemeMode('light') },
+                            { text: t('settings.themeDark'), onPress: () => setThemeMode('dark') },
+                            { text: t('settings.themeAuto'), onPress: () => setThemeMode('auto') },
+                            { text: t('common.cancel'), style: 'cancel' }
+                          ]
+                        );
+                      }
                     }}
                   >
                     <View style={[styles.compactIconBox, { backgroundColor: theme.colors.primary + '15' }]}>
@@ -552,16 +570,26 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                   <TouchableOpacity
                     style={styles.compactBtn}
                     onPress={() => {
-                      Alert.alert(
-                        t('profile.chooseLanguage'),
-                        "",
-                        [
-                          { text: t('settings.langFrench'), onPress: () => setLanguage('fr') },
-                          { text: t('settings.langEnglish'), onPress: () => setLanguage('en') },
-                          { text: t('settings.langAuto'), onPress: () => setLanguage('auto') },
-                          { text: t('common.cancel'), style: 'cancel' }
-                        ]
-                      );
+                      if (Platform.OS === 'web') {
+                        const choice = window.prompt(
+                          `${t('profile.chooseLanguage')}\n\n1: ${t('settings.langFrench')}\n2: ${t('settings.langEnglish')}\n3: ${t('settings.langAuto')}\n\nEntrez 1, 2 ou 3:`,
+                          ''
+                        );
+                        if (choice === '1') setLanguage('fr');
+                        else if (choice === '2') setLanguage('en');
+                        else if (choice === '3') setLanguage('auto');
+                      } else {
+                        Alert.alert(
+                          t('profile.chooseLanguage'),
+                          "",
+                          [
+                            { text: t('settings.langFrench'), onPress: () => setLanguage('fr') },
+                            { text: t('settings.langEnglish'), onPress: () => setLanguage('en') },
+                            { text: t('settings.langAuto'), onPress: () => setLanguage('auto') },
+                            { text: t('common.cancel'), style: 'cancel' }
+                          ]
+                        );
+                      }
                     }}
                   >
                     <View style={[styles.compactIconBox, { backgroundColor: theme.colors.primary + '15' }]}>

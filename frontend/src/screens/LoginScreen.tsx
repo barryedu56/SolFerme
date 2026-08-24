@@ -96,6 +96,13 @@ export const LoginScreen = ({ navigation }: any) => {
 
             {/* ── HEADER / LOGO ── */}
             <View style={styles.header}>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Welcome')}
+                style={styles.backButton}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
+              </TouchableOpacity>
               <View style={styles.logoOuter}>
                 <View style={[styles.logoInner, { backgroundColor: theme.colors.primary }]}>
                   <MaterialCommunityIcons name="egg" size={46} color="#000000" />
@@ -282,6 +289,12 @@ const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet:
   header: {
     alignItems: 'center',
     marginBottom: theme.spacing.xl,
+  },
+  backButton: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    padding: 8,
   },
   logoOuter: {
     width: 104,

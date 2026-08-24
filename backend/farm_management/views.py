@@ -4,6 +4,7 @@ from django.db.models import Q, Sum, Count, Avg, F, ExpressionWrapper, DecimalFi
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractHour
 from rest_framework import viewsets, permissions, status
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from rest_framework.views import APIView
 from .models import (
@@ -1591,11 +1592,16 @@ class EmployeeViewSet(viewsets.ModelViewSet):
         return queryset
 
     def get_permissions(self):
-        if self.action in ['destroy', 'create', 'update', 'partial_update']:
+        if self.action in ['destroy', 'create']:
             return [permissions.IsAuthenticated(), IsProprietaire()]
         return [permissions.IsAuthenticated()]
 
     def perform_update(self, serializer):
+        if self.request.user.role != 'PROPRIETAIRE':
+            if serializer.instance.user_id != self.request.user.id:
+                raise PermissionDenied("Vous ne pouvez modifier que votre propre profil.")
+            if set(serializer.validated_data) - {'address'}:
+                raise PermissionDenied("Vous pouvez uniquement modifier votre adresse.")
         serializer.save()
 
     @action(detail=False, methods=['get'])

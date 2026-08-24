@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, useWindowDimensions, Platform } from 'react-native';
 import { Card } from '../components/Card';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
@@ -11,6 +11,7 @@ import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
 
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { toast } from '../utils/toast';
 
 export const FarmsScreen = ({ navigation }: any) => {
   const [farms, setFarms] = useState([]);
@@ -53,6 +54,16 @@ export const FarmsScreen = ({ navigation }: any) => {
     fetchFarms();
   };
 
+  const handleReactivate = async (farm: any) => {
+    try {
+      await repositoryProvider.farm.reactivate(farm.id);
+      toast.success(t('common.success'), t('farms.reactivateSuccess'));
+      fetchFarms();
+    } catch (error: any) {
+      toast.error(t('common.error'), error.response?.data?.error || error.response?.data?.detail || t('farms.reactivateError'));
+    }
+  };
+
   const renderItem = ({ item }: { item: any }) => (
     <View style={isTablet ? styles.tabletCardContainer : null}>
       <Card style={[styles.farmCard, item.status === 'ARCHIVE' && styles.archivedCard]}>
@@ -83,7 +94,15 @@ export const FarmsScreen = ({ navigation }: any) => {
             </View>
           </View>
 
-          {userRole !== 'EMPLOYE' ? (
+          {item.status === 'ARCHIVE' && userRole !== 'EMPLOYE' && Platform.OS === 'web' ? (
+            <TouchableOpacity
+              style={styles.reactivateBtn}
+              onPress={() => handleReactivate(item)}
+              accessibilityLabel={t('common.reactivate')}
+            >
+              <MaterialIcons name="unarchive" size={20} color={theme.colors.success} />
+            </TouchableOpacity>
+          ) : userRole !== 'EMPLOYE' ? (
             <TouchableOpacity
               style={styles.editBtn}
               onPress={() => navigation.navigate('CreateFarm', { farm: item })}
@@ -249,6 +268,11 @@ const createStyles = (theme: any, isDesktop: boolean, isTablet: boolean) => Styl
   editBtn: {
     padding: 8,
     backgroundColor: theme.colors.background,
+    borderRadius: 10,
+  },
+  reactivateBtn: {
+    padding: 8,
+    backgroundColor: theme.colors.success + '15',
     borderRadius: 10,
   },
   filterBtn: {

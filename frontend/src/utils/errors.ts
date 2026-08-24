@@ -23,6 +23,9 @@ export const getErrorMessage = (error: any, defaultMessage: string = 'Une erreur
         if (data.message.includes('Network Error')) return 'Impossible de contacter le serveur, vérifiez votre connexion';
         return data.message;
       }
+      if (typeof data === 'string' && data.length > 0) {
+        return data;
+      }
 
       // Registration specific / Field specific errors
       if (typeof data === 'object') {
@@ -58,12 +61,16 @@ export const getErrorMessage = (error: any, defaultMessage: string = 'Une erreur
 
     // Status code fallbacks
     switch (status) {
+      case 400:
+        return 'Les données envoyées sont invalides ou ne respectent pas une règle métier';
       case 401:
         return 'Votre session a expiré, veuillez vous reconnecter';
       case 403:
         return "Vous n'avez pas l'autorisation d'effectuer cette action";
       case 404:
         return "La ressource demandée est introuvable";
+      case 409:
+        return 'Cette opération entre en conflit avec une donnée existante';
       case 429:
         return "Trop de tentatives, veuillez réessayer plus tard";
       case 500:
