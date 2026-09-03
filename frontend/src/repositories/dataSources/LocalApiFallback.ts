@@ -1949,6 +1949,12 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
       await createHealthAlertLocally(row);
     }
 
+    // 🔧 Nouvelle conversion de casiers : notifier les productions du lot pour que
+    // « casiers en attente / vendables » se recalculent immédiatement à l'écran.
+    if (tableName === 'egg_conversions') {
+      emitDataChange({ tableName: 'productions', action: 'UPDATE' });
+    }
+
     // 🔧 Mise à jour de lots.current_quantity pour les ventes de poules (CHICKEN)
     if (tableName === 'sales') {
       if ((row as any)?.product_type === 'CHICKEN') {
@@ -2272,7 +2278,16 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
       if (tableName === 'sale_payments') {
         await recalculateSalePaymentStatusLocally((current as any)?.sale_id || (current as any)?.sale);
       }
-      
+
+      // 🔧 Annulation d'une conversion de casiers : les « casiers en attente » /
+      // « vendables » sont recalculés côté écran à partir de la liste des
+      // conversions ACTIVES. On notifie donc les productions du lot pour forcer
+      // ce recalcul (sinon la section reste figée sur l'ancienne valeur).
+      if (tableName === 'egg_conversions') {
+        emitDataChange({ tableName: 'productions', action: 'UPDATE' });
+        emitDataChange({ tableName: 'egg_conversions', action: 'DELETE' });
+      }
+
       // 🔧 Annulation des alertes santé et dépenses liées
       if (tableName === 'chicken_movements') {
         await cancelHealthAlertLocally(updated);

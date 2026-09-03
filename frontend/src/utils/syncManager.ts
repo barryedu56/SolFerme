@@ -987,22 +987,35 @@ export class SyncManager {
           // 1. Tenter match exact avec date (si fournie)
           let previewAlerts: any[] = [];
           if (row.date) {
-            previewAlerts = await queryAll<{ id: number }>(
-              `SELECT id FROM health_alerts WHERE lot_id = ? AND type = ? AND _needs_sync = 0 AND date = ? AND id < 0`,
+            previewAlerts = await queryAll<{ id: number; is_viewed: number }>(
+              `SELECT id, is_viewed FROM health_alerts WHERE lot_id = ? AND type = ? AND _needs_sync = 0 AND date = ? AND id < 0`,
               [row.lot_id, row.type, row.date]
-            ).catch(() => [] as { id: number }[]);
+            ).catch(() => [] as { id: number; is_viewed: number }[]);
           }
           // 2. Fallback si pas de date ou pas de match (alerte du même type pour le même lot)
           if (previewAlerts.length === 0) {
-             previewAlerts = await queryAll<{ id: number }>(
-              `SELECT id FROM health_alerts WHERE lot_id = ? AND type = ? AND _needs_sync = 0 AND id < 0`,
+             previewAlerts = await queryAll<{ id: number; is_viewed: number }>(
+              `SELECT id, is_viewed FROM health_alerts WHERE lot_id = ? AND type = ? AND _needs_sync = 0 AND id < 0`,
               [row.lot_id, row.type]
-            ).catch(() => [] as { id: number }[]);
+            ).catch(() => [] as { id: number; is_viewed: number }[]);
           }
-          
+
+          // 🔧 Reporter l'état « consultée » : si l'utilisateur avait marqué la
+          // preview comme vue hors-ligne, l'alerte serveur qui la remplace doit
+          // rester vue — sinon elle « réapparaît » comme non lue au pull. On
+          // informe aussi le serveur (on est en ligne pendant la synchro).
+          const wasViewedOffline = previewAlerts.some((pa) => pa.is_viewed);
+          if (wasViewedOffline) {
+            row.is_viewed = 1;
+            if (!row.viewed_at) row.viewed_at = new Date().toISOString();
+            if (typeof row.id === 'number' && row.id > 0) {
+              await apiClient.post(`/health-alerts/${row.id}/mark_as_viewed/`).catch(() => {});
+            }
+          }
+
           for (const pa of previewAlerts) {
             await deleteRow('health_alerts', pa.id);
-            console.info(`[Sync] Déduplication health_alert: preview id=${pa.id} remplacée par serveur id=${row.id}`);
+            console.info(`[Sync] Déduplication health_alert: preview id=${pa.id} remplacée par serveur id=${row.id}${wasViewedOffline ? ' (état « vue » reporté)' : ''}`);
           }
         } catch { /* best-effort dedup */ }
       }
