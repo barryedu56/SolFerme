@@ -1327,11 +1327,12 @@ export const LotDetailScreen = ({ route, navigation }: any) => {
                         {'  ·  '}{formatNumber(it.enAttenteActuel)} en attente
                       </Text>
                       <TouchableOpacity
-                        style={[styles.headerActionBtn, { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '18' }]}
+                        style={styles.convertBtn}
                         onPress={() => goToConvert(it)}
+                        accessibilityRole="button"
                       >
-                        <MaterialIcons name="swap-vert" size={16} color={theme.colors.primary} />
-                        <Text style={{ color: theme.colors.primary, fontSize: 12, fontWeight: '700', marginLeft: 4 }}>
+                        <MaterialIcons name="swap-vert" size={16} color="#000" />
+                        <Text style={styles.convertBtnText}>
                           {t('conversion.convertAction')}
                         </Text>
                       </TouchableOpacity>
@@ -1555,6 +1556,21 @@ const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean 
     backgroundColor: theme.colors.surface,
     borderRadius: radius.pill,
     ...(shadow.xs as any),
+  },
+  convertBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.pill,
+    ...(shadow.xs as any),
+  },
+  convertBtnText: {
+    color: '#000',
+    fontSize: 12.5,
+    fontWeight: '800',
+    marginLeft: 4,
   },
   title: { fontSize: 18, fontWeight: '800', color: theme.colors.text, letterSpacing: 0.1 },
   badgeContainer: {
