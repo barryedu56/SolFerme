@@ -82,6 +82,13 @@ initApiUrl().catch(() => {
   // Silencieux — utilise le fallback DEFAULT_API_URL
 });
 
+// Le frontend parle « ACTIF » partout ; le backend utilise « ACTIVE » pour la
+// plupart des modèles transactionnels (Production, Sale, Feed…) → on traduit.
+// EXCEPTION : Farm, Lot et Employee utilisent « ACTIF » côté backend aussi.
+// Convertir leur statut en « ACTIVE » les casse (« "ACTIVE" is not a valid
+// choice » à la création / édition / synchro d'un lot créé hors-ligne).
+const ACTIF_NATIVE_ENDPOINT = /\/(farms|lots|employees)(\/|$|\?)/;
+
 const normalizeStatusToBackend = (data: any): any => {
   if (data === null || data === undefined) return data;
   // Ne pas transformer les FormData
@@ -107,7 +114,7 @@ apiClient.interceptors.request.use(
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
-    if (config.data) {
+    if (config.data && !ACTIF_NATIVE_ENDPOINT.test(config.url || '')) {
       config.data = normalizeStatusToBackend(config.data);
     }
     return config;
