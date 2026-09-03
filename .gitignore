@@ -7,6 +7,7 @@ node_modules/
 venv/
 __pycache__/
 *.pyc
+backend/staticfiles/
 
 # Environment
 .env
