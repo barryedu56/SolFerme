@@ -2,6 +2,7 @@ export default {
   expo: {
     name: "SolFerme",
     slug: "solferme",
+    owner: "solferme",
     scheme: "solferme",
     version: "1.0.0",
     orientation: "portrait",
@@ -54,12 +55,12 @@ export default {
         }
       ]
     ],
-    // Notifications distantes : renseigner EXPO_PUBLIC_EAS_PROJECT_ID après
-    // `eas init` (Expo). Sans lui, seules les notifications LOCALES fonctionnent.
     extra: {
       apiUrl: process.env.EXPO_PUBLIC_API_URL,
       eas: {
-        projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID || undefined
+        // Project ID EAS (projet @solferme/solferme). Non sensible — versionné
+        // pour que les builds cloud et le dev local le trouvent sans variable.
+        projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID || "f267cdd8-f002-4d57-8a2c-ed67cc560e5d"
       }
     }
   }
