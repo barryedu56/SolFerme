@@ -1,7 +1,10 @@
 import 'react-native-gesture-handler';
 import React, { useEffect } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import { AppNavigator } from './src/navigation/AppNavigator';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { ThemeProvider } from './src/context/ThemeContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LanguageProvider } from './src/context/LanguageContext';
@@ -52,15 +55,25 @@ export default function App() {
   }, []);
 
   return (
-    <LanguageProvider>
-      <ThemeProvider>
-        <AuthProvider>
-          <SyncManagerBootstrap />
-          <PushBootstrap />
-          <AppNavigator />
-          <Toast />
-        </AuthProvider>
-      </ThemeProvider>
-    </LanguageProvider>
+    // GestureHandlerRootView + SafeAreaProvider à la RACINE : obligatoires pour
+    // @react-navigation/drawer (react-native-gesture-handler / reanimated). En
+    // Expo Go un fallback masque l'oubli ; dans un build EAS Android l'app
+    // crashe au lancement sans eux.
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ErrorBoundary>
+          <LanguageProvider>
+            <ThemeProvider>
+              <AuthProvider>
+                <SyncManagerBootstrap />
+                <PushBootstrap />
+                <AppNavigator />
+                <Toast />
+              </AuthProvider>
+            </ThemeProvider>
+          </LanguageProvider>
+        </ErrorBoundary>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
