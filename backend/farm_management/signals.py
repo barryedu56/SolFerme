@@ -1,8 +1,8 @@
 import re
 from django.utils import timezone
+from django.db import models, transaction
 from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
-from django.db import models
 from django.db.models import Sum, F
 from .models import (
     Sale, Feed, HealthRecord, ChickenMovement, Employee,
@@ -153,7 +153,7 @@ def handle_chicken_movement_change(sender, instance, **kwargs):
     if kwargs.get('created'):
         alert_type_map = {'MORT': 'MORTALITE', 'MALADE': 'MALADIE', 'GUERI': 'GUERISON', 'AJOUT': 'AJOUT', 'VENTE': 'VENTE'}
         color_map = {'MORT': 'RED', 'MALADE': 'ORANGE', 'GUERI': 'GREEN', 'AJOUT': 'BLUE', 'VENTE': 'PURPLE'}
-        HealthAlert.objects.get_or_create(
+        _alert, alert_created = HealthAlert.objects.get_or_create(
             movement=instance,
             defaults={
                 'farm': instance.lot.farm,
@@ -162,6 +162,19 @@ def handle_chicken_movement_change(sender, instance, **kwargs):
                 'color': color_map.get(instance.type)
             }
         )
+        # Notification push + email (mortalité) au propriétaire — APRÈS commit
+        # pour ne pas envoyer si la transaction échoue, et sans jamais bloquer
+        # l'enregistrement métier.
+        if alert_created and instance.type in ('MORT', 'MALADE'):
+            def _notify(mv_id=instance.id):
+                try:
+                    from .models import ChickenMovement
+                    from .notifications import notify_health_alert
+                    mv = ChickenMovement.objects.select_related('lot__farm__owner').get(id=mv_id)
+                    notify_health_alert(mv)
+                except Exception:
+                    pass
+            transaction.on_commit(_notify)
     elif instance.status == 'ANNULEE':
         # Nettoyer l'alerte associée quand le mouvement est annulé
         HealthAlert.objects.filter(movement=instance, is_viewed=False).update(
@@ -339,3 +352,19 @@ def handle_lot_status_change(sender, instance, **kwargs):
     if instance.status in ['TERMINE', 'ARCHIVE']:
         # Deactivate reminders associated with this lot
         Reminder.objects.filter(lot=instance, status='PENDING').update(status='INACTIVE')
+
+
+@receiver(pre_save, sender=Reminder)
+def reset_reminder_push_flag(sender, instance, **kwargs):
+    """Réarme la notification « rappel dû » quand l'échéance est repoussée
+    (ex. rappel répétitif dont on programme la prochaine occurrence) ou quand
+    le rappel repasse en attente."""
+    if not instance.pk:
+        return
+    try:
+        prev = sender.objects.get(pk=instance.pk)
+    except sender.DoesNotExist:
+        return
+    if instance.date != prev.date or instance.time != prev.time or \
+       (instance.status == 'PENDING' and prev.status != 'PENDING'):
+        instance.push_sent = False

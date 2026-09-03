@@ -97,7 +97,7 @@ export const ActionMouvementScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.lotInfoCard}>
             <View style={styles.lotInfoContent}>
               <View style={[styles.lotIconContainer, { backgroundColor: '#F8BBD0' }]}>
@@ -188,6 +188,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
     backgroundColor: theme.colors.background,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40,
@@ -204,7 +207,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.colors.text
   },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
-  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   lotInfoCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

@@ -208,7 +208,7 @@ export const ActionSanteScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.lotInfoCard}>
             <View style={styles.lotInfoContent}>
               <View style={[styles.lotIconContainer, { backgroundColor: '#E3F2FD' }]}>
@@ -487,6 +487,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
     backgroundColor: theme.colors.background,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40,

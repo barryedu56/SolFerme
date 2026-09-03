@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, TouchableOpacity, Platform } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Button } from '../components/Button';
+import { BrandLogo } from '../components/BrandLogo';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useBreakpoint } from '../hooks/useBreakpoint';
@@ -16,9 +16,7 @@ export const WelcomeScreen = ({ navigation }: any) => {
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <View style={styles.logoSection}>
-          <View style={styles.logoCircle}>
-            <MaterialCommunityIcons name="egg" size={50} color="#000000" />
-          </View>
+          <BrandLogo size={96} shape="squircle" style={styles.logoMark} />
           <Text style={styles.brandName}>SolFerme</Text>
         </View>
 
@@ -64,15 +62,10 @@ const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet:
   logoSection: {
     alignItems: 'center',
   },
-  logoCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...theme.shadows.medium,
+  logoMark: {
     marginBottom: theme.spacing.m,
+    ...theme.shadows.medium,
+    borderRadius: 25,
   },
   brandName: {
     fontSize: 32,

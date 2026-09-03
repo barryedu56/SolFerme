@@ -1,6 +1,6 @@
 import { deleteDatabaseAsync, openDatabaseAsync, SQLiteDatabase, SQLiteRunResult } from 'expo-sqlite';
 import { SCHEMA_SQL, NEXT_NEGATIVE_ID_SQL, VERSION, MIGRATIONS } from './schema';
-import { emitDataChange } from '../utils/dataEvents';
+import { beginEmitBuffer, emitDataChange, flushEmitBuffer } from '../utils/dataEvents';
 
 // Normalisation des statuts entre l'ancien token 'ACTIVE' et le token backend 'ACTIF'
 const normalizeStatusValue = (val: any): any => {
@@ -174,8 +174,70 @@ const rebuildDatabase = async (): Promise<SQLiteDatabase> => {
   }
 };
 
+// ========== TRANSACTIONS ==========
+// Quand une transaction est ouverte via runInTransaction(), toutes les opérations
+// SQL imbriquées s'exécutent DIRECTEMENT sur le handle courant : elles ne
+// ré-acquièrent pas le mutex (déjà détenu par la transaction) et ne tentent PAS
+// de rouvrir la connexion en cas d'erreur (cela invaliderait la transaction).
+let inTransaction = false;
+
+/**
+ * Exécute `fn` dans une transaction SQLite atomique (BEGIN / COMMIT / ROLLBACK).
+ * Si une écriture échoue en cours de route (contrainte NOT NULL, colonne absente…),
+ * TOUTES les écritures de `fn` sont annulées → plus de « demi-vente » persistée.
+ * Le mutex global est détenu pendant toute la durée de la transaction, donc aucune
+ * autre opération SQLite ne peut s'intercaler.
+ */
+export const runInTransaction = async <T>(fn: () => Promise<T>): Promise<T> => {
+  if (inTransaction) {
+    // Transaction déjà ouverte (appel imbriqué) → rejoindre la transaction courante.
+    return fn();
+  }
+  const release = await acquireDbLock();
+  try {
+    if (!db) {
+      db = await openDatabaseAsync(DB_NAME);
+      try { await db.execAsync('PRAGMA foreign_keys = ON;'); } catch { /* ignore */ }
+    }
+    const database = db;
+    inTransaction = true;
+    // Purge défensive d'une éventuelle transaction fantôme (ROLLBACK non exécuté
+    // après un crash précédent) — sans quoi BEGIN lèverait "cannot start a
+    // transaction within a transaction".
+    try { await database.execAsync('ROLLBACK'); } catch { /* aucune transaction ouverte */ }
+    try {
+      await database.execAsync('BEGIN');
+    } catch (beginErr) {
+      inTransaction = false;
+      throw beginErr;
+    }
+    beginEmitBuffer();
+    let committed = false;
+    try {
+      const result = await fn();
+      await database.execAsync('COMMIT');
+      committed = true;
+      return result;
+    } catch (err) {
+      try { await database.execAsync('ROLLBACK'); } catch { /* ignore */ }
+      throw err;
+    } finally {
+      inTransaction = false;
+      flushEmitBuffer(committed);
+    }
+  } finally {
+    release();
+  }
+};
+
 /** Execute une opération SQL avec mutex et retry automatique */
 const runWithRetry = async <T>(fn: (database: SQLiteDatabase) => Promise<T>): Promise<T> => {
+  // Dans une transaction : exécution directe sur le handle courant, sans mutex
+  // ni retry/réouverture (qui casseraient l'atomicité). Une erreur remonte telle
+  // quelle → runInTransaction fait le ROLLBACK.
+  if (inTransaction && db) {
+    return fn(db);
+  }
   const release = await acquireDbLock();
   try {
     if (!db) {
@@ -318,6 +380,19 @@ export const getNextOfflineId = async (): Promise<number> => {
   return minId < 0 ? minId - 1 : -1;
 };
 
+/** UUID v4 sans dépendance (RN/web). */
+const generateClientUuid = (): string => {
+  const g: any = globalThis as any;
+  if (g?.crypto?.randomUUID) {
+    try { return g.crypto.randomUUID(); } catch { /* fallthrough */ }
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
+
 export const enqueueSyncQueue = async (
   operation: string,
   endpoint: string,
@@ -326,7 +401,21 @@ export const enqueueSyncQueue = async (
   tableName: string
 ): Promise<SQLiteRunResult> => {
   // Normaliser les statuts dans le payload avant d'enqueuer
-  const normalizedPayload = normalizePayloadStatuses(payload);
+  let normalizedPayload = normalizePayloadStatuses(payload);
+
+  // 🔧 Anti-doublon de synchro : chaque CREATE embarque un `client_uuid` STABLE
+  // (stocké dans la file, donc identique à chaque nouvelle tentative). Le backend
+  // (IdempotentCreateMixin) renvoie l'objet déjà créé si un POST portant ce même
+  // uuid a déjà abouti → aucun doublon même si la réponse réseau s'est perdue.
+  if (operation === 'CREATE') {
+    if (normalizedPayload === null || normalizedPayload === undefined) {
+      normalizedPayload = {};
+    }
+    if (typeof normalizedPayload === 'object' && !Array.isArray(normalizedPayload) && !normalizedPayload.client_uuid) {
+      normalizedPayload = { ...normalizedPayload, client_uuid: generateClientUuid() };
+    }
+  }
+
   return insertRow('sync_queue', {
     operation,
     endpoint,

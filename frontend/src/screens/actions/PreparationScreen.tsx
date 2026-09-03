@@ -163,7 +163,7 @@ export const PreparationScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.infoCard}>
             <DatePicker value={date} onChange={setDate} />
             <View style={styles.inputGroup}>
@@ -281,6 +281,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
     backgroundColor: theme.colors.background,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40,
@@ -293,7 +296,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
-  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   infoCard: { padding: theme.spacing.m, marginBottom: theme.spacing.m, borderRadius: theme.borderRadius.l },
   inputGroup: { marginTop: theme.spacing.m },
   label: { fontSize: 12, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: 'bold', textTransform: 'uppercase' },

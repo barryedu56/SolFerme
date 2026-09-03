@@ -1,27 +1,32 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, RefreshControl, ScrollView, FlatList } from 'react-native';
-import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
-import { Card } from '../components/Card';
-import { repositoryProvider } from '../repositories';
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { repositoryProvider } from '../repositories';
 import { useTranslation } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatNumber } from '../utils/formatters';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
-
-import { EmptyState } from '../components/EmptyState';
 import { toast } from '../utils/toast';
+import { Screen, ScreenHeader, Card, Chip, StatTile, Badge, EmptyState, SectionHeader, space, radius } from '../components/ui';
 
 export const FarmDetailScreen = ({ route, navigation }: any) => {
   const { farmId, farmName } = route.params;
   const { t } = useTranslation();
   const { theme, isDarkMode } = useTheme();
   const { userRole } = useAuth();
-  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDarkMode, isDesktopOrTablet), [theme, isDarkMode, isDesktopOrTablet]);
+  const { isDesktop, isTablet } = useBreakpoint();
+  const cols = isDesktop ? 3 : isTablet ? 2 : 1;
+  const styles = useMemo(() => createStyles(theme), [theme]);
+  // Largeur explicite : `flex` seul dans `flexWrap` s'effondre sur Android/iOS.
+  // Sur Web, `flexGrow: 1` étire une carte isolée (dernière ligne incomplète,
+  // ou un seul lot) sur toute la largeur de la grille : on le désactive pour
+  // que la carte garde sa largeur de colonne. Android/iOS : comportement
+  // conservé (flexGrow) pour occuper l'espace disponible.
+  const cellStyle: any = cols === 1
+    ? { width: '100%' }
+    : { flexBasis: cols === 3 ? '31%' : '47%', flexGrow: Platform.OS === 'web' ? 0 : 1, minWidth: 0 };
 
   const [lots, setLots] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -39,7 +44,7 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
         repositoryProvider.api.get('/lots/').catch(() => ({ data: [] })),
         repositoryProvider.api.get('/productions/').catch(() => ({ data: [] })),
         repositoryProvider.api.get('/movements/').catch(() => ({ data: [] })),
-        repositoryProvider.api.get(`/farms/${farmId}/`).catch(() => ({ data: {} }))
+        repositoryProvider.api.get(`/farms/${farmId}/`).catch(() => ({ data: {} })),
       ]);
 
       setFarm(farmRes.data);
@@ -51,7 +56,6 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
       setProductions(productionList);
       setMovements(movementList);
 
-      // Filtrer uniquement les lots actifs pour les statistiques opérationnelles
       const activeLots = farmLots.filter((l: any) => l.status === 'ACTIF');
       const totalBirds = activeLots.reduce((sum: number, lot: any) => sum + lot.current_quantity, 0);
 
@@ -70,16 +74,11 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
   };
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchLots();
-    });
+    const unsubscribe = navigation.addListener('focus', () => { fetchLots(); });
     return unsubscribe;
   }, [navigation]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchLots();
-  };
+  const onRefresh = () => { setRefreshing(true); fetchLots(); };
 
   const handleReactivate = async () => {
     console.log('[TEST SOLFERME] REACTIVATE FARM CLICK', { farmId, farmStatus: farm?.status });
@@ -99,494 +98,188 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
   const calculateAge = (purchaseDate: string) => {
     const diffTime = Math.abs(new Date().getTime() - new Date(purchaseDate).getTime());
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays < 7) {
-      return { value: diffDays, unit: 'days' };
-    } else {
-      const diffWeeks = Math.floor(diffDays / 7);
-      return { value: diffWeeks, unit: 'weeks' };
-    }
+    if (diffDays < 7) return { value: diffDays, unit: 'days' };
+    const diffWeeks = Math.floor(diffDays / 7);
+    return { value: diffWeeks, unit: 'weeks' };
   };
 
   const getLayingRate = (lot: any) => {
     if (lot.status !== 'ACTIF' || lot.current_quantity === 0) return '0%';
-
     const lotProds = productions
       .filter((p: any) => p.lot === lot.id)
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 7);
-
     if (lotProds.length === 0) return '0%';
-
     const avgCasiers = lotProds.reduce((sum, p) => sum + (p.casiers_produits || 0), 0) / lotProds.length;
     const rate = (avgCasiers * 30 / lot.current_quantity) * 100;
     return `${Math.min(100, Math.round(rate))}%`;
   };
+  void getLayingRate;
 
   const getPerformance = (lot: any) => {
     if (lot.status !== 'ACTIF' || lot.current_quantity === 0) return 0;
-
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setHours(0, 0, 0, 0);
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
     const lotProds = productions.filter((p: any) =>
-      p.lot === lot.id &&
-      new Date(p.date) >= sevenDaysAgo &&
-      p.status !== 'ANNULEE'
+      p.lot === lot.id && new Date(p.date) >= sevenDaysAgo && p.status !== 'ANNULEE',
     );
-
     if (lotProds.length === 0) return 0;
-
     const recentProductionEggs = lotProds.reduce((sum: number, p: any) => sum + (p.casiers_produits * 30), 0);
     const daysWithData = new Set(lotProds.map((p: any) => p.date)).size || 1;
-
     const lotMovements = movements.filter((m: any) => m.lot === lot.id && m.status !== 'ANNULEE');
     const totalSick = lotMovements.filter((m: any) => m.type === 'MALADE').reduce((sum: number, m: any) => sum + m.quantity, 0);
     const recoveredCount = lotMovements.filter((m: any) => m.type === 'GUERI').reduce((sum: number, m: any) => sum + m.quantity, 0);
     const currentSick = Math.max(0, totalSick - recoveredCount);
+    return calculatePerformance(lot.initial_quantity, lot.current_quantity, currentSick, recentProductionEggs, daysWithData);
+  };
 
-    return calculatePerformance(
-      lot.initial_quantity,
-      lot.current_quantity,
-      currentSick,
-      recentProductionEggs,
-      daysWithData
+  const statusMeta = (status: string) => {
+    if (status === 'ACTIF') return { label: t('lots.status.active') || 'Actif', color: '#2E7D32' };
+    if (status === 'TERMINE') return { label: t('lots.status.finished') || 'Terminé', color: '#E65100' };
+    return { label: t('lots.status.archived') || 'Archivé', color: '#C62828' };
+  };
+
+  const renderLotItem = (item: any) => {
+    const perf = getPerformance(item);
+    const perfColor = getPerformanceLabel(perf).color;
+    const sm = statusMeta(item.status);
+    const age = calculateAge(item.purchase_date);
+
+    return (
+      <View key={item.id} style={cellStyle}>
+        <Pressable onPress={() => navigation.navigate('LotDetail', { farmId, farmName, lotId: item.id, lotName: item.name })}>
+          <Card style={styles.lotCard}>
+            <View style={styles.lotHeader}>
+              <View style={styles.lotTitle}>
+                <View style={[styles.lotIcon, { backgroundColor: theme.colors.primary + '18' }]}>
+                  <MaterialIcons name="inventory-2" size={18} color={theme.colors.primary} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.lotName, { color: theme.colors.text }]} numberOfLines={1}>{item.name}</Text>
+                  <Text style={styles.lotBreed}>{item.breed || 'ISA Brown'}</Text>
+                </View>
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={theme.colors.textSecondary} />
+            </View>
+
+            <View style={[styles.lotStats, { backgroundColor: theme.colors.background }]}>
+              <View style={styles.lotStat}>
+                <MaterialIcons name="groups" size={16} color={theme.colors.textSecondary} />
+                <View>
+                  <Text style={[styles.lotStatValue, { color: theme.colors.text }]}>{formatNumber(item.current_quantity)}</Text>
+                  <Text style={styles.lotStatLabel}>{t('dashboard.totalBirds')}</Text>
+                </View>
+              </View>
+              <View style={styles.lotStat}>
+                <MaterialIcons name="speed" size={16} color={perfColor} />
+                <View>
+                  <Text style={[styles.lotStatValue, { color: perfColor }]}>{perf}%</Text>
+                  <Text style={styles.lotStatLabel}>{t('lots.performance')}</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.lotFooter}>
+              <Text style={styles.lotAge}>{t(age.unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: age.value })}</Text>
+              <Badge label={sm.label} color={sm.color} />
+            </View>
+          </Card>
+        </Pressable>
+      </View>
     );
   };
 
-  const renderLotItem = (item: any) => (
-    <Card key={item.id} style={[styles.lotCard, isDesktop && styles.lotCardDesktop]}>
-      <TouchableOpacity
-        onPress={() => navigation.navigate('LotDetail', { farmId, farmName, lotId: item.id, lotName: item.name })}
-        activeOpacity={0.7}
-      >
-        <View style={styles.lotHeader}>
-          <View style={styles.lotTitleContainer}>
-            <View style={styles.lotIconCircle}>
-              <MaterialIcons name="inventory-2" size={20} color={theme.colors.primary} />
-            </View>
-            <View>
-              <Text style={styles.lotName} numberOfLines={1}>{item.name}</Text>
-              <Text style={styles.lotBreed}>{item.breed || 'ISA Brown'}</Text>
-            </View>
-          </View>
-          <MaterialIcons name="chevron-right" size={24} color={theme.colors.textSecondary} />
-        </View>
-
-        <View style={styles.lotStatsGrid}>
-          <View style={styles.lotStatItem}>
-            <MaterialIcons name="groups" size={16} color={theme.colors.textSecondary} />
-            <View style={styles.lotStatTexts}>
-              <Text style={styles.lotStatValue}>{formatNumber(item.current_quantity)}</Text>
-              <Text style={styles.lotStatLabel}>{t('dashboard.totalBirds')}</Text>
-            </View>
-          </View>
-          <View style={styles.lotStatItem}>
-            <MaterialIcons name="speed" size={16} color={getPerformanceLabel(getPerformance(item)).color} />
-            <View style={styles.lotStatTexts}>
-              <Text style={[styles.lotStatValue, { color: getPerformanceLabel(getPerformance(item)).color }]}>{getPerformance(item)}%</Text>
-              <Text style={styles.lotStatLabel}>{t('lots.performance')}</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.lotFooter}>
-          <Text style={styles.lotAgeText}>
-            {(() => {
-              const age = calculateAge(item.purchase_date);
-              return t(age.unit === 'days' ? 'farms.age_days' : 'farms.age_weeks', { count: age.value });
-            })()}
-          </Text>
-          <View style={[
-            styles.statusBadge,
-            {
-              backgroundColor: item.status === 'ACTIF' ?
-                (isDarkMode ? '#1B5E20' : '#E8F5E9') :
-                item.status === 'TERMINE' ? (isDarkMode ? '#3E2723' : '#FFF3E0') :
-                (isDarkMode ? '#B71C1C' : '#FFEBEE')
-            }
-          ]}>
-            <Text style={[
-              styles.statusText,
-              {
-                color: item.status === 'ACTIF' ?
-                  (isDarkMode ? '#A5D6A7' : '#2E7D32') :
-                  item.status === 'TERMINE' ? (isDarkMode ? '#FFB74D' : '#E65100') :
-                  (isDarkMode ? '#EF9A9A' : '#C62828')
-              }
-            ]}>
-              {item.status === 'ACTIF' ? t('lots.status.active') || 'Actif' :
-               item.status === 'TERMINE' ? t('lots.status.finished') || 'Terminé' :
-               t('lots.status.archived') || 'Archivé'}
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    </Card>
-  );
-
-  const filteredLots = lots.filter((l: any) => showArchived ? l.status === 'ARCHIVE' : l.status !== 'ARCHIVE');
+  const filteredLots = lots.filter((l: any) => (showArchived ? l.status === 'ARCHIVE' : l.status !== 'ARCHIVE'));
 
   return (
-    <SafeAreaWrapper style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-           <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <View style={{ flex: 1, marginLeft: 15 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={styles.headerTitle}>{farmName}</Text>
-            {farm?.status === 'ARCHIVE' && (
-              <View style={styles.archiveBadge}>
-                <Text style={styles.archiveBadgeText}>{t('profile.inactive')}</Text>
-              </View>
-            )}
+    <Screen
+      scroll
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+      header={
+        <ScreenHeader
+          title={farmName}
+          onBack={() => navigation.goBack()}
+          right={farm?.status === 'ARCHIVE' ? <Badge label={t('profile.inactive')} color={theme.colors.textSecondary} /> : undefined}
+          actions={[
+            ...(userRole !== 'EMPLOYE' ? [{ icon: 'edit' as const, onPress: () => navigation.navigate('CreateFarm', { farm }), tint: theme.colors.textSecondary }] : []),
+            // Sur Web, la navigation passe par la DesktopSidebar : le tiroir mobile
+            // n'existe plus visuellement, ce bouton ne doit donc pas y apparaître.
+            ...(Platform.OS !== 'web' ? [{ icon: 'more-vert' as const, onPress: () => navigation.openDrawer(), tint: theme.colors.text }] : []),
+          ]}
+        />
+      }
+    >
+      {loading && !refreshing ? (
+        <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginTop: 40 }} />
+      ) : (
+        <>
+          {farm?.status === 'ARCHIVE' && (
+            <Card style={styles.archiveAlert}>
+              <MaterialIcons name="info-outline" size={20} color={theme.colors.textSecondary} />
+              <Text style={styles.archiveAlertText}>
+                Cette ferme est archivée. Elle n'apparaît plus dans les statistiques globales.
+              </Text>
+              <Pressable onPress={handleReactivate} style={[styles.reactivateBtn, { backgroundColor: theme.colors.primary }]}>
+                <Text style={[styles.reactivateBtnText, { color: theme.colors.text }]}>Réactiver</Text>
+              </Pressable>
+            </Card>
+          )}
+
+          <View style={styles.statsRow}>
+            <StatTile label={t('farms.totalBirds')} value={formatNumber(stats.totalBirds)} icon="bird" />
+            <StatTile label={t('farms.cumulativeProduction')} value={`${formatNumber(stats.totalProduction)}`} hint={t('lots.traysProduced')} icon="egg-outline" accent="#F57C00" />
           </View>
-        </View>
-        {userRole !== 'EMPLOYE' && (
-          <TouchableOpacity
-            onPress={() => navigation.navigate('CreateFarm', { farm })}
-            style={{ marginRight: 15 }}
-          >
-             <MaterialIcons name="edit" size={24} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity onPress={() => navigation.openDrawer()}>
-           <MaterialIcons name="more-vert" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-      </View>
 
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
-      >
-        {loading && !refreshing ? (
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        ) : (
-          <View style={styles.mainLayout}>
-            {farm?.status === 'ARCHIVE' && (
-               <Card style={styles.archiveAlert}>
-                  <MaterialIcons name="info-outline" size={20} color={theme.colors.textSecondary} />
-                  <Text style={styles.archiveAlertText}>
-                    Cette ferme est archivée. Elle n'apparaît plus dans les statistiques globales.
-                  </Text>
-                  <TouchableOpacity onPress={handleReactivate} style={styles.reactivateBtn}>
-                    <Text style={styles.reactivateBtnText}>Réactiver</Text>
-                  </TouchableOpacity>
-               </Card>
-            )}
-
-            <View style={styles.statsOverview}>
-              <View style={styles.overviewItem}>
-                <Text style={styles.overviewLabel}>{t('farms.totalBirds')}</Text>
-                <Text style={styles.overviewValue}>{formatNumber(stats.totalBirds)}</Text>
-              </View>
-              <View style={[styles.overviewItem, { borderLeftWidth: 0.8, borderLeftColor: theme.colors.border + '40' }]}>
-                <Text style={styles.overviewLabel}>{t('farms.cumulativeProduction')}</Text>
-                <Text style={styles.overviewValue}>{formatNumber(stats.totalProduction)} <Text style={{fontSize: 12}}>{t('lots.traysProduced')}</Text></Text>
-              </View>
-            </View>
-
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{t('farms.batchesInFarm')}</Text>
-
-              {/* Filtre Actifs / Archivés */}
-              <View style={styles.filterContainer}>
-                <TouchableOpacity
-                  style={[styles.filterButton, !showArchived && styles.filterButtonActive]}
-                  onPress={() => setShowArchived(false)}
-                >
-                  <MaterialIcons name="inventory-2" size={16} color={!showArchived ? theme.colors.primary : theme.colors.textSecondary} />
-                  <Text style={[styles.filterButtonText, !showArchived && styles.filterButtonTextActive]}>
-                    {t('lots.status.active') || 'Actifs'}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterButton, showArchived && styles.filterButtonActive]}
-                  onPress={() => setShowArchived(true)}
-                >
-                  <MaterialIcons name="archive" size={16} color={showArchived ? theme.colors.primary : theme.colors.textSecondary} />
-                  <Text style={[styles.filterButtonText, showArchived && styles.filterButtonTextActive]}>
-                    {t('lots.status.archived') || 'Archivés'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {filteredLots.length > 0 ? (
-              <View style={styles.lotsGrid}>
-                {filteredLots.map(renderLotItem)}
-              </View>
-            ) : (
-              <EmptyState
-                icon={showArchived ? "archive" : "warehouse"}
-                title={t('common.noData')}
-                description={!showArchived && userRole !== 'EMPLOYE' ? t('farms.newBatch') : undefined}
-              />
-            )}
-
-            {userRole !== 'EMPLOYE' && (
-              <TouchableOpacity
-                style={styles.bigAddButton}
-                onPress={() => navigation.navigate('CreateLot', { farmId, farmName })}
-              >
-                <MaterialIcons name="add" size={24} color={theme.colors.text} style={{ marginRight: 8 }} />
-                <Text style={styles.bigAddButtonText}>{t('farms.newBatch')}</Text>
-              </TouchableOpacity>
-            )}
+          <SectionHeader title={t('farms.batchesInFarm')} icon="layers-triple" />
+          <View style={styles.filterRow}>
+            <Chip label={t('lots.status.active') || 'Actifs'} icon="package-variant" active={!showArchived} onPress={() => setShowArchived(false)} />
+            <Chip label={t('lots.status.archived') || 'Archivés'} icon="archive-outline" active={showArchived} onPress={() => setShowArchived(true)} />
           </View>
-        )}
-      </ScrollView>
-    </SafeAreaWrapper>
+
+          {filteredLots.length > 0 ? (
+            <View style={styles.lotsGrid}>{filteredLots.map(renderLotItem)}</View>
+          ) : (
+            <EmptyState
+              icon={showArchived ? 'archive' : 'warehouse'}
+              title={t('common.noData')}
+              description={!showArchived && userRole !== 'EMPLOYE' ? t('farms.newBatch') : undefined}
+            />
+          )}
+
+          {userRole !== 'EMPLOYE' && (
+            <Pressable style={[styles.bigAdd, { backgroundColor: theme.colors.primary }]} onPress={() => navigation.navigate('CreateLot', { farmId, farmName })}>
+              <MaterialIcons name="add" size={22} color={theme.colors.text} />
+              <Text style={[styles.bigAddText, { color: theme.colors.text }]}>{t('farms.newBatch')}</Text>
+            </Pressable>
+          )}
+        </>
+      )}
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDarkMode: boolean, isDesktopOrTablet: boolean) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    backgroundColor: theme.colors.background,
-    maxWidth: 1000,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  backButton: {
-    padding: 4,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  archiveBadge: {
-    backgroundColor: theme.colors.textSecondary + '20',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 8,
-  },
-  archiveBadgeText: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    fontWeight: 'bold',
-  },
-  archiveAlert: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: theme.colors.surface,
-    borderColor: theme.colors.border,
-    borderWidth: 1,
-    marginBottom: 15,
-    borderRadius: 12,
-  },
-  archiveAlertText: {
-    flex: 1,
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginLeft: 10,
-  },
-  reactivateBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: theme.colors.primary,
-    borderRadius: 8,
-  },
-  reactivateBtnText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  statsOverview: {
-    flexDirection: 'row',
-    backgroundColor: isDarkMode ? 'rgba(249, 215, 96, 0.1)' : theme.colors.primary + '15',
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 20,
-    borderWidth: 0.8,
-    borderColor: isDarkMode ? 'rgba(249, 215, 96, 0.2)' : theme.colors.primary + '30',
-  },
-  overviewItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  overviewLabel: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginBottom: 5,
-  },
-  overviewValue: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  sectionHeader: {
-    flexDirection: isDesktopOrTablet ? 'row' : 'column',
-    justifyContent: 'space-between',
-    alignItems: isDesktopOrTablet ? 'center' : 'flex-start',
-    marginBottom: 15,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginBottom: isDesktopOrTablet ? 0 : 15,
-    marginLeft: 5,
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    backgroundColor: theme.colors.surface,
-    borderRadius: 12,
-    padding: 4,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    width: isDesktopOrTablet ? 300 : '100%',
-  },
-  filterButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 10,
-    gap: 6,
-  },
-  filterButtonActive: {
-    backgroundColor: theme.colors.primary + '15',
-  },
-  filterButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: theme.colors.textSecondary,
-  },
-  filterButtonTextActive: {
-    color: theme.colors.primary,
-    fontWeight: '700',
-  },
-  content: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: theme.spacing.m,
-  },
-  mainLayout: {
-    maxWidth: 1000,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  lotsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    marginHorizontal: -theme.spacing.s,
-  },
-  lotCard: {
-    padding: theme.spacing.m,
-    marginBottom: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    width: '100%',
-  },
-  lotCardDesktop: {
-    width: '32%',
-    marginHorizontal: 8,
-  },
-  lotHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: theme.spacing.m,
-  },
-  lotTitleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  lotIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  lotName: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  lotBreed: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-  },
-  lotStatsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    backgroundColor: theme.colors.background + '40',
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.m,
-  },
-  lotStatItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '45%',
-  },
-  lotStatTexts: {
-    marginLeft: 8,
-  },
-  lotStatLabel: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    textTransform: 'uppercase',
-  },
-  lotStatValue: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  lotFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: theme.spacing.m,
-  },
-  lotAgeText: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    fontStyle: 'italic',
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  bigAddButton: {
-    flexDirection: 'row',
-    backgroundColor: theme.colors.primary,
-    height: 50,
-    borderRadius: theme.borderRadius.l,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginVertical: theme.spacing.m,
-    ...theme.shadows.medium,
-  },
-  bigAddButtonText: {
-    fontSize: 16,
-    color: theme.colors.text,
-    fontWeight: 'bold',
-  },
+const createStyles = (theme: any) => StyleSheet.create({
+  archiveAlert: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: space.sm, marginBottom: space.md, borderRadius: radius.md },
+  archiveAlertText: { flex: 1, fontSize: 12, color: theme.colors.textSecondary },
+  reactivateBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.sm },
+  reactivateBtnText: { fontSize: 12, fontWeight: '800' },
+  statsRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.xs },
+  filterRow: { flexDirection: 'row', gap: 8, marginBottom: space.md },
+  lotsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  lotCard: { marginBottom: 0, borderRadius: radius.lg },
+  lotHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: space.sm, marginBottom: space.sm },
+  lotTitle: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flex: 1, minWidth: 0 },
+  lotIcon: { width: 38, height: 38, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center' },
+  lotName: { fontSize: 15.5, fontWeight: '800' },
+  lotBreed: { fontSize: 12, color: theme.colors.textSecondary },
+  lotStats: { flexDirection: 'row', justifyContent: 'space-between', padding: space.sm, borderRadius: radius.md },
+  lotStat: { flexDirection: 'row', alignItems: 'center', gap: 8, width: '46%' },
+  lotStatLabel: { fontSize: 10, color: theme.colors.textSecondary, textTransform: 'uppercase' },
+  lotStatValue: { fontSize: 15, fontWeight: '800' },
+  lotFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: space.sm },
+  lotAge: { fontSize: 12, color: theme.colors.textSecondary, fontStyle: 'italic' },
+  bigAdd: { flexDirection: 'row', gap: 8, height: 50, borderRadius: radius.md, justifyContent: 'center', alignItems: 'center', marginVertical: space.md },
+  bigAddText: { fontSize: 16, fontWeight: '800' },
 });

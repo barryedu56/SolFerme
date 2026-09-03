@@ -202,7 +202,7 @@ export const ActionVenteScreen = ({ route, navigation }: any) => {
           </TouchableOpacity>
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           {/* Carte récap financier */}
           <Card style={[styles.totalCard, { backgroundColor: theme.colors.primary }]}>
             <View style={styles.totalRow}>
@@ -429,6 +429,9 @@ const createStyles = (theme: any) => StyleSheet.create({
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     padding: theme.spacing.m, paddingTop: theme.spacing.l, backgroundColor: theme.colors.background,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center',

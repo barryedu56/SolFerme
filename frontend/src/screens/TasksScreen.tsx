@@ -1,41 +1,38 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
-import { Card } from '../components/Card';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { repositoryProvider } from '../repositories';
-import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import { Input } from '../components/Input';
 import { Button } from '../components/Button';
-import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { toast } from '../utils/toast';
 import { getErrorMessage } from '../utils/errors';
+import { Screen, ScreenHeader, useContentWidth, Card, Badge, EmptyState, space, radius } from '../components/ui';
 
 export const TasksScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userRole } = useAuth();
-  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
+  const isOwner = userRole !== 'EMPLOYE';
+  const { isDesktop, isTablet } = useBreakpoint();
+  const numColumns = isDesktop ? 3 : isTablet ? 2 : 1;
+  const contentW = useContentWidth('wide');
+  const S = useMemo(() => createStyles(theme), [theme]);
 
-  const [tasks, setTasks] = useState([]);
+  const [tasks, setTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-
-  // Details Modal State
   const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const [taskDetails, setTaskDetails] = useState<any>(null);
-
-  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
 
   const fetchTasks = async () => {
     setLoading(true);
     try {
       const response = await repositoryProvider.api.get('/tasks/');
-      setTasks(response.data);
+      setTasks(Array.isArray(response.data) ? response.data : response.data?.results || []);
     } catch (error) {
       console.log('Erreur fetch tasks:', error);
     } finally {
@@ -45,64 +42,35 @@ export const TasksScreen = ({ navigation }: any) => {
   };
 
   useAutoRefreshData(['tasks'], fetchTasks, 150);
-
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchTasks();
-    });
+    const unsubscribe = navigation.addListener('focus', () => fetchTasks());
     return unsubscribe;
   }, [navigation]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchTasks();
-  };
+  const onRefresh = () => { setRefreshing(true); fetchTasks(); };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'COMPLETED': return theme.colors.success;
-      case 'PENDING': return theme.colors.warning;
-      case 'OVERDUE': return theme.colors.danger;
-      default: return theme.colors.textSecondary;
-    }
-  };
+  const statusColor = (status: string) =>
+    status === 'COMPLETED' ? '#2E7D32' : status === 'OVERDUE' ? theme.colors.danger : '#F57C00';
 
   const handleToggleTask = (task: any) => {
-    if (task.status === 'COMPLETED') {
-      return;
-    }
-
-    const confirmationMessage = `${t('common.confirm')} : ${task.title}?`;
+    if (task.status === 'COMPLETED') return;
+    const msg = `${t('common.confirm')} : ${task.title}?`;
     if (Platform.OS === 'web') {
-      if (window.confirm(`${t('tasks.completeTask')}\n\n${confirmationMessage}`)) {
-        performCompleteTask(task);
-      }
+      if (window.confirm(`${t('tasks.completeTask')}\n\n${msg}`)) performCompleteTask(task);
       return;
     }
-
-    Alert.alert(
-      t('tasks.completeTask'),
-      confirmationMessage,
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('common.confirm'),
-          onPress: () => performCompleteTask(task)
-        }
-      ]
-    );
+    Alert.alert(t('tasks.completeTask'), msg, [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('common.confirm'), onPress: () => performCompleteTask(task) },
+    ]);
   };
 
   const performCompleteTask = async (task: any) => {
     setLoading(true);
-    const commentData = { comment: '' };
     try {
-      const response = await repositoryProvider.api.post(`/tasks/${task.id}/complete/`, commentData);
-      setTasks((prev: any) =>
-        prev.map((t: any) => t.id === task.id ? response.data : t)
-      );
+      const response = await repositoryProvider.api.post(`/tasks/${task.id}/complete/`, { comment: '' });
+      setTasks((prev: any) => prev.map((x: any) => (x.id === task.id ? response.data : x)));
     } catch (error: any) {
-      console.log('Erreur complete task:', error);
       const message = getErrorMessage(error, t('tasks.updateError'));
       if (Platform.OS === 'web') toast.error(t('common.error'), message);
       else Alert.alert(t('common.error'), message);
@@ -111,380 +79,146 @@ export const TasksScreen = ({ navigation }: any) => {
     }
   };
 
-  const handleShowDetails = (task: any) => {
-    setTaskDetails(task);
-    setDetailsModalVisible(true);
+  const handleShowDetails = (task: any) => { setTaskDetails(task); setDetailsModalVisible(true); };
+
+  const renderItem = ({ item }: { item: any }) => {
+    const done = item.status === 'COMPLETED';
+    const col = statusColor(item.status);
+    return (
+      <View style={numColumns > 1 ? { flex: 1 / numColumns } : undefined}>
+        <Pressable onPress={() => handleShowDetails(item)}>
+          <Card style={[S.card, done && { opacity: 0.72 }]}>
+            <View style={S.top}>
+              <Pressable onPress={() => handleToggleTask(item)} disabled={done} hitSlop={8}>
+                <MaterialIcons
+                  name={done ? 'check-circle' : 'radio-button-unchecked'}
+                  size={24}
+                  color={done ? '#2E7D32' : theme.colors.primary}
+                />
+              </Pressable>
+              <Text style={[S.title, { color: theme.colors.text }, done && S.done]} numberOfLines={2}>{item.title}</Text>
+              <Badge label={t(`tasks.${item.status.toLowerCase()}`)} color={col} />
+            </View>
+
+            {!!item.description && <Text style={S.desc} numberOfLines={2}>{item.description}</Text>}
+
+            {item.lot_name ? (
+              <View style={[S.lot, { backgroundColor: theme.colors.primary + '14' }]}>
+                <MaterialCommunityIcons name="layers-triple" size={13} color={theme.colors.primary} />
+                <Text style={[S.lotText, { color: theme.colors.primary }]}>{item.lot_name}</Text>
+              </View>
+            ) : null}
+
+            {item.completion_comment ? (
+              <View style={[S.comment, { backgroundColor: theme.colors.background }]}>
+                <MaterialIcons name="chat-bubble-outline" size={13} color={theme.colors.textSecondary} />
+                <Text style={S.commentText} numberOfLines={1}>{item.completion_comment}</Text>
+              </View>
+            ) : null}
+
+            <View style={[S.footer, { borderTopColor: theme.colors.border }]}>
+              <View style={S.fItem}><MaterialIcons name="person-outline" size={13} color={theme.colors.textSecondary} /><Text style={S.fText}>{item.employee_name}</Text></View>
+              <View style={S.fItem}><MaterialIcons name="event" size={13} color={theme.colors.textSecondary} /><Text style={S.fText}>
+                {new Date(item.due_date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}
+              </Text></View>
+            </View>
+          </Card>
+        </Pressable>
+      </View>
+    );
   };
 
-  const renderItem = ({ item }: { item: any }) => (
-    <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
-      <TouchableOpacity onPress={() => handleShowDetails(item)} activeOpacity={0.7}>
-        <Card style={[styles.taskCard, item.status === 'COMPLETED' && { opacity: 0.7 }]}>
-          <View style={styles.taskHeader}>
-            <View style={styles.titleRow}>
-              <TouchableOpacity
-                onPress={() => handleToggleTask(item)}
-                disabled={item.status === 'COMPLETED'}
-              >
-                <MaterialIcons
-                  name={item.status === 'COMPLETED' ? "check-box" : "check-box-outline-blank"}
-                  size={24}
-                  color={item.status === 'COMPLETED' ? theme.colors.success : theme.colors.primary}
-                />
-              </TouchableOpacity>
-              <Text style={[styles.taskTitle, item.status === 'COMPLETED' && styles.completedText]}>
-                {item.title}
-              </Text>
-            </View>
-            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
-              <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-                  {t(`tasks.${item.status.toLowerCase()}`)}
-              </Text>
-            </View>
-          </View>
-          <Text style={styles.taskDesc} numberOfLines={2}>{item.description}</Text>
-
-          {item.lot_name ? (
-            <View style={styles.lotInfo}>
-               <MaterialIcons name="layers" size={14} color={theme.colors.primary} />
-               <Text style={styles.lotText}>{item.lot_name}</Text>
-            </View>
-          ) : null}
-
-          {item.completion_comment ? (
-            <View style={styles.commentBox}>
-              <MaterialIcons name="comment" size={14} color={theme.colors.textSecondary} />
-              <Text style={styles.commentText} numberOfLines={1}>{item.completion_comment}</Text>
-            </View>
-          ) : null}
-
-          <View style={styles.taskFooter}>
-            <View style={styles.footerItem}>
-              <MaterialIcons name="person" size={14} color={theme.colors.textSecondary} />
-              <Text style={styles.footerText}>{item.employee_name}</Text>
-            </View>
-            <View style={styles.footerItem}>
-              <MaterialIcons name="event" size={14} color={theme.colors.textSecondary} />
-              <Text style={styles.footerText}>
-                  {new Date(item.due_date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}
-              </Text>
-            </View>
-          </View>
-        </Card>
-      </TouchableOpacity>
-    </View>
-  );
-
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerTitleRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-          </TouchableOpacity>
-          <Text style={styles.title}>{t('tasks.title')}</Text>
-        </View>
-        {userRole !== 'EMPLOYE' && (
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => navigation.navigate('CreateTask')}
-          >
-            <MaterialIcons name="add-task" size={24} color="#000000" />
-          </TouchableOpacity>
-        )}
-      </View>
-
+    <Screen
+      header={
+        <ScreenHeader
+          title={t('tasks.title')}
+          onBack={() => navigation.goBack()}
+          actions={isOwner ? [{ icon: 'add-task', onPress: () => navigation.navigate('CreateTask'), tint: theme.colors.text }] : []}
+        />
+      }
+    >
       {loading && !refreshing ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <View style={S.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
         <FlatList
           key={numColumns}
           data={tasks}
           numColumns={numColumns}
-          keyExtractor={(item: any) => item.id.toString()}
+          keyExtractor={(item: any) => String(item.id)}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchTasks} colors={[theme.colors.primary]} />}
-          ListEmptyComponent={
-            <EmptyState
-              icon="clipboard-check-outline"
-              title={t('tasks.noTasks')}
-            />
-          }
+          style={{ width: '100%' }}
+          contentContainerStyle={[contentW, { paddingTop: space.md, paddingBottom: space.xxl, gap: space.sm }]}
+          columnWrapperStyle={numColumns > 1 ? { gap: space.sm } : undefined}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} tintColor={theme.colors.primary} />}
+          ListEmptyComponent={<EmptyState icon="clipboard-check-outline" title={t('tasks.noTasks')} />}
         />
       )}
 
-      {/* Details Modal */}
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={detailsModalVisible}
-        onRequestClose={() => setDetailsModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('common.details')}</Text>
-              <TouchableOpacity onPress={() => setDetailsModalVisible(false)}>
-                <MaterialIcons name="close" size={24} color={theme.colors.text} />
-              </TouchableOpacity>
+      <Modal animationType="fade" transparent visible={detailsModalVisible} onRequestClose={() => setDetailsModalVisible(false)}>
+        <View style={S.overlay}>
+          <View style={[S.modal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[S.modalHead, { borderBottomColor: theme.colors.border }]}>
+              <Text style={[S.modalTitle, { color: theme.colors.text }]}>{t('common.details')}</Text>
+              <Pressable onPress={() => setDetailsModalVisible(false)} hitSlop={8}>
+                <MaterialIcons name="close" size={22} color={theme.colors.text} />
+              </Pressable>
             </View>
-
-            <ScrollView contentContainerStyle={styles.modalBody}>
-               <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>{t('common.title')}</Text>
-                  <Text style={styles.detailValue}>{taskDetails?.title}</Text>
-               </View>
-
-               <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>{t('common.description')}</Text>
-                  <Text style={styles.detailValue}>{taskDetails?.description || t('common.noDescription')}</Text>
-               </View>
-
-               {taskDetails?.lot_name && (
-                 <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>{t('farms.lot')}</Text>
-                    <View style={styles.row}>
-                       <MaterialIcons name="layers" size={16} color={theme.colors.primary} />
-                       <Text style={[styles.detailValue, { marginLeft: 8 }]}>{taskDetails?.lot_name}</Text>
-                    </View>
-                 </View>
-               )}
-
-               <View style={styles.row}>
-                  <View style={[styles.detailItem, { flex: 1 }]}>
-                    <Text style={styles.detailLabel}>{t('common.status')}</Text>
-                    <View style={[styles.statusBadge, { backgroundColor: getStatusColor(taskDetails?.status) + '20', alignSelf: 'flex-start' }]}>
-                      <Text style={[styles.statusText, { color: getStatusColor(taskDetails?.status) }]}>
-                          {taskDetails && t(`tasks.${taskDetails.status.toLowerCase()}`)}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={[styles.detailItem, { flex: 1 }]}>
-                    <Text style={styles.detailLabel}>{t('tasks.dueDate')}</Text>
-                    <Text style={styles.detailValue}>
-                        {taskDetails && new Date(taskDetails.due_date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}
-                    </Text>
-                  </View>
-               </View>
-
-               {taskDetails?.completion_comment && (
-                 <View style={styles.detailItem}>
-                    <Text style={styles.detailLabel}>{t('tasks.comment')}</Text>
-                    <View style={styles.commentBox}>
-                      <MaterialIcons name="comment" size={14} color={theme.colors.textSecondary} />
-                      <Text style={styles.commentText}>{taskDetails.completion_comment}</Text>
-                    </View>
-                 </View>
-               )}
-
-               <Button
-                title={t('common.close')}
-                onPress={() => setDetailsModalVisible(false)}
-                style={{ marginTop: 10 }}
-              />
+            <ScrollView contentContainerStyle={{ padding: space.lg, gap: space.md }}>
+              <Field label={t('common.title')} value={taskDetails?.title} theme={theme} />
+              <Field label={t('common.description')} value={taskDetails?.description || t('common.noDescription')} theme={theme} />
+              {taskDetails?.lot_name && <Field label={t('farms.lot')} value={taskDetails?.lot_name} theme={theme} />}
+              <View style={{ flexDirection: 'row', gap: 16 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[S.dLabel, { color: theme.colors.textSecondary }]}>{t('common.status')}</Text>
+                  {taskDetails && <Badge label={t(`tasks.${taskDetails.status.toLowerCase()}`)} color={statusColor(taskDetails.status)} />}
+                </View>
+                <Field label={t('tasks.dueDate')} value={taskDetails && new Date(taskDetails.due_date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')} theme={theme} style={{ flex: 1 }} />
+              </View>
+              {taskDetails?.completion_comment && (
+                <View style={[S.comment, { backgroundColor: theme.colors.background }]}>
+                  <MaterialIcons name="chat-bubble-outline" size={13} color={theme.colors.textSecondary} />
+                  <Text style={[S.commentText, { fontStyle: 'italic' }]}>{taskDetails.completion_comment}</Text>
+                </View>
+              )}
+              <Button title={t('common.close')} onPress={() => setDetailsModalVisible(false)} style={{ marginTop: 6 }} />
             </ScrollView>
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    maxWidth: 1000,
-    alignSelf: 'center',
-    width: '100%'
-  },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    ...theme.shadows.light,
-  },
-  title: { fontSize: 24, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
-  addButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    ...theme.shadows.medium,
-  },
-  list: {
-    padding: theme.spacing.m,
-    maxWidth: 1000,
-    alignSelf: 'center',
-    width: '100%'
-  },
-  columnWrapper: {
-    justifyContent: 'flex-start',
-    gap: theme.spacing.m,
-  },
-  tabletCardContainer: {
-    flex: 1,
-  },
-  taskCard: {
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.xl,
-    backgroundColor: theme.colors.surface
-  },
-  taskHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', flex: 1 },
-  completedText: { textDecorationLine: 'line-through', color: theme.colors.textSecondary },
-  taskTitle: { fontSize: 16, fontWeight: '900', color: theme.colors.text, marginLeft: 8 },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border
-  },
-  statusText: { fontSize: 10, fontWeight: '900' },
-  lotInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-    backgroundColor: theme.colors.primary + '10',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    alignSelf: 'flex-start'
-  },
-  lotText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: theme.colors.primary,
-    marginLeft: 4
-  },
-  taskDesc: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: 12, fontWeight: '600' },
-  commentBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: theme.colors.background,
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.success
-  },
-  commentText: {
-    fontSize: 13,
-    color: theme.colors.text,
-    marginLeft: 8,
-    fontStyle: 'italic',
-    flex: 1
-  },
-  taskFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingTop: theme.spacing.s,
-    borderTopWidth: 0.8,
-    borderTopColor: theme.colors.border + '40'
-  },
-  footerItem: { flexDirection: 'row', alignItems: 'center' },
-  footerText: { fontSize: 12, color: theme.colors.textSecondary, marginLeft: 4, fontWeight: '700' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyContainer: { alignItems: 'center', marginTop: 50 },
-  emptyText: { fontSize: 16, color: theme.colors.textSecondary },
+const Field = ({ label, value, theme, style }: any) => (
+  <View style={style}>
+    <Text style={[fieldStyles.label, { color: theme.colors.textSecondary }]}>{label}</Text>
+    <Text style={[fieldStyles.value, { color: theme.colors.text }]}>{value}</Text>
+  </View>
+);
+const fieldStyles = StyleSheet.create({
+  label: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 },
+  value: { fontSize: 15, fontWeight: '600' },
+});
 
-  // Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
-  },
-  modalContent: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.xl,
-    width: '100%',
-    maxWidth: 500,
-    maxHeight: '80%',
-    ...theme.shadows.large,
-    overflow: 'hidden'
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 0.8,
-    borderBottomColor: theme.colors.border
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: theme.colors.text,
-    textTransform: 'uppercase'
-  },
-  modalBody: {
-    padding: 20
-  },
-  taskSummaryTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 4
-  },
-  taskSummaryDesc: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    marginBottom: 20
-  },
-  commentInput: {
-    height: 100,
-    textAlignVertical: 'top',
-    paddingTop: 12
-  },
-  confirmButton: {
-    marginTop: 10
-  },
-  detailItem: {
-    marginBottom: 16,
-  },
-  detailLabel: {
-    fontSize: 12,
-    color: theme.colors.textSecondary,
-    marginBottom: 4,
-    fontWeight: '700',
-    textTransform: 'uppercase'
-  },
-  detailValue: {
-    fontSize: 15,
-    color: theme.colors.text,
-    fontWeight: '600'
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center'
-  }
+const createStyles = (theme: any) => StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  card: { marginBottom: 0, borderRadius: radius.lg },
+  top: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  title: { flex: 1, fontSize: 15.5, fontWeight: '800' },
+  done: { textDecorationLine: 'line-through', color: theme.colors.textSecondary },
+  desc: { fontSize: 13.5, color: theme.colors.textSecondary, marginTop: space.xs },
+  lot: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: radius.sm, marginTop: space.xs },
+  lotText: { fontSize: 12, fontWeight: '800' },
+  comment: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 10, borderRadius: radius.sm, marginTop: space.xs, borderLeftWidth: 3, borderLeftColor: '#2E7D32' },
+  commentText: { flex: 1, fontSize: 12.5, color: theme.colors.text },
+  footer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: space.sm, paddingTop: space.sm, borderTopWidth: StyleSheet.hairlineWidth },
+  fItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  fText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600' },
+
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  modal: { borderRadius: radius.xl, width: '100%', maxWidth: 500, maxHeight: '82%', overflow: 'hidden' },
+  modalHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
+  modalTitle: { fontSize: 17, fontWeight: '800' },
+  dLabel: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
 });

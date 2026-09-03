@@ -21,7 +21,7 @@ import {
 } from '../database/localDatabase';
 import { emitDataChange } from './dataEvents';
 import { getLocalReferenceTable, getTableNameFromEndpoint, mapForeignKeyFields, normalizeEndpoint, parseEndpoint } from '../utils/offlineSyncUtils';
-import { CANCELLABLE_TABLES } from '../repositories/dataSources/LocalApiFallback';
+import { CANCELLABLE_TABLES, TABLE_MODULE_MAP, reconcileMissingInitialSalePayments } from '../repositories/dataSources/LocalApiFallback';
 
 const SYNCABLE_ENDPOINTS = [
   '/users/',
@@ -257,6 +257,12 @@ export class SyncManager {
       }
     } catch { /* silencieux si la table n'existe pas encore */ }
 
+    // 🔧 Réparer les ventes offline dont le paiement initial n'a jamais été inséré
+    // (ancien bug farm_id NOT NULL) → créance / historique des paiements faussés.
+    try {
+      await reconcileMissingInitialSalePayments();
+    } catch { /* best-effort */ }
+
     const state = await NetInfo.fetch();
     if (this.isNetworkOnline(state)) {
       // 🔧 Après un login/reconnexion, le refresh token peut ne pas être encore
@@ -442,7 +448,7 @@ export class SyncManager {
 
       // --- Opération CREATE ---
       if (item.operation === 'CREATE') {
-        // Vérification anti-doublon
+        // Anti-doublon 1 : le mapping local→serveur est déjà enregistré → rien à faire.
         if (typeof item.local_id === 'number' && item.local_id < 0) {
           const existingMapping = await getServerIdForLocalId(item.local_id, item.table_name).catch(() => null);
           if (existingMapping) {
@@ -450,6 +456,30 @@ export class SyncManager {
             await deleteSyncQueueItem(item.id).catch(() => {});
             continue;
           }
+        }
+
+        // Anti-doublon 2 : au cycle précédent le POST a ABOUTI côté serveur mais le
+        // mapping local a échoué (_server_id stocké dans le payload). On reprend le
+        // mapping SANS re-POSTer → aucun risque de doublon même si l'idempotency
+        // backend n'était pas encore en place.
+        if (typeof item.local_id === 'number' && item.local_id < 0 && typeof resolvedPayload?._server_id === 'number') {
+          const knownServerId = resolvedPayload._server_id as number;
+          try {
+            await this.replaceLocalId(item.table_name, item.local_id, knownServerId).catch(() => {});
+            await insertIdMapping(item.local_id, knownServerId, item.table_name).catch(() => {});
+            await updateQueueItemsForMappedId(item.local_id, item.table_name, knownServerId).catch(() => {});
+            await this.reactivateDependentItems(item.local_id, knownServerId).catch(() => {});
+          } catch { /* best-effort */ }
+          const verified = await getServerIdForLocalId(item.local_id, item.table_name).catch(() => null);
+          if (verified) {
+            console.info(`[Sync] CREATE #${item.id} : mapping repris depuis _server_id=${knownServerId}, pas de re-POST`);
+            await deleteSyncQueueItem(item.id).catch(() => {});
+            continue;
+          }
+        }
+        // Retirer _server_id du corps envoyé au backend (champ interne).
+        if (resolvedPayload && typeof resolvedPayload === 'object' && '_server_id' in resolvedPayload) {
+          delete resolvedPayload._server_id;
         }
 
         let apiSucceeded = false;
@@ -521,6 +551,28 @@ export class SyncManager {
             // API réussi + mapping OK → nettoyer la queue
             try { await deleteSyncQueueItem(item.id); } catch {
               await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: 'API succeeded but queue cleanup failed' }).catch(() => {});
+            }
+            // 🔧 Purge des logs d'activité preview de cette entité : le backend a
+            // créé les siens (perform_create / signaux) et ils arriveront au pull.
+            // Les libellés client/serveur diffèrent → la dédup par texte échoue et
+            // laissait 2 lignes dans l'historique. On matche par (module, entité).
+            // Le module cadre le related_id (non unique entre tables).
+            if (typeof serverId === 'number') {
+              const moduleForTable = TABLE_MODULE_MAP[item.table_name];
+              try {
+                if (moduleForTable) {
+                  await runSqlAsync(
+                    `DELETE FROM activity_logs WHERE _needs_sync = 0 AND module = ? AND related_id IN (?, ?)`,
+                    [moduleForTable, item.local_id, serverId]
+                  );
+                } else {
+                  // Table sans module connu → on se limite à l'id local (globalement unique).
+                  await runSqlAsync(
+                    `DELETE FROM activity_logs WHERE _needs_sync = 0 AND related_id = ?`,
+                    [item.local_id]
+                  );
+                }
+              } catch { /* best-effort */ }
             }
             console.info(`[Sync] ✅ CREATE ${item.table_name} ${item.local_id}→${response.data?.id || '?'} synchronisé`);
           }
@@ -956,16 +1008,31 @@ export class SyncManager {
         } catch { /* best-effort dedup */ }
       }
 
-      // 🔧 Déduplication sale_payments : un paiement local initial est créé avec une vente
-      // (id < 0, _needs_sync=0). Lors du pull, le serveur renvoie le sien. On supprime le local.
+      // 🔧 Déduplication sale_payments : un paiement local INITIAL est créé avec une
+      // vente (id < 0, _needs_sync=0). Le serveur crée le sien via perform_create.
+      // Priorité au rattachement par FK (sale_id) — bien plus fiable que le tuple
+      // (montant, date), surtout si deux ventes identiques existent le même jour.
       if (tableName === 'sale_payments' && typeof row.id === 'number' && row.id > 0) {
         try {
-          // Utiliser sale_id s'il est résolu (positif). Si on n'a que des IDs locaux,
-          // on cherche par lot, date et montant (qui sont constants).
+          const saleId = typeof row.sale === 'number' ? row.sale : (typeof row.sale_id === 'number' ? row.sale_id : null);
+          let dedupDone = false;
+          if (saleId !== null) {
+            // Ne cible QUE les previews INITIAL (jamais un vrai encaissement utilisateur,
+            // qui porte une reference UUID « pay-… » et un id > 0 après sync).
+            const bySale = await queryAll<{ id: number }>(
+              `SELECT id FROM sale_payments WHERE sale_id = ? AND id < 0 AND (reference = 'INITIAL' OR reference IS NULL)`,
+              [saleId]
+            ).catch(() => [] as { id: number }[]);
+            for (const pp of bySale) {
+              await deleteRow('sale_payments', pp.id);
+              dedupDone = true;
+              console.info(`[Sync] Déduplication sale_payment (par vente #${saleId}): preview id=${pp.id} → serveur id=${row.id}`);
+            }
+          }
           const lotId = row.lot_id || row.lot;
-          if (lotId && row.amount && row.payment_date) {
+          if (!dedupDone && lotId && row.amount && row.payment_date) {
             const previewPayments = await queryAll<{ id: number }>(
-              `SELECT id FROM sale_payments WHERE lot_id = ? AND amount = ? AND payment_date = ? AND id < 0`,
+              `SELECT id FROM sale_payments WHERE lot_id = ? AND amount = ? AND payment_date = ? AND id < 0 AND (reference = 'INITIAL' OR reference IS NULL)`,
               [lotId, row.amount, row.payment_date]
             ).catch(() => [] as { id: number }[]);
             for (const pp of previewPayments) {
@@ -977,11 +1044,25 @@ export class SyncManager {
       }
 
       // 🔧 Déduplication chicken_movements pour les ventes : le frontend crée un mouvement
-      // local de type VENTE (_needs_sync=0). Le backend fait de même via signal. On supprime le local.
+      // local de type VENTE (_needs_sync=0). Le backend fait de même via signal.
+      // Priorité au rattachement par FK (sale_id), fallback tuple (qty, date).
       if (tableName === 'chicken_movements' && typeof row.id === 'number' && row.id > 0 && row.type === 'VENTE') {
         try {
+          const saleId = typeof row.sale === 'number' ? row.sale : (typeof row.sale_id === 'number' ? row.sale_id : null);
+          let dedupDone = false;
+          if (saleId !== null) {
+            const bySale = await queryAll<{ id: number }>(
+              `SELECT id FROM chicken_movements WHERE sale_id = ? AND type = 'VENTE' AND id < 0`,
+              [saleId]
+            ).catch(() => [] as { id: number }[]);
+            for (const pm of bySale) {
+              await deleteRow('chicken_movements', pm.id);
+              dedupDone = true;
+              console.info(`[Sync] Déduplication chicken_movement (par vente #${saleId}): preview id=${pm.id} → serveur id=${row.id}`);
+            }
+          }
           const lotId = row.lot_id || row.lot;
-          if (lotId && row.quantity && row.date) {
+          if (!dedupDone && lotId && row.quantity && row.date) {
             const previewMovements = await queryAll<{ id: number }>(
               `SELECT id FROM chicken_movements WHERE lot_id = ? AND type = 'VENTE' AND quantity = ? AND date = ? AND id < 0`,
               [lotId, row.quantity, row.date]

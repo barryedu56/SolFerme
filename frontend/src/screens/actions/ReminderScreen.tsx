@@ -9,7 +9,7 @@ import { useTranslation } from '../../context/LanguageContext';
 import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
-import { scheduleReminderNotification, cancelNotification } from '../../utils/notifications';
+import { scheduleReminderNotification, cancelNotification, notifyReminderScheduled, getNotificationDiagnostics } from '../../utils/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useBreakpoint } from '../../hooks/useBreakpoint';
 import { toast } from '../../utils/toast';
@@ -197,19 +197,30 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
 
       const savedReminder = response.data;
 
-      // Schedule local notification
+      // Planification de la notification locale + confirmation immédiate.
+      let notifWarning: string | undefined;
       if (status === 'PENDING') {
         try {
-          const notifId = await scheduleReminderNotification(savedReminder);
-          if (notifId) {
-            await AsyncStorage.setItem(`notif_reminder_${savedReminder.id}`, notifId);
+          const diag = await getNotificationDiagnostics();
+          if (!diag.ok) {
+            notifWarning = diag.reason;
+          } else {
+            const notifId = await scheduleReminderNotification(savedReminder);
+            if (notifId) {
+              await AsyncStorage.setItem(`notif_reminder_${savedReminder.id}`, notifId);
+            }
+            // Confirmation visible uniquement à la création (pas à l'édition).
+            if (!reminderId) await notifyReminderScheduled(savedReminder);
           }
         } catch (notifError) {
           console.error("Erreur lors de la planification de la notification:", notifError);
         }
       }
 
-      showReminderMessage(t('common.success'), t('reminders.saved'));
+      showReminderMessage(
+        t('common.success'),
+        notifWarning ? `${t('reminders.saved')}\n\n⚠️ ${notifWarning}` : t('reminders.saved'),
+      );
       navigation.goBack();
     } catch (e: any) {
       console.error("Erreur handleSubmit Rappel:", e);
@@ -235,7 +246,7 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('reminders.form.title')}</Text>
@@ -360,7 +371,7 @@ export const ActionReminderScreen = ({ route, navigation }: any) => {
 
 const createStyles = (theme: any) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, maxWidth: 760, width: '100%', alignSelf: 'center' },
   backButton: {
     width: 40,
     height: 40,
@@ -372,7 +383,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: 16 },
-  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   formCard: {
     padding: 16,
     marginBottom: 20,

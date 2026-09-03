@@ -1,0 +1,48 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "requireCommit": false
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./service-account-key.json",
+        "track": "production"
+      },
+      "ios": {
+        "appleId": "votre@email.com",
+        "ascAppId": "VOTRE_APP_STORE_APP_ID",
+        "appleTeamId": "VOTRE_TEAM_ID"
+      }
+    }
+  }
+}

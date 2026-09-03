@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
-import { Card } from '../components/Card';
-import { repositoryProvider } from '../repositories';
+import { View, Text, StyleSheet, FlatList, Pressable, RefreshControl, Modal, ScrollView, Alert, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { repositoryProvider } from '../repositories';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
@@ -11,21 +10,21 @@ import { Button } from '../components/Button';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { toast } from '../utils/toast';
 import { getErrorMessage } from '../utils/errors';
+import { Screen, ScreenHeader, useContentWidth, Card, Badge, EmptyState, Chip, space, radius } from '../components/ui';
 
 export const EmployeeRequestsScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userRole } = useAuth();
-  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
-
-  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
+  const { isDesktop, isTablet } = useBreakpoint();
+  const S = useMemo(() => createStyles(theme), [theme]);
+  const numColumns = isDesktop ? 3 : isTablet ? 2 : 1;
+  const contentW = useContentWidth('wide');
 
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  // New Request Modal State
   const [modalVisible, setModalVisible] = useState(false);
   const [requestType, setRequestType] = useState('CONGE');
   const [description, setDescription] = useState('');
@@ -47,16 +46,9 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
   };
 
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchRequests();
-    });
+    const unsubscribe = navigation.addListener('focus', () => { fetchRequests(); });
     return unsubscribe;
   }, [navigation]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchRequests();
-  };
 
   const handleSubmit = async () => {
     if (!description.trim()) {
@@ -64,19 +56,12 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
       else Alert.alert(t('common.error'), t('auth.fillRequired'));
       return;
     }
-
     setSubmitting(true);
     try {
-      const requestData = {
-        type: requestType,
-        description: description,
-      };
-
-      // Si hors-ligne, on ajoute à la queue et on enregistre localement
+      const requestData = { type: requestType, description };
       await repositoryProvider.api.post('/employee-requests/', requestData);
       if (Platform.OS === 'web') toast.success(t('common.success'), t('requests.success'));
       else Alert.alert(t('common.success'), t('requests.success'));
-
       setModalVisible(false);
       setDescription('');
       setRequestType('CONGE');
@@ -93,7 +78,6 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
 
   const handleAction = async (requestId: number, action: 'approve' | 'reject') => {
     const confirmMsg = action === 'approve' ? t('requests.confirmApprove') : t('requests.confirmReject');
-
     const executeAction = async () => {
       try {
         const endpoint = action === 'approve' ? 'approve' : 'reject';
@@ -106,117 +90,73 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
         else Alert.alert(t('common.error'), message);
       }
     };
-
-    // Web: utiliser window.confirm()
     if (typeof window !== 'undefined') {
-      if (window.confirm(confirmMsg)) {
-        await executeAction();
-      }
+      if (window.confirm(confirmMsg)) await executeAction();
       return;
     }
-
-    // Mobile: utiliser Alert.alert()
-    Alert.alert(
-      t('common.confirm'),
-      confirmMsg,
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: action === 'approve' ? t('requests.approve') : t('requests.reject'),
-          onPress: executeAction
-        }
-      ]
-    );
+    Alert.alert(t('common.confirm'), confirmMsg, [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: action === 'approve' ? t('requests.approve') : t('requests.reject'), onPress: executeAction },
+    ]);
   };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'APPROVED': return theme.colors.success;
+      case 'APPROVED': return '#2E7D32';
       case 'REJECTED': return theme.colors.danger;
-      case 'PENDING': return theme.colors.warning;
+      case 'PENDING': return '#F57C00';
       default: return theme.colors.textSecondary;
     }
   };
 
   const renderItem = ({ item }: { item: any }) => (
-    <View style={isDesktopOrTablet ? styles.tabletCardContainer : null}>
-    <Card style={styles.requestCard}>
-      <View style={styles.requestHeader}>
-        <View style={styles.typeContainer}>
-          <MaterialIcons
-            name={item.type === 'CONGE' ? 'beach-access' : item.type === 'MATERIEL' ? 'build' : 'info'}
-            size={20}
-            color={theme.colors.primary}
-          />
-          <Text style={styles.requestType}>{t(`requests.types.${item.type}`)}</Text>
+    <View style={numColumns > 1 ? { flex: 1 / numColumns } : undefined}>
+      <Card style={S.card}>
+        <View style={S.head}>
+          <View style={S.typeRow}>
+            <MaterialIcons name={item.type === 'CONGE' ? 'beach-access' : item.type === 'MATERIEL' ? 'build' : 'info'} size={19} color={theme.colors.primary} />
+            <Text style={[S.type, { color: theme.colors.text }]}>{t(`requests.types.${item.type}`)}</Text>
+          </View>
+          <Badge label={t(`requests.${item.status}`)} color={getStatusColor(item.status)} />
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
-          <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-            {t(`requests.${item.status}`)}
-          </Text>
-        </View>
-      </View>
 
-      <Text style={styles.description}>{item.description}</Text>
+        <Text style={[S.desc, { color: theme.colors.text }]}>{item.description}</Text>
 
-      <View style={styles.footer}>
-        <View style={styles.footerInfo}>
-          <MaterialIcons name="person" size={14} color={theme.colors.textSecondary} />
-          <Text style={styles.footerText}>{item.employee_name}</Text>
-        </View>
-        <View style={styles.footerInfo}>
-          <MaterialIcons name="event" size={14} color={theme.colors.textSecondary} />
-          <Text style={styles.footerText}>
+        <View style={[S.footer, { borderTopColor: theme.colors.border }]}>
+          <View style={S.fInfo}><MaterialIcons name="person" size={13} color={theme.colors.textSecondary} /><Text style={S.fText}>{item.employee_name}</Text></View>
+          <View style={S.fInfo}><MaterialIcons name="event" size={13} color={theme.colors.textSecondary} /><Text style={S.fText}>
             {new Date(item.created_at).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}
-          </Text>
+          </Text></View>
         </View>
-      </View>
 
-      {userRole !== 'EMPLOYE' && item.status === 'PENDING' && (
-        <View style={styles.actions}>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: theme.colors.success + '20' }]}
-            onPress={() => handleAction(item.id, 'approve')}
-          >
-            <MaterialIcons name="check" size={20} color={theme.colors.success} />
-            <Text style={[styles.actionText, { color: theme.colors.success }]}>{t('requests.approve')}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.actionButton, { backgroundColor: theme.colors.danger + '20' }]}
-            onPress={() => handleAction(item.id, 'reject')}
-          >
-            <MaterialIcons name="close" size={20} color={theme.colors.danger} />
-            <Text style={[styles.actionText, { color: theme.colors.danger }]}>{t('requests.reject')}</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-    </Card>
+        {userRole !== 'EMPLOYE' && item.status === 'PENDING' && (
+          <View style={[S.actions, { borderTopColor: theme.colors.border }]}>
+            <Pressable style={[S.actBtn, { backgroundColor: '#2E7D32' + '18' }]} onPress={() => handleAction(item.id, 'approve')}>
+              <MaterialIcons name="check" size={18} color="#2E7D32" />
+              <Text style={[S.actText, { color: '#2E7D32' }]}>{t('requests.approve')}</Text>
+            </Pressable>
+            <Pressable style={[S.actBtn, { backgroundColor: theme.colors.danger + '18' }]} onPress={() => handleAction(item.id, 'reject')}>
+              <MaterialIcons name="close" size={18} color={theme.colors.danger} />
+              <Text style={[S.actText, { color: theme.colors.danger }]}>{t('requests.reject')}</Text>
+            </Pressable>
+          </View>
+        )}
+      </Card>
     </View>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.headerTitleRow}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-          </TouchableOpacity>
-          <Text style={styles.title}>{userRole === 'EMPLOYE' ? t('requests.title') : t('requests.manageTitle')}</Text>
-        </View>
-        {userRole === 'EMPLOYE' && (
-          <TouchableOpacity
-            style={styles.addButton}
-            onPress={() => setModalVisible(true)}
-          >
-            <MaterialIcons name="add" size={24} color="#000000" />
-          </TouchableOpacity>
-        )}
-      </View>
-
+    <Screen
+      header={
+        <ScreenHeader
+          title={userRole === 'EMPLOYE' ? t('requests.title') : t('requests.manageTitle')}
+          onBack={() => navigation.goBack()}
+          actions={userRole === 'EMPLOYE' ? [{ icon: 'add', onPress: () => setModalVisible(true), tint: theme.colors.text }] : []}
+        />
+      }
+    >
       {loading && !refreshing ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <View style={S.center}><Text style={{ color: theme.colors.textSecondary }}>…</Text></View>
       ) : (
         <FlatList
           key={numColumns}
@@ -224,55 +164,28 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
           numColumns={numColumns}
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={[styles.list, isDesktopOrTablet && styles.listDesktop]}
-          columnWrapperStyle={isDesktopOrTablet ? styles.columnWrapper : null}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchRequests} colors={[theme.colors.primary]} />}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>{t('requests.noRequests')}</Text>
-            </View>
-          }
+          style={{ width: '100%' }}
+          contentContainerStyle={[contentW, { paddingTop: space.md, paddingBottom: space.xxl, gap: space.sm }]}
+          columnWrapperStyle={numColumns > 1 ? { gap: space.sm } : undefined}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={fetchRequests} colors={[theme.colors.primary]} tintColor={theme.colors.primary} />}
+          ListEmptyComponent={<EmptyState icon="inbox-outline" title={t('requests.noRequests')} />}
         />
       )}
 
-      {/* New Request Modal */}
-      <Modal
-        animationType="slide"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t('requests.newRequest')}</Text>
-              <TouchableOpacity onPress={() => setModalVisible(false)}>
-                <MaterialIcons name="close" size={24} color={theme.colors.text} />
-              </TouchableOpacity>
+      <Modal animationType="slide" transparent visible={modalVisible} onRequestClose={() => setModalVisible(false)}>
+        <View style={S.overlay}>
+          <View style={[S.modal, { backgroundColor: theme.colors.surface }]}>
+            <View style={[S.modalHead, { borderBottomColor: theme.colors.border }]}>
+              <Text style={[S.modalTitle, { color: theme.colors.text }]}>{t('requests.newRequest')}</Text>
+              <Pressable onPress={() => setModalVisible(false)} hitSlop={8}><MaterialIcons name="close" size={22} color={theme.colors.text} /></Pressable>
             </View>
-
-            <ScrollView contentContainerStyle={styles.modalBody}>
-              <Text style={styles.label}>{t('requests.type')}</Text>
-              <View style={styles.typeSelector}>
-                {REQUEST_TYPES.map(type => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.typeButton,
-                      requestType === type && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary }
-                    ]}
-                    onPress={() => setRequestType(type)}
-                  >
-                    <Text style={[
-                      styles.typeButtonText,
-                      requestType === type && { color: theme.colors.text, fontWeight: 'bold' }
-                    ]}>
-                      {t(`requests.types.${type}`)}
-                    </Text>
-                  </TouchableOpacity>
+            <ScrollView contentContainerStyle={{ padding: space.lg }}>
+              <Text style={[S.label, { color: theme.colors.text }]}>{t('requests.type')}</Text>
+              <View style={S.typeSelector}>
+                {REQUEST_TYPES.map((type) => (
+                  <Chip key={type} label={t(`requests.types.${type}`)} active={requestType === type} onPress={() => setRequestType(type)} />
                 ))}
               </View>
-
               <Input
                 label={t('requests.description')}
                 placeholder={t('requests.form.descPlaceholder')}
@@ -280,165 +193,35 @@ export const EmployeeRequestsScreen = ({ navigation }: any) => {
                 onChangeText={setDescription}
                 multiline
                 numberOfLines={4}
-                style={styles.textArea}
+                style={{ height: 120, textAlignVertical: 'top' }}
               />
-
-              <Button
-                title={t('common.save')}
-                onPress={handleSubmit}
-                loading={submitting}
-                style={styles.submitButton}
-              />
+              <Button title={t('common.save')} onPress={handleSubmit} loading={submitting} style={{ marginTop: space.lg, height: 54 }} />
             </ScrollView>
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    maxWidth: 1000,
-    alignSelf: 'center',
-    width: '100%'
-  },
-  headerTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    ...theme.shadows.light,
-  },
-  title: { fontSize: 20, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
-  addButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    ...theme.shadows.medium,
-  },
-  list: { padding: theme.spacing.m, maxWidth: 800, alignSelf: 'center', width: '100%' },
-  listDesktop: {
-    maxWidth: 1000,
-  },
-  columnWrapper: { gap: theme.spacing.m, justifyContent: 'flex-start' },
-  tabletCardContainer: { flex: 1 },
-  requestCard: {
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.xl,
-  },
-  requestHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  typeContainer: { flexDirection: 'row', alignItems: 'center' },
-  requestType: { fontSize: 16, fontWeight: '900', color: theme.colors.text, marginLeft: 8 },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusText: { fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
-  description: { fontSize: 14, color: theme.colors.text, marginBottom: 16, fontWeight: '500', lineHeight: 20 },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 12,
-    borderTopWidth: 0.8,
-    borderTopColor: theme.colors.border + '40',
-  },
-  footerInfo: { flexDirection: 'row', alignItems: 'center' },
-  footerText: { fontSize: 12, color: theme.colors.textSecondary, marginLeft: 4, fontWeight: '700' },
-  actions: {
-    flexDirection: 'row',
-    marginTop: 16,
-    borderTopWidth: 0.8,
-    borderTopColor: theme.colors.border + '40',
-    paddingTop: 12,
-    gap: 12,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-    gap: 4,
-  },
-  actionText: { fontWeight: '900', fontSize: 13 },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyContainer: { alignItems: 'center', marginTop: 50 },
-  emptyText: { fontSize: 16, color: theme.colors.textSecondary },
+const createStyles = (theme: any) => StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  card: { marginBottom: 0, borderRadius: radius.lg },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: space.sm },
+  typeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+  type: { fontSize: 15, fontWeight: '800' },
+  desc: { fontSize: 14, marginBottom: space.sm, fontWeight: '500', lineHeight: 20 },
+  footer: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: space.sm, borderTopWidth: StyleSheet.hairlineWidth },
+  fInfo: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  fText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '700' },
+  actions: { flexDirection: 'row', marginTop: space.sm, borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm, gap: space.sm },
+  actBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 8, borderRadius: radius.sm, gap: 4 },
+  actText: { fontWeight: '800', fontSize: 13 },
 
-  // Modal Styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContent: {
-    backgroundColor: theme.colors.surface,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    minHeight: '60%',
-    paddingBottom: 30,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 24,
-    borderBottomWidth: 0.8,
-    borderBottomColor: theme.colors.border,
-  },
-  modalTitle: { fontSize: 20, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
-  modalBody: { padding: 24 },
-  label: { fontSize: 14, fontWeight: '900', color: theme.colors.text, marginBottom: 8, textTransform: 'uppercase' },
-  typeSelector: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 20,
-  },
-  typeButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: theme.colors.background,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-  },
-  typeButtonText: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-    fontWeight: '600',
-  },
-  textArea: { height: 120, textAlignVertical: 'top' },
-  submitButton: { marginTop: 20, height: 56 },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modal: { borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, minHeight: '55%', maxHeight: '88%', paddingBottom: space.lg, alignSelf: 'center', width: '100%', maxWidth: 640 },
+  modalHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: space.lg, borderBottomWidth: StyleSheet.hairlineWidth },
+  modalTitle: { fontSize: 18, fontWeight: '900', textTransform: 'uppercase' },
+  label: { fontSize: 12, fontWeight: '900', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.4 },
+  typeSelector: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: space.lg },
 });

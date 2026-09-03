@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import { useColorScheme, Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme as defaultTheme } from '../theme';
+import { setNotificationsEnabled } from '../utils/notifications';
 
 export type ThemeMode = 'light' | 'dark' | 'auto';
 
@@ -73,7 +74,11 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
   const toggleNotifications = (val?: boolean) => {
     const newVal = val !== undefined ? val : !notifications;
     setNotifications(newVal);
-    AsyncStorage.setItem('notifications', String(newVal));
+    // Applique réellement le choix : (dé)planifie les notifications locales,
+    // (re)demande la permission OS. Persiste aussi la préférence.
+    setNotificationsEnabled(newVal).catch(() => {
+      AsyncStorage.setItem('notifications', String(newVal));
+    });
   };
 
   const isDarkMode = themeMode === 'auto'

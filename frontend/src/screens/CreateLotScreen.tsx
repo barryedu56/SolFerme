@@ -334,7 +334,7 @@ export const CreateLotScreen = ({ route, navigation }: any) => {
         </View>
 
         <ScrollView
-          contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
+          contentContainerStyle={[styles.scroll, styles.scrollDesktop]}
           keyboardShouldPersistTaps="handled"
         >
           {/* Farm context */}
@@ -657,6 +657,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'space-between',
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backBtn: {
     width: 40, height: 40, borderRadius: 20,
@@ -672,7 +675,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 60 },
   scrollDesktop: {
-    maxWidth: 800,
+    maxWidth: 760,
     width: '100%',
     alignSelf: 'center',
   },

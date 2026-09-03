@@ -3,23 +3,60 @@ import React, { useEffect } from 'react';
 import Toast from 'react-native-toast-message';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { ThemeProvider } from './src/context/ThemeContext';
-import { AuthProvider } from './src/context/AuthContext';
+import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LanguageProvider } from './src/context/LanguageContext';
 import { registerForPushNotificationsAsync } from './src/utils/notifications';
+import { registerDeviceForPush } from './src/utils/deviceRegistration';
 import { syncManager } from './src/utils/syncManager';
+
+/**
+ * Démarre la synchronisation Offline-First UNIQUEMENT pour les comptes métier
+ * (PROPRIETAIRE / EMPLOYE). Le SuperAdmin est ONLINE-ONLY : aucune initialisation
+ * SQLite métier, aucun pull des données des fermes, aucun watcher de sync.
+ */
+function SyncManagerBootstrap() {
+  const { userToken, isSuperAdmin, authChecked } = useAuth();
+
+  useEffect(() => {
+    // On attend la confirmation serveur du statut (authChecked) : sans elle, un
+    // SuperAdmin en cours d'authentification déclencherait la sync métier.
+    if (!authChecked) return;
+    if (!userToken || isSuperAdmin) return;
+
+    syncManager.initialize().catch(console.warn);
+    const unsubscribe = syncManager.watchNetworkAndSync();
+    return () => unsubscribe();
+  }, [userToken, isSuperAdmin, authChecked]);
+
+  return null;
+}
+
+/**
+ * Enregistre l'appareil pour les notifications push distantes dès qu'un compte
+ * MÉTIER est authentifié. Le SuperAdmin (online-only) n'a pas de push métier.
+ */
+function PushBootstrap() {
+  const { userToken, isSuperAdmin, authChecked } = useAuth();
+
+  useEffect(() => {
+    if (!authChecked || !userToken || isSuperAdmin) return;
+    registerDeviceForPush();
+  }, [userToken, isSuperAdmin, authChecked]);
+
+  return null;
+}
 
 export default function App() {
   useEffect(() => {
     registerForPushNotificationsAsync();
-    syncManager.initialize().catch(console.warn);
-    const unsubscribe = syncManager.watchNetworkAndSync();
-    return () => unsubscribe();
   }, []);
 
   return (
     <LanguageProvider>
       <ThemeProvider>
         <AuthProvider>
+          <SyncManagerBootstrap />
+          <PushBootstrap />
           <AppNavigator />
           <Toast />
         </AuthProvider>

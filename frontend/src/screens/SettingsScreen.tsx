@@ -1,21 +1,20 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Switch, TouchableOpacity, Alert, useWindowDimensions, Platform } from 'react-native';
+import { View, Text, StyleSheet, Switch, Pressable, Alert, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
 import { Card } from '../components/Card';
-import { MaterialIcons } from '@expo/vector-icons';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
-import { useBreakpoint } from '../hooks/useBreakpoint';
+import { Screen, ScreenHeader, space, radius } from '../components/ui';
 
 export const SettingsScreen = ({ navigation }: any) => {
   const { themeMode, setThemeMode, isDarkMode, notifications, toggleNotifications, theme } = useTheme();
   const { language, setLanguage, t } = useTranslation();
-  const { width } = useWindowDimensions();
-  const { isDesktop } = useBreakpoint();
-  const isTablet = width > 600;
-  const styles = React.useMemo(() => createStyles(theme, isTablet), [theme, isTablet]);
-  const [autoBackup, setAutoBackup] = useState(true);
+  const { userName, userRole } = useAuth();
+  const styles = React.useMemo(() => createStyles(theme, isDarkMode), [theme, isDarkMode]);
   const [cacheSize, setCacheSize] = useState('0 MB');
   const [lastSync, setLastSync] = useState('---');
 
@@ -37,7 +36,6 @@ export const SettingsScreen = ({ navigation }: any) => {
       if (info.exists && 'size' in info) {
         setCacheSize(`${(info.size / (1024 * 1024)).toFixed(2)} MB`);
       } else {
-        // Fallback or estimate if size not available directly on directory
         setCacheSize('~1.2 MB');
       }
     } catch (e) {
@@ -56,7 +54,6 @@ export const SettingsScreen = ({ navigation }: any) => {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Delete cache directory contents
               const cacheDir = FileSystem.cacheDirectory;
               if (cacheDir) {
                 const files = await FileSystem.readDirectoryAsync(cacheDir);
@@ -64,253 +61,156 @@ export const SettingsScreen = ({ navigation }: any) => {
                   await FileSystem.deleteAsync(cacheDir + file, { idempotent: true });
                 }
               }
-              // Clear some non-essential AsyncStorage
               await AsyncStorage.multiRemove(['farms_cache', 'lots_cache', 'productions_cache']);
-
               setCacheSize('0.0 MB');
               Alert.alert(t('common.success'), t('common.success'));
             } catch (e) {
               Alert.alert(t('common.error'), t('settings.clearCacheError') || 'Échec du nettoyage.');
             }
-          }
-        }
-      ]
+          },
+        },
+      ],
     );
   };
 
-  const SettingItem = ({ icon, title, subtitle, value, onValueChange, type = 'switch', onPress }: any) => (
-    <TouchableOpacity
-      style={styles.item}
-      onPress={onPress}
-      disabled={type === 'switch' || type === 'text'}
-    >
-      <View style={[styles.iconContainer, { backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background }]}>
-         <MaterialIcons name={icon} size={22} color={theme.colors.primary} />
-      </View>
-      <View style={styles.itemText}>
-        <Text style={[styles.itemTitle, { color: theme.colors.text }]}>{title}</Text>
-        {subtitle && <Text style={[styles.itemSubtitle, { color: theme.colors.textSecondary }]}>{subtitle}</Text>}
-      </View>
-      {type === 'switch' ? (
-        <Switch
-          value={value}
-          onValueChange={onValueChange}
-          trackColor={{ false: '#767577', true: theme.colors.primary }}
-          thumbColor={value ? '#FFFFFF' : '#f4f3f4'}
-        />
-      ) : type === 'text' ? (
-        <Text style={[styles.itemValue, { color: theme.colors.textSecondary }]}>{subtitle}</Text>
-      ) : (
-        <MaterialIcons name="chevron-right" size={24} color={theme.colors.border} />
-      )}
-    </TouchableOpacity>
+  /* ── Sélecteur segmenté (thème / langue) ── */
+  const Segmented = ({ options, value, onChange }: { options: { key: string; label: string; icon: any; lib?: 'm' | 'c' }[]; value: string; onChange: (k: string) => void }) => (
+    <View style={styles.segmented}>
+      {options.map((o) => {
+        const active = o.key === value;
+        return (
+          <Pressable key={o.key} onPress={() => onChange(o.key)} style={[styles.segBtn, active && { backgroundColor: theme.colors.primary }]}>
+            {o.lib === 'c'
+              ? <MaterialCommunityIcons name={o.icon} size={17} color={active ? '#1A1A1A' : theme.colors.textSecondary} />
+              : <MaterialIcons name={o.icon} size={17} color={active ? '#1A1A1A' : theme.colors.textSecondary} />}
+            <Text style={[styles.segTxt, { color: active ? '#1A1A1A' : theme.colors.textSecondary }, active && { fontWeight: '800' }]}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        {!isDesktop && Platform.OS !== 'web' && (
-          <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.menuButton}>
-            <MaterialIcons name="menu" size={24} color={theme.colors.text} />
-          </TouchableOpacity>
-        )}
-        <Text style={[styles.title, { color: theme.colors.text }]}>{t('settings.title')}</Text>
-        <View style={{ width: 40 }} />
+  const Row = ({ icon, title, subtitle, value, onValueChange, onPress, danger, right }: any) => (
+    <Pressable style={styles.row} onPress={onPress} disabled={!onPress}>
+      <View style={[styles.rowIcon, { backgroundColor: (danger ? theme.colors.danger : theme.colors.primary) + '16' }]}>
+        <MaterialIcons name={icon} size={19} color={danger ? theme.colors.danger : theme.colors.primary} />
       </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.rowTitle, { color: danger ? theme.colors.danger : theme.colors.text }]}>{title}</Text>
+        {subtitle ? <Text style={[styles.rowSub, { color: theme.colors.textSecondary }]} numberOfLines={1}>{subtitle}</Text> : null}
+      </View>
+      {onValueChange !== undefined ? (
+        <Switch value={value} onValueChange={onValueChange} trackColor={{ false: '#767577', true: theme.colors.primary }} thumbColor="#FFFFFF" />
+      ) : right !== undefined ? right : onPress ? (
+        <MaterialIcons name="chevron-right" size={20} color={theme.colors.border} />
+      ) : null}
+    </Pressable>
+  );
 
-      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionLabel}>{t('settings.appearance')}</Text>
-        <Card style={styles.card}>
-          <SettingItem
-            icon="light-mode"
-            title={t('settings.themeLight')}
-            type="link"
-            onPress={() => setThemeMode('light')}
-            subtitle={themeMode === 'light' ? t('common.selected') : ''}
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="dark-mode"
-            title={t('settings.themeDark')}
-            type="link"
-            onPress={() => setThemeMode('dark')}
-            subtitle={themeMode === 'dark' ? t('common.selected') : ''}
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="brightness-auto"
-            title={t('settings.themeAuto')}
-            type="link"
-            onPress={() => setThemeMode('auto')}
-            subtitle={themeMode === 'auto' ? t('common.selected') : ''}
-          />
-        </Card>
+  const Section = ({ icon, label, children }: any) => (
+    <>
+      <View style={styles.sectionHead}>
+        <MaterialCommunityIcons name={icon} size={14} color={theme.colors.primary} />
+        <Text style={styles.sectionLabel}>{label}</Text>
+      </View>
+      <Card style={styles.card}>{children}</Card>
+    </>
+  );
+  const Div = () => <View style={[styles.divider, { backgroundColor: theme.colors.border }]} />;
 
-        <Text style={styles.sectionLabel}>{t('settings.language')}</Text>
-        <Card style={styles.card}>
-          <SettingItem
-            icon="settings-suggest"
-            title={t('settings.langAuto')}
-            type="link"
-            onPress={() => setLanguage('auto')}
-            subtitle={language === 'auto' ? t('common.selected') : ''}
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="language"
-            title={t('settings.langFrench')}
-            type="link"
-            onPress={() => setLanguage('fr')}
-            subtitle={language === 'fr' ? t('common.selected') : ''}
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="language"
-            title={t('settings.langEnglish')}
-            type="link"
-            onPress={() => setLanguage('en')}
-            subtitle={language === 'en' ? t('common.selected') : ''}
-          />
-        </Card>
+  return (
+    <Screen
+      scroll
+      width="narrow"
+      header={<ScreenHeader title={t('settings.title')} large onMenu={Platform.OS !== 'web' ? () => navigation.openDrawer() : undefined} />}
+    >
+      {/* Carte identité */}
+      <Card style={styles.hero}>
+        <View style={[styles.heroAvatar, { backgroundColor: theme.colors.primary }]}>
+          <Text style={styles.heroAvatarTxt}>{(userName || 'U').charAt(0).toUpperCase()}</Text>
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.heroName, { color: theme.colors.text }]} numberOfLines={1}>{userName}</Text>
+          <Text style={styles.heroRole}>{userRole === 'EMPLOYE' ? t('profile.employee') : t('profile.owner')}</Text>
+        </View>
+        <Pressable style={[styles.heroBtn, { borderColor: theme.colors.border }]} onPress={() => navigation.navigate('Profile')}>
+          <Text style={[styles.heroBtnTxt, { color: theme.colors.primary }]}>{t('common.edit')}</Text>
+        </Pressable>
+      </Card>
 
-        <Text style={styles.sectionLabel}>{t('settings.security')}</Text>
-        <Card style={styles.card}>
-          <SettingItem
-            icon="lock"
-            title={t('profile.changePassword')}
-            type="link"
-            onPress={() => navigation.navigate('Profile', { showPasswordModal: true })}
+      <Section icon="palette-outline" label={t('settings.appearance')}>
+        <View style={{ padding: space.md, gap: space.sm }}>
+          <Text style={styles.pickerLabel}>{t('settings.appearance')}</Text>
+          <Segmented
+            value={themeMode}
+            onChange={setThemeMode as any}
+            options={[
+              { key: 'light', label: t('settings.themeLight'), icon: 'light-mode' },
+              { key: 'dark', label: t('settings.themeDark'), icon: 'dark-mode' },
+              { key: 'auto', label: t('settings.themeAuto'), icon: 'brightness-auto' },
+            ]}
           />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="notifications"
-            title={t('profile.notifications')}
-            value={notifications}
-            onValueChange={toggleNotifications}
+          <Text style={[styles.pickerLabel, { marginTop: space.xs }]}>{t('settings.language')}</Text>
+          <Segmented
+            value={language}
+            onChange={setLanguage as any}
+            options={[
+              { key: 'fr', label: 'Français', icon: 'flag-outline', lib: 'c' },
+              { key: 'en', label: 'English', icon: 'flag-outline', lib: 'c' },
+              { key: 'auto', label: t('settings.langAuto'), icon: 'auto-mode' },
+            ]}
           />
-        </Card>
+        </View>
+      </Section>
 
-        <Text style={styles.sectionLabel}>{t('settings.localStorage')}</Text>
-        <Card style={styles.card}>
-          <SettingItem
-            icon="storage"
-            title={t('settings.cacheSize')}
-            subtitle={cacheSize}
-            type="text"
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="sync"
-            title={t('settings.lastSync')}
-            subtitle={lastSync}
-            type="text"
-          />
-          <View style={styles.divider} />
-          <TouchableOpacity style={styles.clearBtn} onPress={handleClearCache}>
-            <MaterialIcons name="delete-sweep" size={20} color={theme.colors.danger} />
-            <Text style={styles.clearBtnText}>{t('settings.clearCache')}</Text>
-          </TouchableOpacity>
-        </Card>
+      <Section icon="shield-lock-outline" label={t('settings.security')}>
+        <Row icon="lock" title={t('profile.changePassword')} onPress={() => navigation.navigate('Profile', { showPasswordModal: true })} />
+        <Div />
+        <Row icon="notifications" title={t('profile.notifications')} value={notifications} onValueChange={toggleNotifications} />
+      </Section>
 
-        <Text style={styles.sectionLabel}>{t('common.info')}</Text>
-        <Card style={styles.card}>
-          <SettingItem
-            icon="info"
-            title={t('common.version')}
-            subtitle="v2.1.0-PRO"
-            type="text"
-          />
-          <View style={styles.divider} />
-          <SettingItem
-            icon="policy"
-            title={t('settings.legal')}
-            subtitle={t('settings.privacy')}
-            type="link"
-            onPress={() => Alert.alert(t('settings.legal'), t('settings.legalDesc'))}
-          />
-        </Card>
+      <Section icon="database-outline" label={t('settings.localStorage')}>
+        <Row icon="storage" title={t('settings.cacheSize')} right={<Text style={[styles.rowValue, { color: theme.colors.textSecondary }]}>{cacheSize}</Text>} />
+        <Div />
+        <Row icon="sync" title={t('settings.lastSync')} right={<Text style={[styles.rowValue, { color: theme.colors.textSecondary }]}>{lastSync}</Text>} />
+        <Div />
+        <Row icon="delete-sweep" title={t('settings.clearCache')} danger onPress={handleClearCache} />
+      </Section>
 
-        <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>SolFerme © 2024</Text>
-      </ScrollView>
-    </SafeAreaView>
+      <Section icon="information-outline" label={t('common.info')}>
+        <Row icon="verified" title={t('common.version')} right={<Text style={[styles.rowValue, { color: theme.colors.textSecondary }]}>v{Constants.expoConfig?.version || '2.1.0'}</Text>} />
+        <Div />
+        <Row icon="policy" title={t('settings.legal')} subtitle={t('settings.privacy')} onPress={() => Alert.alert(t('settings.legal'), t('settings.legalDesc'))} />
+      </Section>
+
+      <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>SolFerme © {new Date().getFullYear()}</Text>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isTablet: boolean) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    maxWidth: isTablet ? 800 : '100%',
-    alignSelf: isTablet ? 'center' : 'auto',
-    width: '100%'
-  },
-  menuButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...theme.shadows.light,
-  },
-  title: { fontSize: 22, fontWeight: 'bold', color: theme.colors.text },
-  scroll: {
-    padding: theme.spacing.m,
-    paddingBottom: 40,
-  },
-  scrollDesktop: {
-    maxWidth: 700,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.s,
-    marginLeft: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1.2
-  },
-  card: {
-    padding: 0,
-    marginBottom: theme.spacing.xl,
-    borderRadius: theme.borderRadius.xl,
-    overflow: 'hidden',
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: '#000000'
-  },
-  item: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-  },
-  iconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 15,
-  },
-  itemText: { flex: 1 },
-  itemTitle: { fontSize: 16, color: theme.colors.text, fontWeight: '600' },
-  itemSubtitle: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 1 },
-  itemValue: { fontSize: 14, color: theme.colors.textSecondary, fontWeight: '500' },
-  divider: { height: 1, backgroundColor: theme.colors.border + '30', marginLeft: 66 },
-  clearBtn: { flexDirection: 'row', alignItems: 'center', padding: theme.spacing.m, justifyContent: 'center' },
-  clearBtnText: { color: theme.colors.danger, fontWeight: 'bold', marginLeft: 8 },
-  footerText: {
-    textAlign: 'center',
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    marginTop: theme.spacing.m,
-    opacity: 0.6
-  }
-});
+const createStyles = (theme: any, isDarkMode: boolean) => StyleSheet.create({
+  hero: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.lg, borderRadius: radius.lg },
+  heroAvatar: { width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  heroAvatarTxt: { color: '#FFF', fontSize: 20, fontWeight: '800' },
+  heroName: { fontSize: 16, fontWeight: '800' },
+  heroRole: { fontSize: 12.5, color: theme.colors.primary, fontWeight: '600', marginTop: 2, textTransform: 'capitalize' },
+  heroBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.pill, borderWidth: 1 },
+  heroBtnTxt: { fontSize: 13, fontWeight: '800' },
 
+  sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: space.xs, marginLeft: 4 },
+  sectionLabel: { fontSize: 12, fontWeight: '800', color: theme.colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8 },
+  card: { padding: 0, marginBottom: space.lg, borderRadius: radius.lg, overflow: 'hidden' },
+
+  pickerLabel: { fontSize: 11, fontWeight: '800', color: theme.colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4 },
+  segmented: { flexDirection: 'row', backgroundColor: isDarkMode ? '#2C2C2C' : theme.colors.background, borderRadius: radius.md, padding: 4, gap: 4 },
+  segBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingVertical: 9, borderRadius: radius.sm },
+  segTxt: { fontSize: 12, fontWeight: '700' },
+
+  row: { flexDirection: 'row', alignItems: 'center', padding: space.md, gap: 13 },
+  rowIcon: { width: 36, height: 36, borderRadius: radius.sm, justifyContent: 'center', alignItems: 'center' },
+  rowTitle: { fontSize: 14.5, fontWeight: '600' },
+  rowSub: { fontSize: 12, marginTop: 1 },
+  rowValue: { fontSize: 13.5, fontWeight: '700' },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: 62, opacity: 0.5 },
+  footerText: { textAlign: 'center', fontSize: 12, marginTop: space.sm, opacity: 0.6 },
+});

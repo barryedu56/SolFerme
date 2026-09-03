@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { scheduleReminderNotification, cancelNotification } from './notifications';
+import { scheduleReminderNotification, cancelNotification, cancelAllNotifications, areNotificationsEnabled } from './notifications';
 
 /**
  * Synchronise les rappels récupérés de l'API avec les notifications locales.
@@ -7,6 +7,13 @@ import { scheduleReminderNotification, cancelNotification } from './notification
  */
 export async function syncReminders(reminders: any[]) {
   try {
+    // Interrupteur « Notifications » (Paramètres) : si coupé, on s'assure qu'aucune
+    // notification locale ne subsiste et on n'en planifie aucune.
+    if (!(await areNotificationsEnabled())) {
+      await cancelAllNotifications();
+      await AsyncStorage.setItem('scheduled_reminder_ids', JSON.stringify({}));
+      return;
+    }
     const scheduledIdsString = await AsyncStorage.getItem('scheduled_reminder_ids');
     let scheduledIds = scheduledIdsString ? JSON.parse(scheduledIdsString) : {};
 

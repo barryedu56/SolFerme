@@ -10,17 +10,23 @@ import Constants from 'expo-constants';
 let _configuredApiUrl: string | null = null;
 const DEFAULT_API_URL = 'http://192.168.1.141:8000/api';
 
-// Détection automatique selon la plateforme et l'environnement Expo
 const detectLocalUrl = (): string => {
-  // 1. En développement Expo, utiliser l'IP du poste de développement
+  // 1. Extra config from app.config.js (EXPO_PUBLIC_API_URL)
+  if (Constants.expoConfig?.extra?.apiUrl) {
+    return Constants.expoConfig.extra.apiUrl;
+  }
+
+  // 2. En développement Expo, utiliser l'IP du poste de développement
   const debuggerHost = Constants.expoConfig?.hostUri;
   if (debuggerHost) {
-    // hostUri ressemble à "192.168.1.103:8081" ou "10.0.2.2:8081"
     const ip = debuggerHost.split(':')[0];
     return `http://${ip}:8000/api`;
   }
 
-  // 2. Fallback selon la plateforme (émulateurs)
+  // 3. Fallback selon la plateforme
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    return `http://${window.location.hostname}:8000/api`;
+  }
   if (Platform.OS === 'android') {
     return 'http://10.0.2.2:8000/api';
   }
@@ -40,8 +46,13 @@ export const getApiUrl = async (): Promise<string> => {
   try {
     const stored = await AsyncStorage.getItem('api_base_url');
     if (stored) {
-      _configuredApiUrl = stored;
-      return stored;
+      // Auto-correction : Si le Web a gardé l'URL Android en cache, on l'ignore
+      if (Platform.OS === 'web' && stored.includes('10.0.2.2')) {
+        await AsyncStorage.removeItem('api_base_url');
+      } else {
+        _configuredApiUrl = stored;
+        return stored;
+      }
     }
   } catch {
     // AsyncStorage peut échouer, on continue
@@ -156,6 +167,7 @@ const processFailedQueue = (error: any, token: string | null) => {
 
 const normalizeStatusInPayload = (data: any): any => {
   if (data === null || data === undefined) return data;
+  if (data instanceof Blob || data instanceof ArrayBuffer) return data;
   if (Array.isArray(data)) return data.map(normalizeStatusInPayload);
   if (typeof data === 'object') {
     const out: any = {};

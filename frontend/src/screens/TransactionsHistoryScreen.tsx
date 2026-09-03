@@ -1,20 +1,20 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, ActivityIndicator, TouchableOpacity, Alert, Modal, ScrollView, Platform } from 'react-native';
-import { Card } from '../components/Card';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, Pressable, Alert, Modal, ScrollView, Platform } from 'react-native';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
-import { formatNumber, formatCurrency } from '../utils/formatters';
+import { formatCurrency } from '../utils/formatters';
 import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
 import { SalePaymentsModal } from '../components/SalePaymentsModal';
-
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { Screen, ScreenHeader, useContentWidth, Card, Chip, Badge, EmptyState, space, radius } from '../components/ui';
 
 export const TransactionsHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const { isDesktop, isTablet } = useBreakpoint();
+  const { isDesktop } = useBreakpoint();
+  const contentW = useContentWidth('wide');
   const [loading, setLoading] = useState(true);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<any>(null);
@@ -381,17 +381,11 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
   const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('finance.historyTitle')}</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
+    <Screen
+      header={<ScreenHeader title={t('finance.historyTitle')} onBack={() => navigation.goBack()} />}
+    >
       <View style={styles.filterContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={styles.filterScroll}>
           {[
             { label: t('common.all'), value: 'all' },
             { label: t('common.day'), value: 'day' },
@@ -399,39 +393,20 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
             { label: t('common.month'), value: 'month' },
             { label: t('common.year'), value: 'year' },
           ].map((period) => (
-            <TouchableOpacity
-              key={period.value}
-              style={[styles.filterChip, filterPeriod === period.value && styles.activeChip]}
-              onPress={() => setFilterPeriod(period.value as any)}
-            >
-              <Text style={[styles.filterChipText, filterPeriod === period.value && styles.activeChipText]}>{period.label}</Text>
-            </TouchableOpacity>
+            <Chip key={period.value} label={period.label} active={filterPeriod === period.value} onPress={() => setFilterPeriod(period.value as any)} />
           ))}
         </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filterScroll, { marginTop: 8 }]}>
-          {farms.map((f: any) => (
-            <TouchableOpacity
-              key={`farm-${f.id}`}
-              style={[styles.filterChip, selectedFarm === f.id && styles.activeChip]}
-              onPress={() => {
-                setSelectedFarm(selectedFarm === f.id ? null : f.id);
-                setSelectedLot(null);
-              }}
-            >
-              <Text style={[styles.filterChipText, selectedFarm === f.id && styles.activeChipText]}>{f.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        {farms.length > 0 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={[styles.filterScroll, { marginTop: 8 }]}>
+            {farms.map((f: any) => (
+              <Chip key={`farm-${f.id}`} label={f.name} active={selectedFarm === f.id} onPress={() => { setSelectedFarm(selectedFarm === f.id ? null : f.id); setSelectedLot(null); }} />
+            ))}
+          </ScrollView>
+        )}
         {selectedFarm && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filterScroll, { marginTop: 8 }]}>
-            {lots.filter(l => l.farm === selectedFarm).map((l: any) => (
-              <TouchableOpacity
-                key={`lot-${l.id}`}
-                style={[styles.filterChip, selectedLot === l.id && styles.activeChip]}
-                onPress={() => setSelectedLot(selectedLot === l.id ? null : l.id)}
-              >
-                <Text style={[styles.filterChipText, selectedLot === l.id && styles.activeChipText]}>{l.name}</Text>
-              </TouchableOpacity>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexGrow: 0, flexShrink: 0 }} contentContainerStyle={[styles.filterScroll, { marginTop: 8 }]}>
+            {lots.filter((l) => l.farm === selectedFarm).map((l: any) => (
+              <Chip key={`lot-${l.id}`} label={l.name} active={selectedLot === l.id} onPress={() => setSelectedLot(selectedLot === l.id ? null : l.id)} />
             ))}
           </ScrollView>
         )}
@@ -441,7 +416,7 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
         <View style={styles.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
         isDesktop ? (
-          <ScrollView contentContainerStyle={styles.list}>
+          <ScrollView style={{ width: '100%' }} contentContainerStyle={[styles.list, contentW]}>
             <View style={styles.tableContainer}>
               <View style={styles.tableHeader}>
                 <Text style={[styles.tableHeaderCell, { width: 40 }]}>#</Text>
@@ -500,9 +475,11 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
           <FlatList
             data={filteredTransactions}
             keyExtractor={(item) => item.id}
-            contentContainerStyle={styles.list}
+            style={{ width: '100%' }}
+            contentContainerStyle={[styles.list, contentW]}
             refreshing={loading}
             onRefresh={fetchTransactions}
+            ListEmptyComponent={<EmptyState icon="receipt-text-outline" title={t('common.noData')} />}
             renderItem={({ item }) => (
               <TouchableOpacity onPress={() => showDetails(item)}>
                 <Card style={[styles.transactionCard, item.status === 'ANNULEE' && { opacity: 0.6, backgroundColor: theme.colors.background }]}>
@@ -589,7 +566,7 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
           onPaymentAdded={() => fetchTransactions()}
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 };
 

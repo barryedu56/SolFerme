@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { BrandLogo } from '../components/BrandLogo';
 import { useTheme } from '../context/ThemeContext';
 import { repositoryProvider } from '../repositories';
 import { useAuth } from '../context/AuthContext';
@@ -96,18 +97,7 @@ export const LoginScreen = ({ navigation }: any) => {
 
             {/* ── HEADER / LOGO ── */}
             <View style={styles.header}>
-              <TouchableOpacity
-                onPress={() => navigation.navigate('Welcome')}
-                style={styles.backButton}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-              </TouchableOpacity>
-              <View style={styles.logoOuter}>
-                <View style={[styles.logoInner, { backgroundColor: theme.colors.primary }]}>
-                  <MaterialCommunityIcons name="egg" size={46} color="#000000" />
-                </View>
-              </View>
+              <BrandLogo size={84} shape="squircle" style={styles.logoMark} />
               <Text style={styles.brandName}>SolFerme</Text>
               <Text style={styles.subtitle}>
                 {t('auth.subtitle', { defaultValue: 'Connectez-vous à votre exploitation' })}
@@ -246,6 +236,19 @@ export const LoginScreen = ({ navigation }: any) => {
               </View>
             </View>
 
+            {/* Retour à l'accueil — même schéma que les liens de bas de page
+                de Register/ForgotPassword (aucun bouton de retour en haut). */}
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Welcome')}
+              style={styles.homeLink}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <MaterialIcons name="storefront" size={15} color={theme.colors.textSecondary} />
+              <Text style={[styles.homeLinkText, { color: theme.colors.textSecondary }]}>
+                {t('auth.backToHome', { defaultValue: "Retour à l'accueil" })}
+              </Text>
+            </TouchableOpacity>
+
             {/* Mention basse */}
             <Text style={[styles.mention, { color: theme.colors.textSecondary }]}>
               🌾 Gestion avicole & ferme intelligente
@@ -290,32 +293,14 @@ const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet:
     alignItems: 'center',
     marginBottom: theme.spacing.xl,
   },
-  backButton: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    padding: 8,
-  },
-  logoOuter: {
-    width: 104,
-    height: 104,
-    borderRadius: 52,
-    backgroundColor: `${theme.colors.primary}33`, // ~20% opacity
-    justifyContent: 'center',
-    alignItems: 'center',
+  logoMark: {
     marginBottom: theme.spacing.m,
-  },
-  logoInner: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderRadius: 22,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.18,
-    shadowRadius: 8,
-    elevation: 6,
+    shadowOpacity: 0.14,
+    shadowRadius: 10,
+    elevation: 5,
   },
   brandName: {
     fontSize: 34,
@@ -464,11 +449,24 @@ const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet:
     fontWeight: '600',
   },
 
+  // ── Retour à l'accueil ──
+  homeLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: theme.spacing.l,
+  },
+  homeLinkText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+  },
+
   // ── Mention ──
   mention: {
     textAlign: 'center',
     fontSize: 12,
-    marginTop: theme.spacing.xl,
+    marginTop: theme.spacing.m,
     opacity: 0.7,
   },
 });

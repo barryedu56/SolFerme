@@ -7,6 +7,7 @@ import { Card } from '../components/Card';
 import { formatCurrency } from '../utils/formatters';
 import { getProfileImageUrl } from '../utils/media';
 import * as ImagePicker from 'expo-image-picker';
+import { appendImageToFormData, MULTIPART_HEADERS } from '../utils/imageUpload';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { useBreakpoint } from '../hooks/useBreakpoint';
@@ -116,27 +117,18 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
     });
 
     if (!result.canceled) {
-      handleUploadImage(result.assets[0].uri);
+      handleUploadImage(result.assets[0]);
     }
   };
 
-  const handleUploadImage = async (uri: string) => {
+  const handleUploadImage = async (asset: ImagePicker.ImagePickerAsset) => {
     try {
       setUpdatingPhoto(true);
       const formData = new FormData();
-      const filename = uri.split('/').pop();
-      const match = /\.(\w+)$/.exec(filename || '');
-      const type = match ? `image/${match[1]}` : `image`;
-
-      // @ts-ignore
-      formData.append('profile_image', {
-        uri: uri,
-        name: filename || 'profile.jpg',
-        type: type,
-      });
+      appendImageToFormData(formData, asset, 'profile_image');
 
       await repositoryProvider.api.patch(`/users/${employee.user}/`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: MULTIPART_HEADERS,
       });
 
       await fetchData();
@@ -313,7 +305,7 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
         ))}
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
+      <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]}>
         {activeTab === 'info' && (
           <>
             <View style={styles.profileHeader}>
@@ -859,6 +851,9 @@ const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.crea
     justifyContent: 'space-between',
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
   },
   backBtn: {
     width: 40,
@@ -888,107 +883,125 @@ const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.crea
   profileHeader: {
     alignItems: 'center',
     marginBottom: theme.spacing.l,
+    paddingTop: theme.spacing.s,
   },
   avatarContainer: {
     position: 'relative',
     marginBottom: theme.spacing.m,
   },
   avatarLarge: {
-    width: 110,
-    height: 110,
-    borderRadius: 55,
-    backgroundColor: theme.colors.surface,
+    width: 104,
+    height: 104,
+    borderRadius: 30,
+    backgroundColor: theme.colors.primary + '18',
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 3,
+    borderColor: theme.colors.surface,
     ...theme.shadows.medium,
-    borderWidth: 0.8,
-    borderColor: theme.colors.primary,
   },
   cameraBadge: {
     position: 'absolute',
-    bottom: 0,
-    right: 5,
-    backgroundColor: '#333',
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    bottom: -4,
+    right: -4,
+    backgroundColor: theme.colors.primary,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 0.8,
+    borderWidth: 3,
     borderColor: theme.colors.background,
-    zIndex: 10
+    zIndex: 10,
   },
   avatarLoadingOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.3)',
+    borderRadius: 27,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarTextLarge: { fontSize: 44, fontWeight: 'bold', color: theme.colors.primary },
-  name: { fontSize: 24, fontWeight: 'bold', color: theme.colors.text },
-  position: { fontSize: 16, color: theme.colors.textSecondary, marginTop: 4 },
+  avatarTextLarge: { fontSize: 40, fontWeight: '800', color: theme.colors.primary },
+  name: { fontSize: 22, fontWeight: '800', color: theme.colors.text, letterSpacing: 0.2 },
+  position: { fontSize: 14.5, color: theme.colors.textSecondary, marginTop: 3, fontWeight: '600' },
   statusBadge: {
     paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
+    paddingVertical: 5,
+    borderRadius: 999,
     marginTop: 12,
   },
-  statusText: { fontSize: 12, fontWeight: 'bold' },
+  statusText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.3 },
   quickActions: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
     marginBottom: theme.spacing.l,
   },
   actionCircle: {
     alignItems: 'center',
+    gap: 7,
     backgroundColor: theme.colors.surface,
-    padding: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
     borderRadius: 16,
-    width: 90,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
+    width: 96,
     ...theme.shadows.light,
   },
-  actionLabel: { fontSize: 12, marginTop: 8, fontWeight: '600', color: theme.colors.text },
+  actionLabel: { fontSize: 11.5, fontWeight: '700', color: theme.colors.text, textAlign: 'center' },
   infoCard: {
-    padding: theme.spacing.m,
+    padding: theme.spacing.l,
     borderRadius: theme.borderRadius.xl,
     marginBottom: theme.spacing.m,
   },
-  cardTitle: { fontSize: 16, fontWeight: 'bold', color: theme.colors.text, marginBottom: theme.spacing.m },
+  cardTitle: { fontSize: 13, fontWeight: '800', color: theme.colors.textSecondary, marginBottom: theme.spacing.m, textTransform: 'uppercase', letterSpacing: 0.6 },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: theme.spacing.m,
+    gap: 14,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
   },
   infoTextContainer: {
-    marginLeft: theme.spacing.m,
+    flex: 1,
+    minWidth: 0,
   },
-  infoLabel: { fontSize: 12, color: theme.colors.textSecondary },
-  infoValue: { fontSize: 15, fontWeight: '600', color: theme.colors.text },
+  infoLabel: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 },
+  infoValue: { fontSize: 14.5, fontWeight: '700', color: theme.colors.text, marginTop: 2 },
   tabs: {
     flexDirection: 'row',
     backgroundColor: theme.colors.surface,
-    paddingVertical: 12,
-    borderBottomWidth: 0.8,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
+    maxWidth: 1000,
+    width: '100%',
+    alignSelf: 'center',
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 3,
+    paddingVertical: 8,
+    borderRadius: 12,
   },
   activeTab: {
-    borderBottomWidth: 1.2,
-    borderBottomColor: theme.colors.primary,
+    backgroundColor: theme.colors.primary + '18',
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 9.5,
     color: theme.colors.textSecondary,
-    marginTop: 4,
-    fontWeight: '600',
+    fontWeight: '700',
+    textAlign: 'center',
   },
   activeTabLabel: {
     color: theme.colors.primary,
-    fontWeight: 'bold',
+    fontWeight: '800',
   },
   historyItem: {
     flexDirection: 'row',

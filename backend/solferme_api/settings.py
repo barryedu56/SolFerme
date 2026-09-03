@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import os
+import sys
 from pathlib import Path
 import pymysql
 from datetime import timedelta
@@ -27,13 +28,17 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-)=#!3(xo@k3nbi!khtuz*r_^c)ssl7pmkp$77u$naqnsb*m8e&')
-
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',')
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY and DEBUG:
+    SECRET_KEY = 'django-insecure-)=#!3(xo@k3nbi!khtuz*r_^c)ssl7pmkp$77u$naqnsb*m8e&'
+elif not SECRET_KEY:
+    raise ValueError("DJANGO_SECRET_KEY environment variable must be set in production.")
+
+ALLOWED_HOSTS = [host for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '*' if DEBUG else '').split(',') if host]
 
 
 # Application definition
@@ -166,7 +171,41 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    # Limitation de débit anti-brute-force sur les endpoints de connexion
+    # (appliquée par vue via ScopedRateThrottle — voir CustomTokenObtainPairView
+    # et AdminTokenObtainPairView). Réponse générique HTTP 429, ne révèle rien.
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '10/min',
+        'admin_login': '5/min',
+        'register': '5/hour',
+        'password_reset': '5/hour',
+        'password_reset_confirm': '10/hour',
+        'contact': '5/hour',
+    },
 }
+
+if 'test' in sys.argv:
+    # Pas de limitation de débit pendant la suite de tests (déterminisme).
+    REST_FRAMEWORK['DEFAULT_THROTTLE_RATES'] = {
+        k: None for k in REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']
+    }
+
+# ── Email (réinitialisation de mot de passe) ────────────────────────────────
+# Dev : les emails sont affichés dans la console. Prod : configurez le SMTP via
+# les variables d'environnement EMAIL_HOST / EMAIL_HOST_USER / EMAIL_HOST_PASSWORD.
+if os.environ.get('EMAIL_HOST'):
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST = os.environ.get('EMAIL_HOST')
+    EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+    EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+    EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+    EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'True') == 'True'
+    EMAIL_USE_SSL = os.environ.get('EMAIL_USE_SSL', 'False') == 'True'
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'SolFerme <no-reply@solferme.com>')
+CONTACT_INBOX = os.environ.get('CONTACT_INBOX', 'support@solferme.com')
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
@@ -176,9 +215,8 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-CORS_ALLOWED_ORIGINS = os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081').split(',')
-if os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True':
-    CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOWED_ORIGINS = [origin for origin in os.environ.get('CORS_ALLOWED_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081').split(',') if origin]
+CORS_ALLOW_ALL_ORIGINS = os.environ.get('CORS_ALLOW_ALL_ORIGINS', 'True' if DEBUG else 'False') == 'True'
 
 # Production Security Headers
 if not DEBUG:

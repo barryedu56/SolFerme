@@ -13,6 +13,7 @@ import {
   insertRow,
   insertOrReplaceRow,
   queryAll,
+  runInTransaction,
   runSqlAsync,
   updateRow,
   updateSyncQueueItem,
@@ -641,27 +642,32 @@ const validateEggStockIntegrity = async (data?: any, existingRecord?: any): Prom
   // Exclure l'enregistrement en cours d'édition (si UPDATE)
   const excludeId = existingRecord?.id;
 
-  // Construire la timeline chronologique
+  // Construire la timeline chronologique.
+  // 🔧 FINDING 8 — toute date est normalisée en chaîne (`String(x || '')`) : une
+  // ligne locale sans `date`/`conversion_date` faisait planter `a.date.localeCompare`
+  // (TypeError), erreur relancée comme bloquante → écriture offline refusée avec un
+  // message obscur (lui-même masqué en « Impossible de contacter le serveur »).
   const timeline: Array<{ date: string; type: string; qty: number }> = [];
+  const asDate = (v: any): string => String(v ?? '');
 
   for (const p of productions) {
     if (excludeId !== undefined && p.id === excludeId) continue;
     const qty = productType === 'NORMAL'
       ? Number(p.casiers_vendables || 0)
       : Number(p.oeufs_casses || 0) / 30.0;
-    timeline.push({ date: p.date, type: 'PROD', qty });
+    timeline.push({ date: asDate(p.date), type: 'PROD', qty });
   }
 
   for (const c of conversions) {
     if (excludeId !== undefined && c.id === excludeId) continue;
     if (productType === 'NORMAL') {
-      timeline.push({ date: c.conversion_date || c.date, type: 'CONV', qty: Number(c.quantity || 0) });
+      timeline.push({ date: asDate(c.conversion_date || c.date), type: 'CONV', qty: Number(c.quantity || 0) });
     }
   }
 
   for (const s of sales) {
     if (excludeId !== undefined && s.id === excludeId) continue;
-    timeline.push({ date: s.date, type: 'SALE', qty: Number(s.quantity || 0) });
+    timeline.push({ date: asDate(s.date), type: 'SALE', qty: Number(s.quantity || 0) });
   }
 
   // Ajouter l'opération en cours (mock)
@@ -669,9 +675,9 @@ const validateEggStockIntegrity = async (data?: any, existingRecord?: any): Prom
     const qty = productType === 'NORMAL'
       ? Number(data.casiers_vendables || 0)
       : Number(data.oeufs_casses || 0) / 30.0;
-    timeline.push({ date: data.date, type: 'PROD', qty });
+    timeline.push({ date: asDate(data.date), type: 'PROD', qty });
   } else if (isSale) {
-    timeline.push({ date: data.date, type: 'SALE', qty: Number(data.quantity || 0) });
+    timeline.push({ date: asDate(data.date), type: 'SALE', qty: Number(data.quantity || 0) });
   }
 
   // Trier chronologiquement (PROD avant CONV avant SALE pour une même date)
@@ -1026,7 +1032,7 @@ export const CANCELLABLE_TABLES = new Set([
 // --- Handler principal d'écriture offline ---
 
 // Mapping table → module et action pour les logs d'activité
-const TABLE_MODULE_MAP: Record<string, string> = {
+export const TABLE_MODULE_MAP: Record<string, string> = {
   productions: 'Production',
   sales: 'Vente',
   feeds: 'Alimentation',
@@ -1467,6 +1473,55 @@ const recalculateSalePaymentStatusLocally = async (saleId: number): Promise<void
 };
 
 /**
+ * 🔧 Répare les ventes créées hors-ligne (id < 0, pas encore synchronisées) qui
+ * ont un `amount_paid > 0` mais aucun SalePayment ACTIF — situation laissée par
+ * un ancien bug où l'INSERT du paiement initial échouait (farm_id NOT NULL) après
+ * l'insertion de la vente. Sans ce paiement, l'historique des paiements affiche
+ * « Total payé : 0 » et la créance est fausse. On recrée le paiement INITIAL
+ * manquant (le backend en créera un identique au moment de la synchro → dédupliqué
+ * au pull). Idempotent : ne touche jamais une vente déjà synchronisée (id > 0).
+ */
+export const reconcileMissingInitialSalePayments = async (): Promise<void> => {
+  try {
+    const brokenSales = await queryAll<any>(
+      `SELECT * FROM sales
+        WHERE id < 0 AND status != 'ANNULEE' AND COALESCE(amount_paid, 0) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM sale_payments p WHERE p.sale_id = sales.id AND p.status = 'ACTIF'
+          )`,
+      []
+    );
+    if (brokenSales.length === 0) return;
+    for (const sale of brokenSales) {
+      const lotId = sale.lot_id || sale.lot;
+      if (!lotId) continue;
+      const lot = await fetchRow<any>('lots', 'id = ?', [lotId]).catch(() => null);
+      const farmId = lot?.farm_id;
+      if (!farmId) continue; // impossible de satisfaire farm_id NOT NULL
+      const now = new Date().toISOString();
+      await insertRow('sale_payments', {
+        id: await getNextOfflineId(),
+        sale_id: sale.id,
+        farm_id: farmId,
+        lot_id: lotId,
+        amount: Number(sale.amount_paid) || 0,
+        payment_method: 'CASH',
+        payment_date: sale.date || now.split('T')[0],
+        reference: 'INITIAL',
+        note: 'Paiement initial (réconciliation)',
+        status: 'ACTIF',
+        created_at: now,
+        updated_at: now,
+        _needs_sync: 0,
+      });
+      console.info(`[Offline] Réconciliation : paiement INITIAL recréé pour vente locale #${sale.id}`);
+    }
+  } catch (e: any) {
+    console.warn('[Offline] reconcileMissingInitialSalePayments:', e?.message || e);
+  }
+};
+
+/**
  * 🔧 Synchronise une dépense locale (expense) lors de la création/modification/annulation
  * d'un achat, d'une paie ou d'une prime. Miroir exact des signaux Django.
  */
@@ -1635,7 +1690,17 @@ const createActivityLogLocally = async (
   }
 };
 
+/**
+ * Point d'entrée des écritures offline. Tout le travail (validation, INSERT
+ * principal, paiement initial, miroirs de signaux, log, mise en file de sync)
+ * s'exécute dans UNE transaction SQLite : en cas d'échec à n'importe quelle
+ * étape, tout est annulé (plus de vente/mouvement à moitié écrit).
+ */
 export const handleOfflineWrite = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any): Promise<T> => {
+  return runInTransaction(() => handleOfflineWriteInner<T>(method, endpoint, data));
+};
+
+const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', endpoint: string, data?: any): Promise<T> => {
   const parsed = parseEndpoint(endpoint);
   const { tableName, id, action } = parsed;
   if (!tableName) {
@@ -1764,6 +1829,32 @@ export const handleOfflineWrite = async <T>(method: 'POST' | 'PUT' | 'PATCH' | '
       row = mapForeignKeyFields(new Set(columns.map(c => c.name)), row);
     } catch { /* si la table n'existe pas encore, on insère quand même */ }
 
+    // 🔧 Résolution des FK NOT NULL absentes du payload (farm_id / lot_id).
+    // Plusieurs serializers backend dérivent `farm`/`lot` côté serveur :
+    //   • EggConversionSerializer.validate → farm = lot.farm  (Production n'a pas de `farm`)
+    //   • SalePaymentSerializer            → lot/farm dérivés de la vente
+    // Le formulaire ne les envoie donc pas. Sans ce miroir, l'INSERT SQLite viole
+    // `farm_id NOT NULL` (« Error finalizing statement ») → opération perdue hors-ligne,
+    // et pour une vente à crédit : créance faussée (paiement initial jamais créé).
+    if (tableName === 'egg_conversions' || tableName === 'sale_payments') {
+      let resolvedLotId = (row as any).lot_id || (row as any).lot;
+      if (!resolvedLotId && (row as any).sale_id) {
+        try {
+          const parentSale = await fetchRow<any>('sales', 'id = ?', [(row as any).sale_id]);
+          if (parentSale?.lot_id) resolvedLotId = parentSale.lot_id;
+        } catch { /* best-effort */ }
+      }
+      if (resolvedLotId && (!(row as any).farm_id || !(row as any).lot_id)) {
+        try {
+          const parentLot = await fetchRow<any>('lots', 'id = ?', [resolvedLotId]);
+          if (parentLot) {
+            if (!(row as any).lot_id) (row as any).lot_id = parentLot.id;
+            if (!(row as any).farm_id && parentLot.farm_id) (row as any).farm_id = parentLot.farm_id;
+          }
+        } catch { /* best-effort : l'INSERT lèvera une erreur claire si farm_id manque */ }
+      }
+    }
+
     // 🔧 Remplir employee_id / farm_id / employee_name / farm_name d'une demande
     // d'employé créée hors-ligne — miroir de EmployeeRequestViewSet.perform_create qui,
     // côté serveur, remplit employee=employee_profile et farm=employee.farm depuis
@@ -1849,11 +1940,24 @@ export const handleOfflineWrite = async <T>(method: 'POST' | 'PUT' | 'PATCH' | '
       const initialAmountPaid = parseFloat((row as any)?.amount_paid || '0');
       if (initialAmountPaid > 0) {
         const paymentLocalId = await getNextOfflineId();
+        // 🔧 sale_payments.farm_id / lot_id sont NOT NULL. Ni la vente (modèle Django
+        // Sale n'a que `lot`) ni le formulaire n'envoient `farm` → sans résolution
+        // depuis le lot, l'INSERT échouait (« Error finalizing statement ») et la
+        // vente restait à moitié écrite (ligne + stock OK, paiement + log KO →
+        // créance faussée, aucun historique côté Détail du lot).
+        let saleLotId = (row as any)?.lot_id || (row as any)?.lot;
+        let saleFarmId = (row as any)?.farm_id || (row as any)?.farm;
+        if (saleLotId && !saleFarmId) {
+          try {
+            const parentLot = await fetchRow<any>('lots', 'id = ?', [saleLotId]);
+            if (parentLot?.farm_id) saleFarmId = parentLot.farm_id;
+          } catch { /* best-effort */ }
+        }
         const paymentRow = {
           id: paymentLocalId,
           sale_id: localId,
-          farm_id: (row as any)?.farm_id || (row as any)?.farm,
-          lot_id: (row as any)?.lot_id || (row as any)?.lot,
+          farm_id: saleFarmId,
+          lot_id: saleLotId,
           amount: initialAmountPaid,
           payment_method: 'CASH',
           payment_date: (row as any)?.date || now.split('T')[0],
@@ -1865,6 +1969,9 @@ export const handleOfflineWrite = async <T>(method: 'POST' | 'PUT' | 'PATCH' | '
           _needs_sync: 0 // Pas besoin d'enfiler ce SalePayment, le backend va le créer tout seul grâce au amount_paid de la vente !
         };
         await insertRow('sale_payments', paymentRow);
+        // Recaler amount_paid + payment_status de la vente sur la somme réelle des
+        // paiements ACTIFS (miroir du signal Django SalePayment.post_save).
+        await recalculateSalePaymentStatusLocally(localId);
       }
     }
 

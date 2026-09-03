@@ -1,9 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Alert, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  KeyboardAvoidingView, Platform, Keyboard,
+} from 'react-native';
+import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
 import { toast } from '../utils/toast';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
+import { BrandLogo } from '../components/BrandLogo';
+import { PasswordStrengthBar, isPasswordStrong } from '../components/PasswordStrengthBar';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { repositoryProvider } from '../repositories';
@@ -12,6 +17,10 @@ import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const RegisterScreen = ({ navigation }: any) => {
   const { t } = useTranslation();
+  const { theme } = useTheme();
+  const { isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktopOrTablet), [theme, isDesktopOrTablet]);
+
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -19,127 +28,106 @@ export const RegisterScreen = ({ navigation }: any) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const { theme } = useTheme();
-  const { isDesktop, isDesktopOrTablet } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop, isDesktopOrTablet), [theme, isDesktop, isDesktopOrTablet]);
+
+  const clearError = (k: string) => setErrors((e) => (e[k] ? { ...e, [k]: '' } : e));
 
   const validate = () => {
-    const newErrors: Record<string, string> = {};
-    if (!name) newErrors.name = t('auth.fillRequired');
-    if (!email) {
-      newErrors.email = t('auth.fillRequired');
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      newErrors.email = t('auth.invalidEmail');
-    }
-
-    if (!password) {
-      newErrors.password = t('auth.fillRequired');
-    } else {
-      // Aligné avec la validation backend (serializers.py:187-198) : 8+ caractères, majuscule, minuscule, chiffre, caractère spécial
-      const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
-      if (!passwordRegex.test(password)) {
-        newErrors.password = t('auth.passwordComplexity');
-      }
-    }
-
-    if (password !== confirmPassword) {
-      newErrors.confirmPassword = t('auth.passwordMismatch');
-    }
-
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const e: Record<string, string> = {};
+    if (!name.trim()) e.name = t('auth.fillRequired');
+    if (!email.trim()) e.email = t('auth.fillRequired');
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) e.email = t('auth.invalidEmail');
+    if (!password) e.password = t('auth.fillRequired');
+    else if (!isPasswordStrong(password)) e.password = t('auth.passwordComplexity');
+    if (password !== confirmPassword) e.confirmPassword = t('auth.passwordMismatch');
+    setErrors(e);
+    return Object.keys(e).length === 0;
   };
 
   const handleRegister = async () => {
+    Keyboard.dismiss();
     if (!validate()) return;
-
     setLoading(true);
     try {
       await repositoryProvider.api.post('/users/', {
-        name,
-        email,
-        phone,
-        password,
-        role: 'PROPRIETAIRE'
+        name: name.trim(), email: email.trim(), phone: phone.trim() || undefined,
+        password, role: 'PROPRIETAIRE',
       });
       toast.success(t('common.success'), t('auth.registerSuccess'));
       navigation.navigate('Login');
     } catch (error: any) {
-      const errorMessage = getErrorMessage(error, t('auth.registerError'));
-      if (errorMessage.includes('email')) {
-        setErrors({ email: errorMessage });
-      } else if (errorMessage.includes('téléphone') || errorMessage.includes('numéro')) {
-        setErrors({ phone: errorMessage });
-      } else {
-        toast.error(t('common.actionImpossible') || "Action impossible", errorMessage);
-      }
+      const msg = getErrorMessage(error, t('auth.registerError'));
+      if (/email/i.test(msg)) setErrors({ email: msg });
+      else if (/t[ée]l[ée]phone|num[ée]ro/i.test(msg)) setErrors({ phone: msg });
+      else if (/mot de passe|password/i.test(msg)) setErrors({ password: msg });
+      else toast.error(t('common.actionImpossible') || 'Action impossible', msg);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
+    <SafeAreaWrapper style={styles.container}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
-          keyboardShouldPersistTaps="always"
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
           keyboardDismissMode="none"
+          showsVerticalScrollIndicator={false}
         >
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backArrow}>‹</Text>
-            <Text style={styles.backText}>{t('common.back')}</Text>
-          </TouchableOpacity>
-
           <View style={styles.header}>
+            <BrandLogo size={72} shape="squircle" style={styles.logo} />
             <Text style={styles.title}>{t('auth.registerTitle')}</Text>
             <Text style={styles.subtitle}>{t('auth.registerSubtitle')}</Text>
           </View>
-          
-          <Card style={styles.card}>
+
+          <View style={styles.card}>
             <Input
               label={t('auth.fullName')}
               placeholder={t('auth.fullNamePlaceholder')}
               value={name}
-              onChangeText={(text) => { setName(text); setErrors({ ...errors, name: '' }); }}
+              onChangeText={(v) => { setName(v); clearError('name'); }}
               autoCapitalize="words"
+              returnKeyType="next"
               error={errors.name}
             />
             <Input
               label={t('auth.email')}
               placeholder={t('auth.emailPlaceholder')}
               value={email}
-              onChangeText={(text) => { setEmail(text); setErrors({ ...errors, email: '' }); }}
+              onChangeText={(v) => { setEmail(v); clearError('email'); }}
               keyboardType="email-address"
               autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="next"
               error={errors.email}
             />
             <Input
               label={t('auth.phone')}
               placeholder={t('auth.phonePlaceholder')}
               value={phone}
-              onChangeText={(text) => { setPhone(text); setErrors({ ...errors, phone: '' }); }}
+              onChangeText={(v) => { setPhone(v); clearError('phone'); }}
               isPhone
-              maxLength={9}
+              returnKeyType="next"
               error={errors.phone}
             />
             <Input
               label={t('auth.password')}
               placeholder={t('auth.passwordPlaceholder')}
               value={password}
-              onChangeText={(text) => { setPassword(text); setErrors({ ...errors, password: '' }); }}
+              onChangeText={(v) => { setPassword(v); clearError('password'); }}
               secureTextEntry
+              returnKeyType="next"
               error={errors.password}
             />
+            <PasswordStrengthBar value={password} />
             <Input
               label={t('auth.confirmPassword')}
-              placeholder="********"
+              placeholder={t('auth.passwordPlaceholder')}
               value={confirmPassword}
-              onChangeText={(text) => { setConfirmPassword(text); setErrors({ ...errors, confirmPassword: '' }); }}
+              onChangeText={(v) => { setConfirmPassword(v); clearError('confirmPassword'); }}
               secureTextEntry
+              returnKeyType="done"
+              onSubmitEditing={handleRegister}
               error={errors.confirmPassword}
             />
 
@@ -147,87 +135,44 @@ export const RegisterScreen = ({ navigation }: any) => {
               title={t('auth.registerButton')}
               onPress={handleRegister}
               loading={loading}
-              style={styles.submitButton}
+              style={styles.submit}
               textColor="#000000"
             />
-          </Card>
+          </View>
 
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Login')}
-            style={styles.footerLink}
-          >
-            <Text style={styles.linkText}>{t('auth.alreadyRegistered')}<Text style={styles.linkBold}>{t('auth.login')}</Text></Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.footerLink} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.linkText}>
+              {t('auth.haveAccount')}<Text style={styles.linkBold}>{t('auth.login')}</Text>
+            </Text>
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  scrollContent: {
+const createStyles = (theme: any, wide: boolean) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  scroll: {
     flexGrow: 1,
-    padding: theme.spacing.m,
-    ...(isDesktopOrTablet && {
-      maxWidth: 600,
-      alignSelf: 'center',
-      width: '100%',
-    }),
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.m,
-  },
-  backArrow: {
-    fontSize: 32,
-    color: theme.colors.primary,
-    marginRight: 8,
-    fontWeight: '300',
-  },
-  backText: {
-    fontSize: 16,
-    color: theme.colors.primary,
-    fontWeight: '500',
-  },
-  header: {
-    marginBottom: theme.spacing.l,
-    paddingHorizontal: theme.spacing.s,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: theme.colors.textSecondary,
-    marginTop: 8,
-    lineHeight: 20,
-  },
-  card: {
     padding: theme.spacing.l,
+    paddingTop: theme.spacing.xl,
+    ...(wide && { maxWidth: 460, alignSelf: 'center', width: '100%' }),
+  },
+  header: { alignItems: 'center', marginBottom: theme.spacing.l },
+  logo: { marginBottom: theme.spacing.m, borderRadius: 20, ...theme.shadows.light },
+  title: { fontSize: 24, fontWeight: '800', color: theme.colors.text, textAlign: 'center' },
+  subtitle: { fontSize: 14, color: theme.colors.textSecondary, marginTop: 6, textAlign: 'center', lineHeight: 20, maxWidth: 340 },
+  card: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.l,
+    padding: theme.spacing.l,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     ...theme.shadows.medium,
   },
-  submitButton: {
-    marginTop: theme.spacing.m,
-    height: 56,
-  },
-  footerLink: {
-    marginTop: theme.spacing.xl,
-    alignItems: 'center',
-    paddingBottom: theme.spacing.xl,
-  },
-  linkText: {
-    color: theme.colors.text,
-    fontSize: 14,
-  },
-  linkBold: {
-    fontWeight: 'bold',
-    color: theme.colors.primary,
-  }
+  submit: { marginTop: theme.spacing.s, height: 54, borderRadius: theme.borderRadius.xl },
+  footerLink: { marginTop: theme.spacing.l, alignItems: 'center', paddingBottom: theme.spacing.xl },
+  linkText: { color: theme.colors.textSecondary, fontSize: 14 },
+  linkBold: { fontWeight: '800', color: theme.colors.text },
 });

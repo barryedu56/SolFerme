@@ -62,7 +62,7 @@ export const ActionEtatPoulesScreen = ({ route, navigation }: any) => {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
+      <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]}>
         <Card style={styles.infoCard}>
           <View style={styles.infoRow}>
             <View style={styles.infoTexts}>
@@ -148,6 +148,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     justifyContent: 'space-between',
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40,
@@ -164,7 +167,7 @@ const createStyles = (theme: any) => StyleSheet.create({
     color: theme.colors.text
   },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
-  scrollDesktop: { maxWidth: 680, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   infoCard: {
     padding: theme.spacing.m,
     borderRadius: theme.borderRadius.xl,

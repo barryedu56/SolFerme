@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no, viewport-fit=cover" />
+    <title>SolFerme — Gestion d'élevage avicole</title>
+
+    <!-- PWA : application installable sur ordinateur et mobile -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/pwa/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="SolFerme" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- Reset recommandé par react-native-web (obligatoire pour la mise en page) -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>Vous devez activer JavaScript pour utiliser SolFerme.</noscript>
+    <div id="root"></div>
+
+    <!-- Enregistrement du service worker (app installable + boot hors-ligne).
+         Ignoré en local sauf ?pwa=1, pour ne pas gêner le développement. -->
+    <script>
+      (function () {
+        if (!('serviceWorker' in navigator)) return;
+        var host = location.hostname;
+        var isLocal = host === 'localhost' || host === '127.0.0.1' || host === '';
+        if (isLocal && location.search.indexOf('pwa=1') === -1) return;
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function (e) {
+            console.warn('[sw] enregistrement échoué', e);
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

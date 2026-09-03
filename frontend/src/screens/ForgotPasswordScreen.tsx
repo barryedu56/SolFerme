@@ -1,220 +1,224 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, Alert, TouchableOpacity } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  KeyboardAvoidingView, Keyboard,
+} from 'react-native';
+import { SafeAreaWrapper } from '../components/SafeAreaWrapper';
+import { MaterialIcons } from '@expo/vector-icons';
 import { Input } from '../components/Input';
 import { Button } from '../components/Button';
-import { Card } from '../components/Card';
+import { BrandLogo } from '../components/BrandLogo';
+import { PasswordStrengthBar, isPasswordStrong } from '../components/PasswordStrengthBar';
+import { toast } from '../utils/toast';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { repositoryProvider } from '../repositories';
 import { getErrorMessage } from '../utils/errors';
+import { useBreakpoint } from '../hooks/useBreakpoint';
 
 export const ForgotPasswordScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const styles = useMemo(() => createStyles(theme), [theme]);
+  const { isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme, isDesktopOrTablet), [theme, isDesktopOrTablet]);
 
+  const [step, setStep] = useState<1 | 2>(1);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [step, setStep] = useState(1); // 1: Request Code, 2: Confirm Reset
+  const [confirm, setConfirm] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  const handleRequestCode = async () => {
-    setError(null);
-    if (!email) {
-      setError(t('auth.emailRequired'));
-      return;
-    }
-    
+  const clearError = (k: string) => setErrors((e) => (e[k] ? { ...e, [k]: '' } : e));
+
+  const requestCode = async () => {
+    Keyboard.dismiss();
+    if (!email.trim()) { setErrors({ email: t('auth.emailRequired') }); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setErrors({ email: t('auth.invalidEmail') }); return; }
     setLoading(true);
     try {
-      const res = await repositoryProvider.api.post('/auth/password-reset-request/', { email });
-      setLoading(false);
-
-      // In DEBUG mode, we might get the code back for testing
-      if (res.data.code_dev) {
-        Alert.alert(
-          t('auth.emailSent'),
-          `DEBUG MODE: Code: ${res.data.code_dev}`
-        );
-        setCode(res.data.code_dev);
-      } else {
-        Alert.alert(
-          t('auth.emailSent'),
-          t('auth.resetEmailSentDesc')
-        );
-      }
+      const res = await repositoryProvider.api.post('/auth/password-reset-request/', { email: email.trim() });
+      if (res.data?.code_dev) { setCode(String(res.data.code_dev)); toast.info('DEBUG', `Code : ${res.data.code_dev}`); }
+      else toast.success(t('auth.emailSent'), t('auth.resetEmailSentDesc'));
       setStep(2);
     } catch (e: any) {
-      setLoading(false);
-      setError(getErrorMessage(e));
-    }
+      setErrors({ email: getErrorMessage(e) });
+    } finally { setLoading(false); }
   };
 
-  const handleConfirmReset = async () => {
-    setError(null);
-    if (!code || !newPassword) {
-      setError(t('profile.fillAllFields'));
-      return;
-    }
+  const confirmReset = async () => {
+    Keyboard.dismiss();
+    const e: Record<string, string> = {};
+    if (code.trim().length < 4) e.code = t('auth.linkInvalid');
+    if (!isPasswordStrong(newPassword)) e.newPassword = t('auth.passwordComplexity');
+    if (newPassword !== confirm) e.confirm = t('auth.passwordMismatch');
+    setErrors(e);
+    if (Object.keys(e).length) return;
 
     setLoading(true);
     try {
       await repositoryProvider.api.post('/auth/password-reset-confirm/', {
-        email,
-        code,
-        new_password: newPassword
+        email: email.trim(), code: code.trim(), new_password: newPassword,
       });
-      setLoading(false);
-      Alert.alert(
-        t('common.success'),
-        t('profile.passwordSuccess'),
-        [{ text: 'OK', onPress: () => navigation.navigate('Login') }]
-      );
-    } catch (e: any) {
-      setLoading(false);
-      setError(getErrorMessage(e));
-    }
+      toast.success(t('common.success'), t('auth.resetSuccess'));
+      navigation.navigate('Login');
+    } catch (err: any) {
+      const msg = getErrorMessage(err);
+      if (/code|expir/i.test(msg)) setErrors({ code: msg });
+      else if (/mot de passe|password|caract/i.test(msg)) setErrors({ newPassword: msg });
+      else toast.error(t('common.actionImpossible') || 'Action impossible', msg);
+    } finally { setLoading(false); }
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backArrow}>‹</Text>
-          <Text style={styles.backText}>{t('common.back')}</Text>
-        </TouchableOpacity>
-        
-        <View style={styles.header}>
-          <Text style={styles.title}>{t('auth.resetPassword')}</Text>
-          <Text style={styles.subtitle}>
-            {step === 1
-              ? t('auth.resetPasswordSubtitle')
-              : t('auth.resetPasswordConfirmSubtitle')
-            }
-          </Text>
-        </View>
-        
-        <Card style={styles.card}>
-          {step === 1 ? (
-            <>
-              <Input
-                label={t('auth.email')}
-                placeholder="votre@email.com"
-                value={email}
-                onChangeText={(text) => { setEmail(text); setError(null); }}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                error={error && error.includes('email') ? error : undefined}
-              />
+    <SafeAreaWrapper style={styles.container}>
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1 }}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="none"
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.header}>
+            <BrandLogo size={72} shape="squircle" style={styles.logo} />
+            <Text style={styles.title}>{t('auth.resetPassword')}</Text>
+            <Text style={styles.subtitle}>
+              {step === 1 ? t('auth.resetPasswordSubtitle') : t('auth.resetPasswordConfirmSubtitle')}
+            </Text>
+          </View>
 
-              {error && !error.includes('email') && (
-                <Text style={styles.errorText}>{error}</Text>
-              )}
+          {/* Indicateur d'étapes */}
+          <View style={styles.stepper}>
+            <StepDot n={1} active={step >= 1} current={step === 1} label={t('auth.stepRequestCode')} theme={theme} />
+            <View style={[styles.stepLine, { backgroundColor: step >= 2 ? theme.colors.primary : theme.colors.border }]} />
+            <StepDot n={2} active={step >= 2} current={step === 2} label={t('auth.stepNewPassword')} theme={theme} />
+          </View>
 
-              <Button
-                title={t('auth.sendLink')}
-                onPress={handleRequestCode}
-                loading={loading}
-                style={styles.submitButton}
-              />
-            </>
-          ) : (
-            <>
-              <Input
-                label={t('auth.code')}
-                placeholder="123456"
-                value={code}
-                onChangeText={(text) => { setCode(text); setError(null); }}
-                keyboardType="numeric"
-                error={error && (error.includes('code') || error.includes('lien')) ? error : undefined}
-              />
+          <View style={styles.card}>
+            {step === 1 ? (
+              <>
+                <Input
+                  label={t('auth.email')}
+                  placeholder={t('auth.emailPlaceholder')}
+                  value={email}
+                  onChangeText={(v) => { setEmail(v); clearError('email'); }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="send"
+                  onSubmitEditing={requestCode}
+                  error={errors.email}
+                />
+                <Button title={t('auth.sendLink')} onPress={requestCode} loading={loading} style={styles.submit} textColor="#000000" />
+              </>
+            ) : (
+              <>
+                <View style={styles.sentTo}>
+                  <MaterialIcons name="mark-email-read" size={18} color={theme.colors.textSecondary} />
+                  <Text style={styles.sentToText}>{t('auth.codeSentTo')} {email}</Text>
+                </View>
 
-              <Input
-                label={t('profile.newPassword')}
-                placeholder="********"
-                value={newPassword}
-                onChangeText={(text) => { setNewPassword(text); setError(null); }}
-                secureTextEntry
-                error={error && error.includes('passe') ? error : undefined}
-              />
+                <Input
+                  label={t('auth.code')}
+                  placeholder="123456"
+                  value={code}
+                  onChangeText={(v) => { setCode(v.replace(/\D/g, '').slice(0, 6)); clearError('code'); }}
+                  keyboardType="number-pad"
+                  maxLength={6}
+                  returnKeyType="next"
+                  error={errors.code}
+                />
+                <Input
+                  label={t('auth.newPassword')}
+                  placeholder={t('auth.passwordPlaceholder')}
+                  value={newPassword}
+                  onChangeText={(v) => { setNewPassword(v); clearError('newPassword'); }}
+                  secureTextEntry
+                  returnKeyType="next"
+                  error={errors.newPassword}
+                />
+                <PasswordStrengthBar value={newPassword} />
+                <Input
+                  label={t('auth.confirmNewPassword')}
+                  placeholder={t('auth.passwordPlaceholder')}
+                  value={confirm}
+                  onChangeText={(v) => { setConfirm(v); clearError('confirm'); }}
+                  secureTextEntry
+                  returnKeyType="done"
+                  onSubmitEditing={confirmReset}
+                  error={errors.confirm}
+                />
 
-              {error && !error.includes('code') && !error.includes('lien') && !error.includes('passe') && (
-                <Text style={styles.errorText}>{error}</Text>
-              )}
+                <Button title={t('common.confirm')} onPress={confirmReset} loading={loading} style={styles.submit} textColor="#000000" />
 
-              <Button
-                title={t('common.confirm')}
-                onPress={handleConfirmReset}
-                loading={loading}
-                style={styles.submitButton}
-              />
+                <View style={styles.step2Links}>
+                  <TouchableOpacity onPress={requestCode} disabled={loading} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={styles.linkAction}>{t('auth.resendCode')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => { setStep(1); setErrors({}); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Text style={styles.linkAction}>{t('auth.changeEmail')}</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
 
-              <TouchableOpacity
-                onPress={() => { setStep(1); setError(null); }}
-                style={{ marginTop: 15, alignItems: 'center' }}
-              >
-                <Text style={{ color: theme.colors.primary }}>{t('common.back')}</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </Card>
-      </View>
-    </SafeAreaView>
+          <TouchableOpacity onPress={() => navigation.navigate('Login')} style={styles.footerLink} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <Text style={styles.linkText}>{t('auth.backToLogin')}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaWrapper>
   );
 };
 
-const createStyles = (theme: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  content: {
-    padding: theme.spacing.m,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.m,
-  },
-  backArrow: {
-    fontSize: 32,
-    color: theme.colors.primary,
-    marginRight: 8,
-    fontWeight: '300',
-  },
-  backText: {
-    fontSize: 16,
-    color: theme.colors.primary,
-    fontWeight: '500',
-  },
-  header: {
-    marginBottom: theme.spacing.l,
-    paddingHorizontal: theme.spacing.s,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.s,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: theme.colors.textSecondary,
-    lineHeight: 22,
-  },
-  card: {
+const StepDot = ({ n, active, current, label, theme }: any) => (
+  <View style={stepStyles.wrap}>
+    <View style={[
+      stepStyles.dot,
+      { borderColor: active ? theme.colors.primary : theme.colors.border, backgroundColor: current ? theme.colors.primary : theme.colors.surface },
+    ]}>
+      <Text style={[stepStyles.dotText, { color: current ? '#000' : active ? theme.colors.primary : theme.colors.textSecondary }]}>{n}</Text>
+    </View>
+    <Text style={[stepStyles.label, { color: current ? theme.colors.text : theme.colors.textSecondary }]} numberOfLines={1}>{label}</Text>
+  </View>
+);
+
+const stepStyles = StyleSheet.create({
+  wrap: { alignItems: 'center', width: 110 },
+  dot: { width: 30, height: 30, borderRadius: 15, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  dotText: { fontSize: 13, fontWeight: '800' },
+  label: { fontSize: 11, marginTop: 6, fontWeight: '600', textAlign: 'center' },
+});
+
+const createStyles = (theme: any, wide: boolean) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: theme.colors.background },
+  scroll: {
+    flexGrow: 1,
     padding: theme.spacing.l,
+    paddingTop: theme.spacing.xl,
+    ...(wide && { maxWidth: 460, alignSelf: 'center', width: '100%' }),
+  },
+  header: { alignItems: 'center', marginBottom: theme.spacing.l },
+  logo: { marginBottom: theme.spacing.m, borderRadius: 20, ...theme.shadows.light },
+  title: { fontSize: 24, fontWeight: '800', color: theme.colors.text, textAlign: 'center' },
+  subtitle: { fontSize: 14, color: theme.colors.textSecondary, marginTop: 6, textAlign: 'center', lineHeight: 20, maxWidth: 340 },
+  stepper: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', marginBottom: theme.spacing.l },
+  stepLine: { height: 2, flex: 0.4, marginTop: 14, maxWidth: 60 },
+  card: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.borderRadius.l,
+    padding: theme.spacing.l,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
     ...theme.shadows.medium,
   },
-  submitButton: {
-    marginTop: theme.spacing.m,
-  },
-  errorText: {
-    color: theme.colors.danger,
-    fontSize: 14,
-    marginBottom: theme.spacing.m,
-    textAlign: 'center',
-  }
+  sentTo: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.background, borderRadius: theme.borderRadius.m, padding: 10, marginBottom: theme.spacing.m },
+  sentToText: { flex: 1, fontSize: 13, color: theme.colors.textSecondary },
+  submit: { marginTop: theme.spacing.s, height: 54, borderRadius: theme.borderRadius.xl },
+  step2Links: { flexDirection: 'row', justifyContent: 'space-between', marginTop: theme.spacing.m },
+  linkAction: { fontSize: 14, fontWeight: '700', color: theme.colors.primary },
+  footerLink: { marginTop: theme.spacing.l, alignItems: 'center', paddingBottom: theme.spacing.xl },
+  linkText: { color: theme.colors.textSecondary, fontSize: 14, fontWeight: '600' },
 });

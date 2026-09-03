@@ -1,5 +1,6 @@
 from django.utils import timezone
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.db.models import Q, Sum, Count, Avg, F, ExpressionWrapper, DecimalField
 from django.db.models.functions import TruncDate, TruncMonth, TruncWeek, ExtractHour
 from rest_framework import viewsets, permissions, status
@@ -12,7 +13,7 @@ from .models import (
     ChickenMovement, Employee, Expense, Reminder, Payroll, Attendance,
     Task, ActivityLog, FeedInventory, HealthInventory, FeedPurchase,
     HealthPurchase, HealthAlert, PreparedFeedInventory, FeedPreparation, Bonus,
-    EmployeeRequest, PasswordResetCode, LotExpense, EggConversion
+    EmployeeRequest, PasswordResetCode, LotExpense, EggConversion, SyncIdempotencyKey
 )
 from .serializers import (
     UserSerializer, FarmSerializer, FarmUserSerializer, LotSerializer,
@@ -23,26 +24,114 @@ from .serializers import (
     FeedPurchaseSerializer, HealthPurchaseSerializer, HealthAlertSerializer,
     PreparedFeedInventorySerializer, FeedPreparationSerializer, BonusSerializer,
     CustomTokenObtainPairSerializer, EmployeeRequestSerializer, LotExpenseSerializer,
-    EggConversionSerializer
+    EggConversionSerializer, ContactMessageSerializer
 )
 
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework.throttling import ScopedRateThrottle
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+    # Anti-brute-force : limite les tentatives de connexion par IP (HTTP 429).
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
 class IsProprietaire(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == 'PROPRIETAIRE'
 
+
+class IdempotentCreateMixin:
+    """
+    Déduplique les créations rejouées par la synchronisation offline.
+
+    Le client envoie `client_uuid` (UUID stable généré au moment de la création
+    locale) avec chaque tentative de POST. Si une création portant ce même uuid a
+    déjà abouti, on renvoie l'objet existant (HTTP 200) sans en créer un second.
+    Cas couvert : le POST atteint le serveur, est traité, mais la réponse se perd
+    (coupure réseau) → le client rejoue le POST au cycle de synchro suivant.
+
+    Sans effet si `client_uuid` est absent (comportement inchangé).
+    """
+
+    def _idem_resource(self):
+        try:
+            return self.queryset.model.__name__.lower()
+        except Exception:
+            return getattr(self, 'basename', 'obj')
+
+    def create(self, request, *args, **kwargs):
+        client_uuid = request.data.get('client_uuid') if hasattr(request.data, 'get') else None
+        if not client_uuid:
+            return super().create(request, *args, **kwargs)
+
+        existing = SyncIdempotencyKey.objects.filter(client_uuid=client_uuid).first()
+        if existing:
+            try:
+                instance = self.get_queryset().get(pk=existing.object_id)
+                serializer = self.get_serializer(instance)
+                return Response(serializer.data, status=status.HTTP_200_OK)
+            except Exception:
+                # L'objet a été supprimé/annulé côté serveur depuis → on autorise
+                # une nouvelle création et on repart de zéro sur cette clé.
+                existing.delete()
+
+        response = super().create(request, *args, **kwargs)
+
+        obj_id = response.data.get('id') if hasattr(response, 'data') and hasattr(response.data, 'get') else None
+        if response.status_code in (status.HTTP_200_OK, status.HTTP_201_CREATED) and obj_id:
+            try:
+                with transaction.atomic():
+                    SyncIdempotencyKey.objects.create(
+                        client_uuid=client_uuid,
+                        resource=self._idem_resource(),
+                        object_id=obj_id,
+                        user=request.user if getattr(request, 'user', None) and request.user.is_authenticated else None,
+                    )
+            except IntegrityError:
+                # Course concurrente : la clé vient d'être enregistrée par une
+                # requête jumelle. L'objet créé ici est un doublon → on le supprime
+                # et on renvoie celui qui a gagné la course.
+                winner = SyncIdempotencyKey.objects.filter(client_uuid=client_uuid).first()
+                if winner and winner.object_id != obj_id:
+                    try:
+                        self.get_queryset().get(pk=obj_id).delete()
+                    except Exception:
+                        pass
+                    try:
+                        instance = self.get_queryset().get(pk=winner.object_id)
+                        return Response(self.get_serializer(instance).data, status=status.HTTP_200_OK)
+                    except Exception:
+                        pass
+        return response
+
 class UserViewSet(viewsets.ModelViewSet):
-    queryset = User.objects.all()
     serializer_class = UserSerializer
 
     def get_permissions(self):
         if self.action == 'create':
             return [permissions.AllowAny()]
         return [permissions.IsAuthenticated(), IsProprietaire()]
+
+    def get_throttles(self):
+        # Anti-abus sur l'inscription publique (création de compte).
+        if self.action == 'create':
+            self.throttle_scope = 'register'
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
+
+    def get_queryset(self):
+        user = self.request.user
+        if getattr(user, 'is_superuser', False):
+            return User.objects.all()
+        elif user.role == 'PROPRIETAIRE':
+            # Propriétaire ne voit que lui-même et les employés de ses propres fermes
+            farm_ids = Farm.objects.filter(owner=user).values_list('id', flat=True)
+            return User.objects.filter(
+                Q(id=user.id) | Q(employee_profile__farm_id__in=farm_ids)
+            ).distinct()
+        else:
+            return User.objects.filter(id=user.id)
 
 def calculate_performance(initial_quantity, current_quantity, sick_quantity, actual_production_eggs, days, expected_rate=0.85):
     if initial_quantity <= 0 or current_quantity <= 0:
@@ -74,7 +163,7 @@ class FarmUserViewSet(viewsets.ModelViewSet):
             ).select_related('farm', 'user')
 
 
-class FarmViewSet(viewsets.ModelViewSet):
+class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FarmSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -435,7 +524,7 @@ class FarmViewSet(viewsets.ModelViewSet):
 
         return Response(response_data)
 
-class LotViewSet(viewsets.ModelViewSet):
+class LotViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = LotSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -712,7 +801,7 @@ class LotViewSet(viewsets.ModelViewSet):
         return Response(summary)
 
 
-class ProductionViewSet(viewsets.ModelViewSet):
+class ProductionViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = ProductionSerializer
 
     def get_permissions(self):
@@ -839,7 +928,7 @@ class ProductionViewSet(viewsets.ModelViewSet):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-class EggConversionViewSet(viewsets.ModelViewSet):
+class EggConversionViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = EggConversionSerializer
 
     def get_permissions(self):
@@ -931,7 +1020,7 @@ class EggConversionViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class SaleViewSet(viewsets.ModelViewSet):
+class SaleViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = SaleSerializer
 
     def get_permissions(self):
@@ -1219,7 +1308,7 @@ class SalePaymentViewSet(viewsets.ModelViewSet):
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class FeedViewSet(viewsets.ModelViewSet):
+class FeedViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FeedSerializer
 
     def get_permissions(self):
@@ -1323,7 +1412,7 @@ class FeedViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class HealthRecordViewSet(viewsets.ModelViewSet):
+class HealthRecordViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = HealthRecordSerializer
 
     def get_permissions(self):
@@ -1416,7 +1505,7 @@ class HealthRecordViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class ChickenMovementViewSet(viewsets.ModelViewSet):
+class ChickenMovementViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = ChickenMovementSerializer
 
     def get_permissions(self):
@@ -1518,7 +1607,7 @@ class ChickenMovementViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class TaskViewSet(viewsets.ModelViewSet):
+class TaskViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = TaskSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1574,7 +1663,7 @@ class TaskViewSet(viewsets.ModelViewSet):
 
         return Response(TaskSerializer(task).data)
 
-class EmployeeViewSet(viewsets.ModelViewSet):
+class EmployeeViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = EmployeeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1677,6 +1766,42 @@ class UserInfoView(APIView):
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+def _blacklist_all_tokens(user):
+    """Révoque toutes les sessions JWT (refresh) actives de l'utilisateur.
+    Utilisé après un changement/réinitialisation de mot de passe."""
+    try:
+        from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+    except Exception:
+        pass
+
+
+def _notify_password_changed(user, request=None):
+    """Email de notification 'votre mot de passe a été modifié' — dernière ligne
+    de défense en cas de compromission du compte."""
+    try:
+        from django.core.mail import send_mail
+        ip = request.META.get('REMOTE_ADDR', 'inconnue') if request is not None else 'inconnue'
+        when = timezone.now().strftime('%d/%m/%Y à %H:%M UTC')
+        send_mail(
+            subject="SolFerme — Votre mot de passe a été modifié",
+            message=(
+                f"Bonjour {user.name},\n\n"
+                f"Le mot de passe de votre compte SolFerme a été modifié le {when} "
+                f"(adresse IP : {ip}).\n\n"
+                f"Si vous êtes à l'origine de cette modification, aucune action n'est requise.\n"
+                f"Sinon, contactez immédiatement l'administrateur : toutes vos sessions ont "
+                f"été déconnectées mais votre compte pourrait être compromis."
+            ),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=True,
+        )
+    except Exception:
+        pass
+
+
 class ChangePasswordView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1688,80 +1813,231 @@ class ChangePasswordView(APIView):
         if not user.check_password(old_password):
             return Response({"error": "L'ancien mot de passe est incorrect."}, status=status.HTTP_400_BAD_REQUEST)
 
+        from .password_utils import validate_password_strength
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+        try:
+            validate_password_strength(new_password, user=user)
+        except DRFValidationError as e:
+            detail = e.detail
+            msg = detail[0] if isinstance(detail, list) else str(detail)
+            return Response({"error": msg}, status=status.HTTP_400_BAD_REQUEST)
+
         user.set_password(new_password)
         user.save()
+        _blacklist_all_tokens(user)
+        _notify_password_changed(user, request)
         return Response({"detail": "Mot de passe modifié avec succès."}, status=status.HTTP_200_OK)
 
 class LogoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
+        refresh_token = request.data.get("refresh_token") or request.data.get("refresh")
+        if not refresh_token:
+            return Response({"error": "Refresh token est requis."}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            refresh_token = request.data.get("refresh_token")
-            if not refresh_token:
-                return Response({"error": "Refresh token est requis."}, status=status.HTTP_400_BAD_REQUEST)
-
             from rest_framework_simplejwt.tokens import RefreshToken
-            token = RefreshToken(refresh_token)
-            token.blacklist()
+            RefreshToken(refresh_token).blacklist()
+        except Exception:
+            # Token déjà invalide/expiré → la déconnexion est de toute façon effective côté client.
+            pass
 
-            return Response({"detail": "Déconnexion réussie."}, status=status.HTTP_205_RESET_CONTENT)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        if getattr(request.user, 'is_superuser', False):
+            try:
+                from .models import AdminAuditLog
+                AdminAuditLog.objects.create(
+                    admin_user=request.user,
+                    action='ADMIN_LOGOUT',
+                    target_type='SYSTEM',
+                    target_id=str(request.user.id)
+                )
+            except Exception:
+                pass
+
+        return Response({"detail": "Déconnexion réussie."}, status=status.HTTP_205_RESET_CONTENT)
+
+class DeviceTokenView(APIView):
+    """Enregistrement / désenregistrement d'un jeton de notification push."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        token = (request.data.get('token') or '').strip()
+        platform = (request.data.get('platform') or 'android').strip().lower()
+        if not token or len(token) > 200:
+            return Response({"error": "Jeton invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        if platform not in ('android', 'ios', 'web'):
+            platform = 'android'
+        from .models import DeviceToken
+        # Un même jeton est réaffecté à l'utilisateur courant (changement de compte
+        # sur le même appareil).
+        DeviceToken.objects.update_or_create(
+            token=token,
+            defaults={'user': request.user, 'platform': platform},
+        )
+        return Response({"detail": "Appareil enregistré."}, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        token = (request.data.get('token') or request.query_params.get('token') or '').strip()
+        if token:
+            from .models import DeviceToken
+            DeviceToken.objects.filter(token=token, user=request.user).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+GENERIC_RESET_MESSAGE = "Si un compte existe avec cet email, un code de réinitialisation a été envoyé."
+
 
 class PasswordResetRequestView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'password_reset'
 
     def post(self, request):
-        email = request.data.get('email')
+        email = (request.data.get('email') or '').strip().lower()
         if not email:
             return Response({"error": "L'email est requis."}, status=status.HTTP_400_BAD_REQUEST)
 
-        user = User.objects.filter(email=email).first()
+        user = User.objects.filter(email__iexact=email, is_active=True).first()
         if user:
-            import random
-            code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
+            import secrets
+            from django.core.mail import send_mail
+
+            # Invalider les codes précédents encore valides pour cet utilisateur.
+            PasswordResetCode.objects.filter(user=user, is_used=False).update(is_used=True)
+
+            code = f"{secrets.randbelow(1_000_000):06d}"
             expires_at = timezone.now() + timezone.timedelta(minutes=15)
-            PasswordResetCode.objects.create(user=user, code=code, expires_at=expires_at)
+            prc = PasswordResetCode(user=user, expires_at=expires_at)
+            prc.set_code(code)  # haché au repos
+            prc.save()
 
-            # Here we would send an email. For now, we'll just log it or return it in dev
-            print(f"Password reset code for {email}: {code}")
-            # In production, DO NOT return the code in the response
+            try:
+                send_mail(
+                    subject="SolFerme — Code de réinitialisation",
+                    message=(
+                        f"Bonjour {user.name},\n\n"
+                        f"Votre code de réinitialisation de mot de passe est : {code}\n"
+                        f"Ce code expire dans 15 minutes.\n\n"
+                        f"Si vous n'êtes pas à l'origine de cette demande, ignorez cet email."
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=True,
+                )
+            except Exception:
+                pass
+
             if settings.DEBUG:
-                return Response({"detail": "Code de réinitialisation envoyé.", "code_dev": code}, status=status.HTTP_200_OK)
+                return Response(
+                    {"detail": GENERIC_RESET_MESSAGE, "code_dev": code},
+                    status=status.HTTP_200_OK,
+                )
 
-        return Response({"detail": "Si un compte existe avec cet email, un code de réinitialisation a été envoyé."}, status=status.HTTP_200_OK)
+        # Réponse identique que le compte existe ou non (anti-énumération).
+        return Response({"detail": GENERIC_RESET_MESSAGE}, status=status.HTTP_200_OK)
+
 
 class PasswordResetConfirmView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'password_reset_confirm'
 
     def post(self, request):
-        email = request.data.get('email')
-        code = request.data.get('code')
+        email = (request.data.get('email') or '').strip().lower()
+        code = (request.data.get('code') or '').strip()
         new_password = request.data.get('new_password')
 
         if not all([email, code, new_password]):
             return Response({"error": "Tous les champs sont requis."}, status=status.HTTP_400_BAD_REQUEST)
 
         reset_code = PasswordResetCode.objects.filter(
-            user__email=email,
-            code=code,
-            is_used=False
-        ).last()
+            user__email__iexact=email,
+            is_used=False,
+        ).order_by('-created_at').first()
 
         if not reset_code or reset_code.is_expired():
             return Response({"error": "Code invalide ou expiré."}, status=status.HTTP_400_BAD_REQUEST)
 
+        if reset_code.attempts >= PasswordResetCode.MAX_ATTEMPTS:
+            reset_code.is_used = True
+            reset_code.save(update_fields=['is_used'])
+            return Response(
+                {"error": "Trop de tentatives. Demandez un nouveau code."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not reset_code.check_code(code):
+            reset_code.attempts += 1
+            reset_code.save(update_fields=['attempts'])
+            remaining = max(0, PasswordResetCode.MAX_ATTEMPTS - reset_code.attempts)
+            return Response(
+                {"error": f"Code invalide ou expiré. ({remaining} tentative(s) restante(s))"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        from .password_utils import validate_password_strength
+        from rest_framework.exceptions import ValidationError as DRFValidationError
         user = reset_code.user
+        try:
+            validate_password_strength(new_password, user=user)
+        except DRFValidationError as e:
+            detail = e.detail
+            msg = detail[0] if isinstance(detail, list) else str(detail)
+            return Response({"error": msg}, status=status.HTTP_400_BAD_REQUEST)
+
         user.set_password(new_password)
         user.save()
 
-        reset_code.is_used = True
-        reset_code.save()
+        # Invalider tous les codes de cet utilisateur + révoquer les sessions JWT.
+        PasswordResetCode.objects.filter(user=user, is_used=False).update(is_used=True)
+        _blacklist_all_tokens(user)
+        _notify_password_changed(user, request)
 
         return Response({"detail": "Mot de passe réinitialisé avec succès."}, status=status.HTTP_200_OK)
 
-class ExpenseViewSet(viewsets.ModelViewSet):
+
+class ContactMessageView(APIView):
+    """Formulaire de contact du site vitrine web. Public, throttlé.
+    Sauvegarde le message et tente de notifier le support par email."""
+    permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'contact'
+
+    def post(self, request):
+        serializer = ContactMessageSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from .models import ContactMessage
+        msg = ContactMessage.objects.create(
+            ip_address=request.META.get('REMOTE_ADDR'),
+            **serializer.validated_data,
+        )
+
+        try:
+            from django.core.mail import send_mail
+            send_mail(
+                subject=f"[SolFerme Contact] {msg.subject or 'Nouveau message'}",
+                message=(
+                    f"De : {msg.name} <{msg.email}>\n"
+                    f"IP : {msg.ip_address}\n\n"
+                    f"{msg.message}"
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[getattr(settings, 'CONTACT_INBOX', 'support@solferme.com')],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+        return Response(
+            {"detail": "Votre message a bien été envoyé. Nous vous répondrons rapidement."},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ExpenseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
 
     def get_permissions(self):
@@ -1850,7 +2126,7 @@ class ExpenseViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class ReminderViewSet(viewsets.ModelViewSet):
+class ReminderViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = ReminderSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -1982,7 +2258,7 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated(), IsProprietaire()]
         return super().get_permissions()
 
-class PayrollViewSet(viewsets.ModelViewSet):
+class PayrollViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = PayrollSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2128,7 +2404,7 @@ class PayrollViewSet(viewsets.ModelViewSet):
             'period': f"{current_month:02d}/{current_year}",
         })
 
-class LotExpenseViewSet(viewsets.ModelViewSet):
+class LotExpenseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     queryset = LotExpense.objects.all()
     serializer_class = LotExpenseSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -2199,7 +2475,7 @@ class LotExpenseViewSet(viewsets.ModelViewSet):
         )
         return super().destroy(request, *args, **kwargs)
 
-class BonusViewSet(viewsets.ModelViewSet):
+class BonusViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = BonusSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2402,7 +2678,7 @@ class AttendanceViewSet(viewsets.ModelViewSet):
         except Attendance.DoesNotExist:
             return Response({"detail": "Aucun pointage d'arrivée trouvé pour ce lot aujourd'hui."}, status=status.HTTP_400_BAD_REQUEST)
 
-class EmployeeRequestViewSet(viewsets.ModelViewSet):
+class EmployeeRequestViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = EmployeeRequestSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -2516,7 +2792,7 @@ class HealthInventoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
 
-class FeedPurchaseViewSet(viewsets.ModelViewSet):
+class FeedPurchaseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FeedPurchaseSerializer
 
     def get_permissions(self):
@@ -2604,7 +2880,7 @@ class FeedPurchaseViewSet(viewsets.ModelViewSet):
             )
         return Response(status=status.HTTP_204_NO_CONTENT)
 
-class HealthPurchaseViewSet(viewsets.ModelViewSet):
+class HealthPurchaseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = HealthPurchaseSerializer
 
     def get_permissions(self):
@@ -2715,6 +2991,16 @@ class HealthAlertViewSet(viewsets.ModelViewSet):
         alert.save()
         return Response(self.get_serializer(alert).data)
 
+    @action(detail=False, methods=['post'])
+    def mark_all_as_viewed(self, request):
+        if request.user.role != 'PROPRIETAIRE':
+            return Response({"error": "Seul le propriétaire peut marquer les alertes comme vues."}, status=status.HTTP_403_FORBIDDEN)
+
+        updated = self.get_queryset().filter(is_viewed=False).update(
+            is_viewed=True, viewed_by=request.user, viewed_at=timezone.now()
+        )
+        return Response({"detail": f"{updated} alerte(s) marquée(s) comme vue(s).", "count": updated})
+
 class PreparedFeedInventoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = PreparedFeedInventorySerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -2742,7 +3028,7 @@ class PreparedFeedInventoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
 
-class FeedPreparationViewSet(viewsets.ModelViewSet):
+class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FeedPreparationSerializer
     permission_classes = [permissions.IsAuthenticated]
 

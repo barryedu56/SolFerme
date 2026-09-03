@@ -1,12 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Linking, Alert, LayoutAnimation, UIManager, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Linking, LayoutAnimation, UIManager, Platform } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import { Card } from '../components/Card';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useBreakpoint } from '../hooks/useBreakpoint';
-import { helpCategories, faqItems, HelpArticle, FAQItem } from '../data/helpContent';
+import { helpCategories, faqItems, HelpArticle, FAQItem, HelpCategory } from '../data/helpContent';
+import { Screen, ScreenHeader, Card, SectionHeader, EmptyState, space, radius, shadow } from '../components/ui';
 
 if (Platform.OS === 'android') {
   if (UIManager.setLayoutAnimationEnabledExperimental) {
@@ -14,12 +14,14 @@ if (Platform.OS === 'android') {
   }
 }
 
+const animate = () => LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+
 export const HelpScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
-  const { isDesktop, isTablet, isDesktopOrTablet } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet, isDesktopOrTablet), [theme, isDesktop, isTablet, isDesktopOrTablet]);
+  const { isDesktop, isDesktopOrTablet } = useBreakpoint();
+  const styles = useMemo(() => createStyles(theme), [theme]);
 
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedArticle, setSelectedArticle] = useState<HelpArticle | null>(null);
@@ -27,7 +29,6 @@ export const HelpScreen = ({ navigation }: any) => {
   const [showFAQ, setShowFAQ] = useState(false);
   const [expandedFAQ, setExpandedFAQ] = useState<Set<number>>(new Set());
 
-  // Filter categories based on user role
   const filteredCategories = useMemo(() => {
     return helpCategories.map(category => ({
       ...category,
@@ -39,12 +40,10 @@ export const HelpScreen = ({ navigation }: any) => {
     })).filter(category => category.articles.length > 0);
   }, [userRole]);
 
-  // Filter articles based on search
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const query = searchQuery.toLowerCase();
     const results: { article: HelpArticle; category: string }[] = [];
-    
     filteredCategories.forEach(category => {
       category.articles.forEach(article => {
         if (
@@ -57,11 +56,9 @@ export const HelpScreen = ({ navigation }: any) => {
         }
       });
     });
-
     return results;
   }, [searchQuery, filteredCategories]);
 
-  // Filter FAQ based on search
   const filteredFAQ = useMemo(() => {
     if (!searchQuery.trim()) return faqItems;
     const query = searchQuery.toLowerCase();
@@ -72,726 +69,404 @@ export const HelpScreen = ({ navigation }: any) => {
   }, [searchQuery]);
 
   const toggleFAQ = (index: number) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    animate();
     const newExpanded = new Set(expandedFAQ);
-    if (newExpanded.has(index)) {
-      newExpanded.delete(index);
-    } else {
-      newExpanded.add(index);
-    }
+    if (newExpanded.has(index)) newExpanded.delete(index);
+    else newExpanded.add(index);
     setExpandedFAQ(newExpanded);
   };
 
   const handleNavigateToScreen = (screenName: string) => {
-    // Navigate to the correct nested screen in the Tab Navigator
     navigation.navigate('MainTabs', { screen: screenName });
   };
 
-  const renderCategoryItem = (category: any) => (
-    <TouchableOpacity
-      key={category.id}
-      style={[styles.categoryItem, selectedCategory === category.id && styles.categoryItemSelected]}
-      onPress={() => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setSelectedCategory(category.id);
-        setSelectedArticle(null);
-        setShowFAQ(false);
-      }}
-    >
-      {category.icon.includes('-') ? (
-        <MaterialCommunityIcons name={category.icon as any} size={20} color={selectedCategory === category.id ? theme.colors.primary : theme.colors.text} style={{marginRight: theme.spacing.m}} />
-      ) : (
-        <MaterialIcons name={category.icon as any} size={20} color={selectedCategory === category.id ? theme.colors.primary : theme.colors.text} style={{marginRight: theme.spacing.m}} />
-      )}
-      <Text style={[styles.categoryTitle, selectedCategory === category.id && styles.categoryTitleSelected]}>
-        {category.title}
+  const goHome = () => {
+    animate();
+    setSelectedCategory(null);
+    setShowFAQ(false);
+  };
+
+  const openCategory = (id: string) => {
+    animate();
+    setSelectedCategory(id);
+    setSelectedArticle(null);
+    setShowFAQ(false);
+  };
+
+  const openFAQ = () => {
+    animate();
+    setSelectedCategory(null);
+    setShowFAQ(true);
+  };
+
+  // Icônes MaterialCommunityIcons si le nom contient un tiret, sinon MaterialIcons.
+  const Icon = ({ name, size, color }: { name: string; size: number; color: string }) =>
+    name.includes('-')
+      ? <MaterialCommunityIcons name={name as any} size={size} color={color} />
+      : <MaterialIcons name={name as any} size={size} color={color} />;
+
+  /* ── Lignes réutilisables ─────────────────────────────────────────── */
+  const NavRow = ({ icon, label, active, onPress }: any) => (
+    <TouchableOpacity style={[styles.navRow, active && { backgroundColor: theme.colors.primary + '16' }]} onPress={onPress}>
+      <View style={[styles.navIconBox, { backgroundColor: active ? theme.colors.primary + '22' : theme.colors.background }]}>
+        <Icon name={icon} size={18} color={active ? theme.colors.primary : theme.colors.textSecondary} />
+      </View>
+      <Text style={[styles.navLabel, { color: active ? theme.colors.primary : theme.colors.text }, active && { fontWeight: '800' }]} numberOfLines={1}>
+        {label}
       </Text>
-      <MaterialIcons 
-        name={selectedCategory === category.id ? "chevron-right" : "chevron-left"} 
-        size={20} 
-        color={selectedCategory === category.id ? theme.colors.primary : theme.colors.textSecondary} 
-      />
+      <MaterialIcons name="chevron-right" size={19} color={active ? theme.colors.primary : theme.colors.border} />
     </TouchableOpacity>
   );
 
+  const renderCategoryItem = (category: HelpCategory) => (
+    <NavRow key={category.id} icon={category.icon} label={category.title} active={selectedCategory === category.id} onPress={() => openCategory(category.id)} />
+  );
+
   const renderArticleItem = (article: HelpArticle) => (
-    <TouchableOpacity
-      key={article.id}
-      style={styles.articleItem}
-      onPress={() => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-        setSelectedArticle(article);
-      }}
-    >
-      {article.icon.includes('-') ? (
-        <MaterialCommunityIcons name={article.icon as any} size={24} color={theme.colors.primary} style={{marginRight: theme.spacing.m}} />
-      ) : (
-        <MaterialIcons name={article.icon as any} size={24} color={theme.colors.primary} style={{marginRight: theme.spacing.m}} />
-      )}
-      <View style={styles.articleTextContainer}>
-        <Text style={styles.articleTitle}>{article.title}</Text>
+    <TouchableOpacity key={article.id} style={styles.articleItem} onPress={() => { animate(); setSelectedArticle(article); }}>
+      <View style={[styles.articleIconBox, { backgroundColor: theme.colors.primary + '16' }]}>
+        <Icon name={article.icon} size={22} color={theme.colors.primary} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.articleTitle, { color: theme.colors.text }]}>{article.title}</Text>
         <Text style={styles.articlePurpose} numberOfLines={2}>{article.purpose}</Text>
       </View>
       <MaterialIcons name="chevron-right" size={20} color={theme.colors.textSecondary} />
     </TouchableOpacity>
   );
 
-  const renderArticleDetail = (article: HelpArticle) => (
-    <ScrollView style={styles.articleDetail}>
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => setSelectedArticle(null)}
-      >
-        <MaterialIcons name="arrow-back" size={24} color={theme.colors.primary} />
-        <Text style={styles.backButtonText}>Retour</Text>
-      </TouchableOpacity>
-
-      <View style={styles.articleHeader}>
-        {article.icon.includes('-') ? (
-          <MaterialCommunityIcons name={article.icon as any} size={48} color={theme.colors.primary} />
-        ) : (
-          <MaterialIcons name={article.icon as any} size={48} color={theme.colors.primary} />
-        )}
-        <Text style={styles.articleDetailTitle}>{article.title}</Text>
-      </View>
-
-      <Card style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>À quoi ça sert ?</Text>
-        <Text style={styles.sectionContent}>{article.purpose}</Text>
-      </Card>
-
-      <Card style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Comment faire ?</Text>
-        {article.steps.map((step, index) => (
-          <View key={index} style={styles.stepItem}>
-            <View style={styles.stepNumber}>
-              <Text style={styles.stepNumberText}>{index + 1}</Text>
-            </View>
-            <Text style={styles.stepText}>{step}</Text>
-          </View>
-        ))}
-      </Card>
-
-      <Card style={[styles.sectionCard, styles.keyPointCard]}>
-        <Text style={styles.keyPointLabel}>À retenir</Text>
-        <Text style={styles.keyPointText}>{article.keyPoint}</Text>
-      </Card>
-
-      {article.warning && (
-        <Card style={[styles.sectionCard, styles.warningCard]}>
-          <View style={styles.warningHeader}>
-            <MaterialIcons name="warning" size={20} color={theme.colors.warning} />
-            <Text style={styles.warningLabel}>Attention</Text>
-          </View>
-          <Text style={styles.warningText}>{article.warning}</Text>
-        </Card>
-      )}
-
-      {article.relatedArticles && article.relatedArticles.length > 0 && (
-        <Card style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Articles associés</Text>
-          {article.relatedArticles.map((relatedId, index) => {
-            const related = filteredCategories
-              .flatMap(cat => cat.articles)
-              .find(a => a.id === relatedId);
-            if (!related) return null;
-            return (
-              <TouchableOpacity
-                key={index}
-                style={styles.relatedItem}
-                onPress={() => setSelectedArticle(related)}
-              >
-                <Text style={styles.relatedText}>{related.title}</Text>
-                <MaterialIcons name="chevron-right" size={16} color={theme.colors.primary} />
-              </TouchableOpacity>
-            );
-          })}
-        </Card>
-      )}
-    </ScrollView>
-  );
-
   const renderFAQItem = (item: FAQItem, index: number) => (
-    <Card key={index} style={styles.faqCard}>
+    <Card key={index} style={styles.faqCard} padding={0}>
       <TouchableOpacity onPress={() => toggleFAQ(index)} style={styles.faqHeader}>
-        <Text style={styles.faqQuestion}>{item.question}</Text>
-        <MaterialIcons 
-          name={expandedFAQ.has(index) ? "expand-less" : "expand-more"} 
-          size={24} 
-          color={theme.colors.primary} 
-        />
+        <Text style={[styles.faqQuestion, { color: theme.colors.text }]}>{item.question}</Text>
+        <MaterialIcons name={expandedFAQ.has(index) ? 'expand-less' : 'expand-more'} size={22} color={theme.colors.primary} />
       </TouchableOpacity>
       {expandedFAQ.has(index) && (
-        <View style={styles.faqAnswer}>
+        <View style={[styles.faqAnswer, { borderTopColor: theme.colors.border }]}>
           <Text style={styles.faqAnswerText}>{item.answer}</Text>
         </View>
       )}
     </Card>
   );
 
-  // Main content view
+  const SupportButton = () => (
+    <TouchableOpacity style={[styles.supportButton, { backgroundColor: theme.colors.primary }]} onPress={() => Linking.openURL('mailto:support@solferme.com')}>
+      <MaterialIcons name="support-agent" size={20} color="#1A1A1A" />
+      <Text style={styles.supportButtonText}>Contacter le support</Text>
+    </TouchableOpacity>
+  );
+
+  /* ── Vue détail d'un article ──────────────────────────────────────── */
   if (selectedArticle) {
+    const article = selectedArticle;
     return (
-      <SafeAreaView style={styles.container}>
-        {renderArticleDetail(selectedArticle)}
-      </SafeAreaView>
+      <Screen scroll width="narrow" header={<ScreenHeader title={article.title} onBack={() => setSelectedArticle(null)} />}>
+        <View style={styles.articleHero}>
+          <View style={[styles.articleHeroIcon, { backgroundColor: theme.colors.primary + '18' }]}>
+            <Icon name={article.icon} size={38} color={theme.colors.primary} />
+          </View>
+        </View>
+
+        <SectionHeader title="À quoi ça sert ?" icon="help-circle-outline" />
+        <Card style={styles.sectionCard}>
+          <Text style={styles.sectionContent}>{article.purpose}</Text>
+        </Card>
+
+        <SectionHeader title="Comment faire ?" icon="format-list-numbered" />
+        <Card style={styles.sectionCard}>
+          {article.steps.map((step, index) => (
+            <View key={index} style={[styles.stepItem, index === article.steps.length - 1 && { marginBottom: 0 }]}>
+              <View style={[styles.stepNumber, { backgroundColor: theme.colors.primary }]}>
+                <Text style={styles.stepNumberText}>{index + 1}</Text>
+              </View>
+              <Text style={styles.stepText}>{step}</Text>
+            </View>
+          ))}
+        </Card>
+
+        <Card style={[styles.sectionCard, styles.keyPointCard, { backgroundColor: theme.colors.primary + '10', borderColor: theme.colors.primary + '30' }]}>
+          <View style={styles.calloutHead}>
+            <MaterialIcons name="lightbulb-outline" size={18} color={theme.colors.primary} />
+            <Text style={[styles.keyPointLabel, { color: theme.colors.primary }]}>À retenir</Text>
+          </View>
+          <Text style={styles.keyPointText}>{article.keyPoint}</Text>
+        </Card>
+
+        {article.warning && (
+          <Card style={[styles.sectionCard, styles.warningCard, { backgroundColor: theme.colors.warning + '10', borderColor: theme.colors.warning + '30' }]}>
+            <View style={styles.calloutHead}>
+              <MaterialIcons name="warning-amber" size={18} color={theme.colors.warning} />
+              <Text style={[styles.warningLabel, { color: theme.colors.warning }]}>Attention</Text>
+            </View>
+            <Text style={styles.warningText}>{article.warning}</Text>
+          </Card>
+        )}
+
+        {article.relatedArticles && article.relatedArticles.length > 0 && (
+          <>
+            <SectionHeader title="Articles associés" icon="link-variant" />
+            <Card style={styles.sectionCard} padding={0}>
+              {article.relatedArticles.map((relatedId, index, arr) => {
+                const related = filteredCategories.flatMap(cat => cat.articles).find(a => a.id === relatedId);
+                if (!related) return null;
+                return (
+                  <TouchableOpacity
+                    key={index}
+                    style={[styles.relatedItem, { borderBottomColor: theme.colors.border }, index === arr.length - 1 && { borderBottomWidth: 0 }]}
+                    onPress={() => { animate(); setSelectedArticle(related); }}
+                  >
+                    <Text style={[styles.relatedText, { color: theme.colors.primary }]}>{related.title}</Text>
+                    <MaterialIcons name="chevron-right" size={17} color={theme.colors.primary} />
+                  </TouchableOpacity>
+                );
+              })}
+            </Card>
+          </>
+        )}
+      </Screen>
     );
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        {!isDesktop && Platform.OS !== 'web' && (
-          <TouchableOpacity onPress={() => navigation.openDrawer()}>
-            <MaterialIcons name="menu" size={24} color={theme.colors.primary} style={{marginRight: theme.spacing.m}} />
-          </TouchableOpacity>
-        )}
-        <Text style={styles.title}>{t('settings.help')}</Text>
-      </View>
+  /* ── Vue principale ───────────────────────────────────────────────── */
+  const showBack = !isDesktopOrTablet && !searchQuery.trim() && (selectedCategory || showFAQ);
 
+  const CategoryContent = () => (
+    <View>
+      <Text style={[styles.categoryContentTitle, { color: theme.colors.text }]}>
+        {filteredCategories.find(c => c.id === selectedCategory)?.title}
+      </Text>
+      {filteredCategories.find(c => c.id === selectedCategory)?.articles.map(renderArticleItem)}
+    </View>
+  );
+
+  const FAQContent = () => (
+    <View>
+      <Text style={[styles.categoryContentTitle, { color: theme.colors.text }]}>Questions fréquentes</Text>
+      {filteredFAQ.map((item, index) => renderFAQItem(item, index))}
+    </View>
+  );
+
+  const WelcomeContent = () => (
+    <View>
+      <Text style={[styles.welcomeTitle, { color: theme.colors.text }]}>Bienvenue dans le Centre d'aide</Text>
+      <Text style={styles.welcomeText}>
+        SolFerme est là pour vous aider à gérer votre exploitation avicole. Choisissez une catégorie
+        ou utilisez la recherche pour trouver ce que vous cherchez.
+      </Text>
+
+      {!isDesktopOrTablet && (
+        <View style={{ marginTop: space.md }}>
+          <SectionHeader title="Catégories" icon="shape-outline" />
+          <Card style={styles.navCard} padding={0}>
+            {filteredCategories.map(renderCategoryItem)}
+            <NavRow icon="help-circle-outline" label="FAQ" active={showFAQ} onPress={openFAQ} />
+          </Card>
+        </View>
+      )}
+
+      <SectionHeader title="Actions rapides" icon="lightning-bolt-outline" />
+      <View style={styles.quickGrid}>
+        <TouchableOpacity style={styles.quickAction} onPress={() => handleNavigateToScreen('Farms')}>
+          <View style={[styles.quickIconBox, { backgroundColor: theme.colors.primary + '16' }]}>
+            <MaterialIcons name="agriculture" size={22} color={theme.colors.primary} />
+          </View>
+          <Text style={[styles.quickActionText, { color: theme.colors.text }]}>Gérer mes fermes</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickAction} onPress={() => handleNavigateToScreen('Dashboard')}>
+          <View style={[styles.quickIconBox, { backgroundColor: theme.colors.primary + '16' }]}>
+            <MaterialIcons name="dashboard" size={22} color={theme.colors.primary} />
+          </View>
+          <Text style={[styles.quickActionText, { color: theme.colors.text }]}>Tableau de bord</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.quickAction} onPress={() => handleNavigateToScreen('Finance')}>
+          <View style={[styles.quickIconBox, { backgroundColor: theme.colors.primary + '16' }]}>
+            <MaterialIcons name="account-balance-wallet" size={22} color={theme.colors.primary} />
+          </View>
+          <Text style={[styles.quickActionText, { color: theme.colors.text }]}>Finances</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  return (
+    <Screen
+      scroll={false}
+      header={<ScreenHeader title={t('settings.help')} large onMenu={Platform.OS !== 'web' ? () => navigation.openDrawer() : undefined} />}
+    >
       <View style={styles.searchContainer}>
-        <View style={styles.searchInputWrapper}>
-          <MaterialIcons name="search" size={20} color={theme.colors.textSecondary} style={styles.searchIcon} />
+        <View style={[styles.searchInputWrapper, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>
+          <MaterialIcons name="search" size={19} color={theme.colors.textSecondary} style={{ marginRight: 8 }} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: theme.colors.text }]}
             placeholder="Rechercher..."
             placeholderTextColor={theme.colors.textSecondary}
             value={searchQuery}
-            onChangeText={setSearchQuery}
+            onChangeText={(v) => { setSearchQuery(v); if (v.trim()) { setSelectedCategory(null); setShowFAQ(false); } }}
           />
           {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <MaterialIcons name="close" size={20} color={theme.colors.textSecondary} />
+            <TouchableOpacity onPress={() => setSearchQuery('')} hitSlop={8}>
+              <MaterialIcons name="close" size={19} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           )}
         </View>
       </View>
 
       {searchQuery.trim() ? (
-        // Search results view
-        <ScrollView style={styles.content}>
-          <Text style={styles.sectionLabel}>Résultats de recherche</Text>
-          
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollPad}>
+          <SectionHeader title="Résultats de recherche" icon="magnify" />
           {searchResults.length > 0 && (
             <>
-              <Text style={styles.subsectionLabel}>Articles</Text>
+              <Text style={[styles.subsectionLabel, { color: theme.colors.primary }]}>Articles</Text>
               {searchResults.map(({ article, category }) => (
-                <TouchableOpacity key={article.id} style={styles.searchResultItem} onPress={() => setSelectedArticle(article)}>
-                  <Text style={styles.searchResultCategory}>{category}</Text>
-                  <Text style={styles.searchResultTitle}>{article.title}</Text>
+                <TouchableOpacity key={article.id} style={styles.searchResultItem} onPress={() => { animate(); setSelectedArticle(article); }}>
+                  <Text style={[styles.searchResultCategory, { color: theme.colors.primary }]}>{category}</Text>
+                  <Text style={[styles.searchResultTitle, { color: theme.colors.text }]}>{article.title}</Text>
                   <Text style={styles.searchResultExcerpt} numberOfLines={2}>{article.purpose}</Text>
                 </TouchableOpacity>
               ))}
             </>
           )}
-
           {filteredFAQ.length > 0 && (
             <>
-              <Text style={styles.subsectionLabel}>FAQ</Text>
+              <Text style={[styles.subsectionLabel, { color: theme.colors.primary }]}>FAQ</Text>
               {filteredFAQ.map((item, index) => renderFAQItem(item, index))}
             </>
           )}
-
           {searchResults.length === 0 && filteredFAQ.length === 0 && (
-            <Card style={styles.noResultsCard}>
-              <Text style={styles.noResultsText}>Aucun résultat pour "{searchQuery}"</Text>
-            </Card>
+            <EmptyState icon="magnify-close" title={`Aucun résultat pour « ${searchQuery} »`} />
           )}
+          <SupportButton />
         </ScrollView>
-      ) : (
-        // Normal view with categories
-        <View style={styles.mainContent}>
-          {/* Categories sidebar for Desktop/Tablet */}
-          {(isDesktopOrTablet) && (
-            <ScrollView style={styles.categoriesSidebar}>
-              <TouchableOpacity
-                style={[styles.categoryItem, !selectedCategory && !showFAQ && styles.categoryItemSelected]}
-                onPress={() => {
-                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                  setSelectedCategory(null);
-                  setShowFAQ(false);
-                }}
-              >
-                <MaterialIcons name="home" size={20} color={!selectedCategory && !showFAQ ? theme.colors.primary : theme.colors.text} style={{marginRight: theme.spacing.m}} />
-                <Text style={[styles.categoryTitle, !selectedCategory && !showFAQ && styles.categoryTitleSelected]}>
-                  Accueil
-                </Text>
-              </TouchableOpacity>
-              
-              {filteredCategories.map(renderCategoryItem)}
-              
-              <TouchableOpacity
-                style={[styles.categoryItem, showFAQ && styles.categoryItemSelected]}
-                onPress={() => {
-                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                  setSelectedCategory(null);
-                  setShowFAQ(true);
-                }}
-              >
-                <MaterialIcons name="help" size={20} color={showFAQ ? theme.colors.primary : theme.colors.text} style={{marginRight: theme.spacing.m}} />
-                <Text style={[styles.categoryTitle, showFAQ && styles.categoryTitleSelected]}>
-                  FAQ
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-          )}
+      ) : isDesktopOrTablet ? (
+        <View style={styles.splitRow}>
+          <ScrollView style={[styles.sidebar, { width: isDesktop ? 260 : 220, backgroundColor: theme.colors.surface, borderRightColor: theme.colors.border }]} contentContainerStyle={{ padding: space.sm }}>
+            <NavRow icon="home-variant-outline" label="Accueil" active={!selectedCategory && !showFAQ} onPress={goHome} />
+            <View style={{ height: space.xs }} />
+            {filteredCategories.map(renderCategoryItem)}
+            <View style={{ height: space.xs }} />
+            <NavRow icon="help-circle-outline" label="FAQ" active={showFAQ} onPress={openFAQ} />
+          </ScrollView>
 
-          {/* Main content area */}
-          <ScrollView style={styles.contentArea}>
-            {!selectedCategory && !showFAQ && (
-              <View style={styles.welcomeSection}>
-                <Text style={styles.welcomeTitle}>Bienvenue dans le Centre d'aide</Text>
-                <Text style={styles.welcomeText}>
-                  SolFerme est là pour vous aider à gérer votre exploitation avicole.
-                  Sélectionnez une catégorie ci-à-dessus ou utilisez la recherche pour trouver ce que vous cherchez.
-                </Text>
-                
-                {!isDesktopOrTablet && (
-                  <View style={styles.mobileCategories}>
-                    <Text style={styles.sectionLabel}>Catégories</Text>
-                    {filteredCategories.map(renderCategoryItem)}
-                    
-                    <TouchableOpacity
-                      style={[styles.categoryItem, showFAQ && styles.categoryItemSelected]}
-                      onPress={() => {
-                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                        setShowFAQ(true);
-                      }}
-                    >
-                      <MaterialIcons name="help" size={20} color={showFAQ ? theme.colors.primary : theme.colors.text} style={{marginRight: theme.spacing.m}} />
-                      <Text style={[styles.categoryTitle, showFAQ && styles.categoryTitleSelected]}>
-                        FAQ
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                <Card style={styles.quickActionsCard}>
-                  <Text style={styles.quickActionsTitle}>Actions rapides</Text>
-                  <TouchableOpacity style={styles.quickActionButton} onPress={() => handleNavigateToScreen('Farms')}>
-                    <MaterialIcons name="agriculture" size={24} color={theme.colors.primary} />
-                    <Text style={styles.quickActionText}>Gérer mes fermes</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.quickActionButton} onPress={() => handleNavigateToScreen('Dashboard')}>
-                    <MaterialIcons name="dashboard" size={24} color={theme.colors.primary} />
-                    <Text style={styles.quickActionText}>Voir le tableau de bord</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.quickActionButton} onPress={() => handleNavigateToScreen('Finance')}>
-                    <MaterialIcons name="account-balance-wallet" size={24} color={theme.colors.primary} />
-                    <Text style={styles.quickActionText}>Consulter les finances</Text>
-                  </TouchableOpacity>
-                </Card>
-              </View>
-            )}
-
-            {selectedCategory && (
-              <View style={styles.categoryContent}>
-                <Text style={styles.categoryContentTitle}>
-                  {filteredCategories.find(c => c.id === selectedCategory)?.title}
-                </Text>
-                {filteredCategories
-                  .find(c => c.id === selectedCategory)
-                  ?.articles.map(renderArticleItem)}
-              </View>
-            )}
-
-            {showFAQ && (
-              <View style={styles.faqSection}>
-                <Text style={styles.categoryContentTitle}>Questions Fréquentes</Text>
-                {filteredFAQ.map((item, index) => renderFAQItem(item, index))}
-              </View>
-            )}
+          <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollPad}>
+            {!selectedCategory && !showFAQ && <WelcomeContent />}
+            {selectedCategory && <CategoryContent />}
+            {showFAQ && <FAQContent />}
+            <SupportButton />
           </ScrollView>
         </View>
+      ) : (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollPad}>
+          {showBack && (
+            <TouchableOpacity style={styles.mobileBackRow} onPress={goHome}>
+              <MaterialIcons name="arrow-back" size={20} color={theme.colors.primary} />
+              <Text style={[styles.mobileBackText, { color: theme.colors.primary }]}>{t('common.back') || 'Retour'}</Text>
+            </TouchableOpacity>
+          )}
+          {!selectedCategory && !showFAQ && <WelcomeContent />}
+          {selectedCategory && <CategoryContent />}
+          {showFAQ && <FAQContent />}
+          <SupportButton />
+        </ScrollView>
       )}
-
-      <View style={styles.supportSection}>
-        <TouchableOpacity style={styles.supportButton} onPress={() => Linking.openURL('mailto:support@solferme.com')}>
-          <MaterialIcons name="email" size={20} color="#000000" style={{marginRight: 8}} />
-          <Text style={styles.supportButtonText}>Contacter le support</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false, isTablet: boolean = false, isDesktopOrTablet: boolean = false) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { flexDirection: 'row', alignItems: 'center', padding: theme.spacing.m },
-  title: { fontSize: 24, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
-  
+const createStyles = (theme: any) => StyleSheet.create({
   // Search
-  searchContainer: { paddingHorizontal: theme.spacing.m, paddingBottom: theme.spacing.m },
+  searchContainer: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.sm },
   searchInputWrapper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.l,
-    paddingHorizontal: theme.spacing.m,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    height: 46,
   },
-  searchIcon: { marginRight: theme.spacing.s },
-  searchInput: {
-    flex: 1,
-    paddingVertical: theme.spacing.m,
-    fontSize: 16,
-    color: theme.colors.text,
-  },
-  
-  // Main layout
-  mainContent: {
-    flex: 1,
-    flexDirection: isDesktopOrTablet ? 'row' : 'column',
-  },
-  
-  // Categories sidebar
-  categoriesSidebar: {
-    width: isDesktop ? 280 : 200,
-    backgroundColor: theme.colors.surface,
-    borderRightWidth: 1,
-    borderRightColor: theme.colors.border,
-  },
-  
-  // Category items
-  categoryItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border + '30',
-  },
-  categoryItemSelected: {
-    backgroundColor: theme.colors.primary + '15',
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.primary,
-  },
-  categoryIcon: { marginRight: theme.spacing.m },
-  categoryTitle: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.text,
-  },
-  categoryTitleSelected: {
-    color: theme.colors.primary,
-    fontWeight: '700',
-  },
-  
-  // Content area
-  contentArea: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    padding: theme.spacing.m,
-  },
-  
-  // Welcome section
-  welcomeSection: {
-    padding: theme.spacing.m,
-  },
-  welcomeTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.m,
-  },
-  welcomeText: {
-    fontSize: 15,
-    color: theme.colors.textSecondary,
-    lineHeight: 22,
-    marginBottom: theme.spacing.xl,
-  },
-  
-  // Mobile categories
-  mobileCategories: {
-    marginTop: theme.spacing.l,
-  },
-  
+  searchInput: { flex: 1, fontSize: 15, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : null) },
+  scrollPad: { padding: space.md, paddingBottom: space.xxl },
+
+  // Split desktop layout
+  splitRow: { flex: 1, flexDirection: 'row' },
+  sidebar: { borderRightWidth: StyleSheet.hairlineWidth },
+
+  // Nav rows (catégories / FAQ)
+  navCard: { borderRadius: radius.lg, overflow: 'hidden', marginBottom: space.md },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11, paddingHorizontal: 10, borderRadius: radius.sm, marginBottom: 2 },
+  navIconBox: { width: 32, height: 32, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  navLabel: { flex: 1, fontSize: 14, fontWeight: '600' },
+
+  // Welcome
+  welcomeTitle: { fontSize: 20, fontWeight: '800', marginBottom: 8 },
+  welcomeText: { fontSize: 14, color: theme.colors.textSecondary, lineHeight: 21 },
+
   // Quick actions
-  quickActionsCard: {
-    marginTop: theme.spacing.l,
-    padding: theme.spacing.m,
+  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginBottom: space.md },
+  quickAction: {
+    flexGrow: 1, flexBasis: 150, minWidth: 0, alignItems: 'center', gap: 8,
+    backgroundColor: theme.colors.surface, borderRadius: radius.lg, paddingVertical: space.md,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border, ...(shadow.xs as any),
   },
-  quickActionsTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.m,
-  },
-  quickActionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    backgroundColor: theme.colors.background,
-    borderRadius: theme.borderRadius.m,
-    marginBottom: theme.spacing.s,
-  },
-  quickActionText: {
-    marginLeft: theme.spacing.m,
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.text,
-  },
-  
+  quickIconBox: { width: 42, height: 42, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  quickActionText: { fontSize: 12.5, fontWeight: '700', textAlign: 'center' },
+
   // Category content
-  categoryContent: {
-    padding: theme.spacing.m,
-  },
-  categoryContentTitle: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.m,
-  },
-  
-  // Article items
+  categoryContentTitle: { fontSize: 18, fontWeight: '800', marginBottom: space.sm },
+
+  // Articles
   articleItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.m,
-    marginBottom: theme.spacing.s,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md,
+    backgroundColor: theme.colors.surface, borderRadius: radius.md, marginBottom: space.xs,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
   },
-  articleIcon: { marginRight: theme.spacing.m },
-  articleTextContainer: { flex: 1 },
-  articleTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 4,
-  },
-  articlePurpose: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-  },
-  
+  articleIconBox: { width: 44, height: 44, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  articleTitle: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
+  articlePurpose: { fontSize: 12.5, color: theme.colors.textSecondary, lineHeight: 17 },
+
   // FAQ
-  faqSection: {
-    padding: theme.spacing.m,
-  },
-  faqCard: {
-    marginBottom: theme.spacing.s,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  faqHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: theme.spacing.m,
-  },
-  faqQuestion: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.text,
-    marginRight: theme.spacing.m,
-  },
-  faqAnswer: {
-    padding: theme.spacing.m,
-    paddingTop: 0,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-  },
-  faqAnswerText: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    lineHeight: 20,
-  },
-  
+  faqCard: { marginBottom: space.xs, borderRadius: radius.md, overflow: 'hidden' },
+  faqHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: space.md, gap: space.sm },
+  faqQuestion: { flex: 1, fontSize: 14, fontWeight: '700' },
+  faqAnswer: { padding: space.md, paddingTop: 0, borderTopWidth: StyleSheet.hairlineWidth },
+  faqAnswerText: { fontSize: 13.5, color: theme.colors.textSecondary, lineHeight: 20 },
+
   // Search results
-  sectionLabel: {
-    fontSize: 16,
-    fontWeight: '900',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.m,
-    textTransform: 'uppercase',
-  },
-  subsectionLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: theme.colors.primary,
-    marginTop: theme.spacing.l,
-    marginBottom: theme.spacing.m,
-  },
+  subsectionLabel: { fontSize: 12.5, fontWeight: '800', marginTop: space.md, marginBottom: space.sm, textTransform: 'uppercase', letterSpacing: 0.4 },
   searchResultItem: {
-    padding: theme.spacing.m,
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.m,
-    marginBottom: theme.spacing.s,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    padding: space.md, backgroundColor: theme.colors.surface, borderRadius: radius.md, marginBottom: space.xs,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: theme.colors.border,
   },
-  searchResultCategory: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: theme.colors.primary,
-    marginBottom: 4,
-  },
-  searchResultTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: 4,
-  },
-  searchResultExcerpt: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-  },
-  noResultsCard: {
-    padding: theme.spacing.xl,
-    alignItems: 'center',
-  },
-  noResultsText: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-  },
-  
+  searchResultCategory: { fontSize: 11, fontWeight: '800', marginBottom: 3, textTransform: 'uppercase', letterSpacing: 0.3 },
+  searchResultTitle: { fontSize: 14.5, fontWeight: '700', marginBottom: 3 },
+  searchResultExcerpt: { fontSize: 12.5, color: theme.colors.textSecondary },
+
+  // Mobile back
+  mobileBackRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: space.sm },
+  mobileBackText: { fontSize: 14.5, fontWeight: '700' },
+
   // Article detail
-  articleDetail: {
-    flex: 1,
-    padding: theme.spacing.m,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.l,
-  },
-  backButtonText: {
-    marginLeft: theme.spacing.s,
-    fontSize: 16,
-    fontWeight: '600',
-    color: theme.colors.primary,
-  },
-  articleHeader: {
-    alignItems: 'center',
-    marginBottom: theme.spacing.l,
-  },
-  articleDetailIcon: {
-    marginBottom: theme.spacing.m,
-  },
-  articleDetailTitle: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: theme.colors.text,
-    textAlign: 'center',
-  },
-  sectionCard: {
-    padding: theme.spacing.m,
-    marginBottom: theme.spacing.m,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: theme.colors.text,
-    marginBottom: theme.spacing.m,
-  },
-  sectionContent: {
-    fontSize: 14,
-    color: theme.colors.text,
-    lineHeight: 22,
-  },
-  stepItem: {
-    flexDirection: 'row',
-    marginBottom: theme.spacing.m,
-  },
-  stepNumber: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  stepNumberText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#000000',
-  },
-  stepText: {
-    flex: 1,
-    fontSize: 14,
-    color: theme.colors.text,
-    lineHeight: 20,
-  },
-  keyPointCard: {
-    backgroundColor: theme.colors.primary + '10',
-    borderWidth: 1,
-    borderColor: theme.colors.primary + '30',
-  },
-  keyPointLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: theme.colors.primary,
-    marginBottom: theme.spacing.s,
-  },
-  keyPointText: {
-    fontSize: 14,
-    color: theme.colors.text,
-    lineHeight: 20,
-  },
-  warningCard: {
-    backgroundColor: theme.colors.warning + '10',
-    borderWidth: 1,
-    borderColor: theme.colors.warning + '30',
-  },
-  warningHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: theme.spacing.s,
-  },
-  warningLabel: {
-    marginLeft: theme.spacing.s,
-    fontSize: 14,
-    fontWeight: '700',
-    color: theme.colors.warning,
-  },
-  warningText: {
-    fontSize: 14,
-    color: theme.colors.text,
-    lineHeight: 20,
-  },
-  relatedItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: theme.spacing.s,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border + '30',
-  },
-  relatedText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: theme.colors.primary,
-  },
-  
-  // Support section
-  supportSection: {
-    padding: theme.spacing.m,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-  },
+  articleHero: { alignItems: 'center', marginBottom: space.md },
+  articleHeroIcon: { width: 84, height: 84, borderRadius: radius.xl, alignItems: 'center', justifyContent: 'center' },
+  sectionCard: { marginBottom: space.md, borderRadius: radius.lg },
+  sectionContent: { fontSize: 14, color: theme.colors.text, lineHeight: 21 },
+  stepItem: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm, marginBottom: space.sm },
+  stepNumber: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  stepNumberText: { fontSize: 12, fontWeight: '800', color: '#1A1A1A' },
+  stepText: { flex: 1, fontSize: 14, color: theme.colors.text, lineHeight: 20 },
+  calloutHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 8 },
+  keyPointCard: { borderWidth: 1 },
+  keyPointLabel: { fontSize: 13.5, fontWeight: '800' },
+  keyPointText: { fontSize: 13.5, color: theme.colors.text, lineHeight: 20 },
+  warningCard: { borderWidth: 1 },
+  warningLabel: { fontSize: 13.5, fontWeight: '800' },
+  warningText: { fontSize: 13.5, color: theme.colors.text, lineHeight: 20 },
+  relatedItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: space.md, borderBottomWidth: StyleSheet.hairlineWidth },
+  relatedText: { fontSize: 14, fontWeight: '700' },
+
+  // Support
   supportButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: theme.colors.primary,
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 1,
-    borderColor: '#000000',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    padding: space.md, borderRadius: radius.lg, marginTop: space.sm,
   },
-  supportButtonText: {
-    color: '#000000',
-    fontWeight: '900',
-    fontSize: 16,
-  },
+  supportButtonText: { color: '#1A1A1A', fontWeight: '800', fontSize: 15 },
 });

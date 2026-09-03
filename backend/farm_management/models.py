@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.utils import timezone
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 
 class UserManager(BaseUserManager):
@@ -40,6 +40,16 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['name']
+
+    def clean(self):
+        super().clean()
+        if self.is_superuser:
+            existing = User.objects.filter(is_superuser=True)
+            if self.pk:
+                existing = existing.exclude(pk=self.pk)
+            if existing.exists():
+                from django.core.exceptions import ValidationError
+                raise ValidationError({'is_superuser': "Il ne peut exister qu'un seul compte SuperAdmin dans SolFerme."})
 
     def __str__(self):
         return f"{self.name} ({self.email})"
@@ -323,6 +333,27 @@ class Reminder(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='reminders_created')
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
+    # Notification push "rappel dû" déjà envoyée (évite les envois répétés par le
+    # job planifié). Réinitialisé quand la date d'échéance change (voir signal).
+    push_sent = models.BooleanField(default=False)
+
+
+class DeviceToken(models.Model):
+    """Jeton de notification push d'un appareil (Expo Push Token).
+    Un utilisateur peut avoir plusieurs appareils. Les jetons morts sont
+    supprimés automatiquement lors de l'envoi (réponse « DeviceNotRegistered »)."""
+    PLATFORMS = (('android', 'Android'), ('ios', 'iOS'), ('web', 'Web'))
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='device_tokens')
+    token = models.CharField(max_length=200, unique=True)
+    platform = models.CharField(max_length=10, choices=PLATFORMS, default='android')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f"{self.user.email} · {self.platform}"
 
 class ActivityLog(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='activity_logs')
@@ -552,10 +583,22 @@ class HealthAlert(models.Model):
 
 class PasswordResetCode(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_codes')
-    code = models.CharField(max_length=6)
+    # Le code est HACHÉ au repos (comme un mot de passe) — jamais stocké en clair.
+    code = models.CharField(max_length=128)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     is_used = models.BooleanField(default=False)
+    attempts = models.PositiveSmallIntegerField(default=0)
+
+    MAX_ATTEMPTS = 5
+
+    def set_code(self, raw_code):
+        from django.contrib.auth.hashers import make_password
+        self.code = make_password(raw_code)
+
+    def check_code(self, raw_code):
+        from django.contrib.auth.hashers import check_password
+        return check_password(raw_code, self.code)
 
     def is_expired(self):
         return timezone.now() > self.expires_at
@@ -644,3 +687,79 @@ def handle_sale_payment_change(sender, instance, **kwargs):
             
         # Avoid recursion if saving Sale triggers anything, though currently it doesn't
         sale.save(update_fields=['amount_paid', 'payment_status', 'updated_at'])
+
+class AdminAuditLog(models.Model):
+    admin_user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='admin_audit_logs')
+    action = models.CharField(max_length=255) # e.g., 'ACTIVATION_COMPTE', 'DESACTIVATION_COMPTE'
+    target_type = models.CharField(max_length=100) # e.g., 'USER', 'FARM'
+    target_id = models.CharField(max_length=255)
+    details = models.JSONField(blank=True, null=True)
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            # Recherche d'audit efficace : liste récente + logs d'un admin donné.
+            # (Pas d'index sur `action` seul : varchar(255) dépasse la limite de
+            #  longueur de clé sur certaines configs MySQL ; le filtre `action`
+            #  reste résiduel et peu coûteux sur les lignes d'un admin.)
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['admin_user', '-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.admin_user} - {self.action} on {self.target_type} ({self.target_id})"
+
+
+@receiver(pre_save, sender=User)
+def enforce_single_superuser(sender, instance, **kwargs):
+    if instance.is_superuser:
+        existing_superusers = User.objects.filter(is_superuser=True)
+        if instance.pk:
+            existing_superusers = existing_superusers.exclude(pk=instance.pk)
+        if existing_superusers.exists():
+            from django.core.exceptions import ValidationError
+            raise ValidationError("Il ne peut exister qu'un seul compte SuperAdmin dans SolFerme.")
+
+
+class ContactMessage(models.Model):
+    """Message envoyé depuis le formulaire de contact du site vitrine web."""
+    name = models.CharField(max_length=120)
+    email = models.EmailField()
+    subject = models.CharField(max_length=200, blank=True)
+    message = models.TextField()
+    ip_address = models.GenericIPAddressField(blank=True, null=True)
+    is_handled = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} <{self.email}> — {self.created_at:%Y-%m-%d}"
+
+
+class SyncIdempotencyKey(models.Model):
+    """
+    Garantit qu'une création rejouée par la synchronisation offline ne produit
+    pas de doublon. Le client génère un `client_uuid` stable au moment où il crée
+    l'enregistrement localement et l'envoie avec CHAQUE tentative de POST. Si le
+    réseau coupe après que le serveur a traité la requête mais avant que la
+    réponse n'arrive, le client rejoue le POST : le serveur retrouve alors la clé
+    et renvoie l'objet déjà créé au lieu d'en créer un second.
+    """
+    client_uuid = models.CharField(max_length=64, unique=True, db_index=True)
+    resource = models.CharField(max_length=64)
+    object_id = models.PositiveIntegerField()
+    user = models.ForeignKey(User, on_delete=models.CASCADE, null=True, blank=True, related_name='sync_idempotency_keys')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['resource', 'object_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.resource}#{self.object_id} ({self.client_uuid})"
+

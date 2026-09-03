@@ -8,6 +8,7 @@ from .models import (
     Task, ActivityLog, FeedInventory, HealthInventory, FeedPurchase,
     HealthPurchase, HealthAlert, FeedPreparation, FeedPreparationIngredient,
     PreparedFeedInventory, Bonus, EmployeeRequest, LotExpense, EggConversion,
+    ContactMessage,
     compute_period_key, compute_period_label
 )
 
@@ -159,28 +160,33 @@ def validate_prepared_feed_integrity(lot, feed_name, exclude_id=None, mock_item=
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
-        try:
-            return super().validate(attrs)
-        except Exception:
-            email = attrs.get("email")
+        email = attrs.get('email') or attrs.get('username')
+        password = attrs.get('password')
+        
+        # Vérifier d'abord si l'utilisateur existe et s'il est inactif
+        if email:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
             user = User.objects.filter(email=email).first()
-            if not user:
-                raise serializers.ValidationError({
-                    "detail": "Aucun compte trouvé avec cette adresse email."
-                })
-            if not user.is_active:
-                raise serializers.ValidationError({
-                    "detail": "Ce compte est désactivé. Veuillez contacter l'administrateur."
-                })
-            raise serializers.ValidationError({
-                "detail": "Mot de passe incorrect. Veuillez réessayer."
-            })
+            if user and user.check_password(password):
+                if user.is_superuser:
+                    # Obfuscation pour le SuperAdmin
+                    raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
+                if not user.is_active:
+                    raise serializers.ValidationError({"detail": "Ce compte est désactivé. Veuillez contacter l'administrateur."})
+
+        try:
+            data = super().validate(attrs)
+            return data
+        except Exception:
+            raise serializers.ValidationError({"detail": "Email ou mot de passe incorrect."})
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'name', 'email', 'phone', 'address', 'profile_image', 'role', 'created_at', 'updated_at', 'password']
+        fields = ['id', 'name', 'email', 'phone', 'address', 'profile_image', 'role', 'created_at', 'updated_at', 'password', 'is_superuser']
         extra_kwargs = {'password': {'write_only': True}}
+        read_only_fields = ['is_superuser', 'is_staff']
 
     def validate_role(self, value):
         user = self.context.get('request').user
@@ -192,20 +198,27 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
     def validate_password(self, value):
-        if len(value) < 8:
-            raise serializers.ValidationError("Le mot de passe doit contenir au moins 8 caractères.")
-        if not re.search(r'[A-Z]', value):
-            raise serializers.ValidationError("Le mot de passe doit contenir au moins une lettre majuscule.")
-        if not re.search(r'[a-z]', value):
-            raise serializers.ValidationError("Le mot de passe doit contenir au moins une lettre minuscule.")
-        if not re.search(r'[0-9]', value):
-            raise serializers.ValidationError("Le mot de passe doit contenir au moins un chiffre.")
-        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', value):
-            raise serializers.ValidationError("Le mot de passe doit contenir au moins un caractère spécial.")
-        return value
+        from .password_utils import validate_password_strength
+        return validate_password_strength(value, user=self.instance)
 
     def create(self, validated_data):
         return User.objects.create_user(**validated_data)
+
+    def update(self, instance, validated_data):
+        # DRF's default ModelSerializer.update() fait un simple `setattr` sur
+        # chaque champ, ce qui écrirait le mot de passe EN CLAIR dans la base
+        # (`instance.password = "..."`) au lieu de le hasher. Cela cassait
+        # aussi la connexion : la valeur stockée n'étant plus un hash Django
+        # valide, `check_password()` échoue systématiquement ensuite.
+        # On sort donc le mot de passe du lot commun pour le hasher via
+        # `set_password()`, quel que soit l'appelant (le propriétaire modifiant
+        # un employé, un utilisateur modifiant son propre profil, etc.).
+        password = validated_data.pop('password', None)
+        instance = super().update(instance, validated_data)
+        if password:
+            instance.set_password(password)
+            instance.save(update_fields=['password'])
+        return instance
 
 class FarmSerializer(serializers.ModelSerializer):
     has_data = serializers.SerializerMethodField()
@@ -993,3 +1006,23 @@ class BonusSerializer(serializers.ModelSerializer):
         model = Bonus
         fields = '__all__'
         read_only_fields = ['created_by', 'created_at']
+
+
+class ContactMessageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ContactMessage
+        fields = ['name', 'email', 'subject', 'message']
+
+    def validate_name(self, v):
+        v = (v or '').strip()
+        if len(v) < 2:
+            raise serializers.ValidationError("Veuillez indiquer votre nom.")
+        return v
+
+    def validate_message(self, v):
+        v = (v or '').strip()
+        if len(v) < 10:
+            raise serializers.ValidationError("Votre message doit contenir au moins 10 caractères.")
+        if len(v) > 5000:
+            raise serializers.ValidationError("Votre message est trop long (5000 caractères maximum).")
+        return v

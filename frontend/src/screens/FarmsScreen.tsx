@@ -1,40 +1,36 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, SafeAreaView, ActivityIndicator, RefreshControl, useWindowDimensions, Platform } from 'react-native';
-import { Card } from '../components/Card';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, RefreshControl } from 'react-native';
+import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { repositoryProvider } from '../repositories';
-import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { EmptyState } from '../components/EmptyState';
 import { useAutoRefreshData } from '../hooks/useDataChange';
-
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { toast } from '../utils/toast';
+import { Screen, ScreenHeader, useContentWidth, Card, Badge, EmptyState, radius, space, shadow } from '../components/ui';
 
 export const FarmsScreen = ({ navigation }: any) => {
-  const [farms, setFarms] = useState([]);
+  const [farms, setFarms] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [includeArchived, setIncludeArchived] = useState(false);
   const { userRole } = useAuth();
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const { isDesktop, isTablet, width } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop, isTablet), [theme, isDesktop, isTablet]);
-
-  const numColumns = isDesktop ? 3 : (isTablet ? 2 : 1);
-
-  const [includeArchived, setIncludeArchived] = useState(false);
+  const { isDesktop, isTablet } = useBreakpoint();
+  const isEmployee = userRole === 'EMPLOYE';
+  const numColumns = isDesktop ? 3 : isTablet ? 2 : 1;
+  const contentW = useContentWidth('wide');
+  const S = useMemo(() => createStyles(theme), [theme]);
 
   const fetchFarms = async () => {
     setLoading(true);
     try {
       const response = await repositoryProvider.api.get('/farms/', {
-        params: { status: includeArchived ? 'ARCHIVE' : 'ACTIF' }
+        params: { status: includeArchived ? 'ARCHIVE' : 'ACTIF' },
       });
-      const farmList = Array.isArray(response.data) ? response.data : response.data?.results || [];
-      setFarms(farmList);
+      setFarms(Array.isArray(response.data) ? response.data : response.data?.results || []);
     } catch (error) {
       console.log('Erreur fetch farms:', error);
     } finally {
@@ -44,15 +40,9 @@ export const FarmsScreen = ({ navigation }: any) => {
   };
 
   useAutoRefreshData(['farms'], fetchFarms, 150);
+  useEffect(() => { fetchFarms(); }, [includeArchived]);
 
-  useEffect(() => {
-    fetchFarms();
-  }, [includeArchived]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchFarms();
-  };
+  const onRefresh = () => { setRefreshing(true); fetchFarms(); };
 
   const handleReactivate = async (farm: any) => {
     try {
@@ -64,265 +54,103 @@ export const FarmsScreen = ({ navigation }: any) => {
     }
   };
 
-  const renderItem = ({ item }: { item: any }) => (
-    <View style={isTablet ? styles.tabletCardContainer : null}>
-      <Card style={[styles.farmCard, item.status === 'ARCHIVE' && styles.archivedCard]}>
-        <TouchableOpacity
-          onPress={() => navigation.navigate('FarmDetail', { farmId: item.id, farmName: item.name })}
-          activeOpacity={0.7}
-          style={styles.cardHeader}
-        >
-          <View style={styles.iconContainer}>
-            <MaterialCommunityIcons
-              name={item.status === 'ARCHIVE' ? "archive" : "egg"}
-              size={28}
-              color={item.status === 'ARCHIVE' ? theme.colors.textSecondary : theme.colors.primary}
-            />
-          </View>
-          <View style={styles.cardInfo}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Text style={styles.farmName} numberOfLines={1}>{item.name}</Text>
-              {item.status === 'ARCHIVE' && (
-                <View style={styles.archiveBadge}>
-                  <Text style={styles.archiveBadgeText}>{t('profile.inactive')}</Text>
-                </View>
-              )}
+  const renderItem = ({ item }: { item: any }) => {
+    const archived = item.status === 'ARCHIVE';
+    return (
+      <View style={numColumns > 1 ? { flex: 1 / numColumns } : undefined}>
+        <Card style={[S.card, archived && { opacity: 0.72 }]} padding={0}>
+          <Pressable
+            onPress={() => navigation.navigate('FarmDetail', { farmId: item.id, farmName: item.name })}
+            style={({ hovered }: any) => [S.cardInner, hovered && { backgroundColor: theme.colors.border + '22' }]}
+          >
+            <View style={[S.iconBox, { backgroundColor: (archived ? theme.colors.textSecondary : theme.colors.primary) + '1F' }]}>
+              <MaterialCommunityIcons
+                name={archived ? 'archive-outline' : 'home-group'}
+                size={24}
+                color={archived ? theme.colors.textSecondary : theme.colors.primary}
+              />
             </View>
-            <View style={styles.locationRow}>
-              <MaterialIcons name="location-on" size={14} color={theme.colors.textSecondary} />
-              <Text style={styles.farmLocation} numberOfLines={1}>{item.location || t('common.noData')}</Text>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <View style={S.nameRow}>
+                <Text style={S.name} numberOfLines={1}>{item.name}</Text>
+                {archived && <Badge label={t('profile.inactive')} color={theme.colors.textSecondary} />}
+              </View>
+              <View style={S.metaRow}>
+                <MaterialIcons name="location-on" size={13} color={theme.colors.textSecondary} />
+                <Text style={S.meta} numberOfLines={1}>{item.location || t('common.noData')}</Text>
+              </View>
             </View>
-          </View>
 
-          {item.status === 'ARCHIVE' && userRole !== 'EMPLOYE' && Platform.OS === 'web' ? (
-            <TouchableOpacity
-              style={styles.reactivateBtn}
-              onPress={() => handleReactivate(item)}
-              accessibilityLabel={t('common.reactivate')}
-            >
-              <MaterialIcons name="unarchive" size={20} color={theme.colors.success} />
-            </TouchableOpacity>
-          ) : userRole !== 'EMPLOYE' ? (
-            <TouchableOpacity
-              style={styles.editBtn}
-              onPress={() => navigation.navigate('CreateFarm', { farm: item })}
-            >
-              <MaterialIcons name="edit" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-          ) : (
-            <MaterialIcons name="chevron-right" size={24} color={theme.colors.textSecondary} />
-          )}
-        </TouchableOpacity>
-      </Card>
-    </View>
-  );
+            {!isEmployee && archived ? (
+              <Pressable onPress={() => handleReactivate(item)} hitSlop={8} style={S.actBtn} accessibilityLabel={t('common.reactivate')}>
+                <MaterialIcons name="unarchive" size={20} color={theme.colors.success} />
+              </Pressable>
+            ) : !isEmployee ? (
+              <Pressable onPress={() => navigation.navigate('CreateFarm', { farm: item })} hitSlop={8} style={S.actBtn}>
+                <MaterialIcons name="edit" size={18} color={theme.colors.textSecondary} />
+              </Pressable>
+            ) : (
+              <MaterialIcons name="chevron-right" size={22} color={theme.colors.textSecondary} />
+            )}
+          </Pressable>
+        </Card>
+      </View>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.title}>{userRole === 'EMPLOYE' ? t('profile.myFarm') : t('farms.all')}</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {userRole === 'EMPLOYE' ? t('settings.guides.employee.lots.content') : t('farms.illustrationText')}
-          </Text>
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          {userRole !== 'EMPLOYE' && (
-            <TouchableOpacity
-              style={[styles.filterBtn, includeArchived && styles.filterBtnActive]}
-              onPress={() => setIncludeArchived(!includeArchived)}
-            >
-              <MaterialIcons
-                name="archive"
-                size={22}
-                color={includeArchived ? theme.colors.surface : theme.colors.textSecondary}
-              />
-            </TouchableOpacity>
-          )}
-          {userRole !== 'EMPLOYE' && (
-            <TouchableOpacity
-              style={styles.addCircle}
-              onPress={() => navigation.navigate('CreateFarm')}
-            >
-              <MaterialIcons name="add" size={28} color="#000000" />
-            </TouchableOpacity>
-          )}
-        </View>
-      </View>
-      
+    <Screen
+      header={
+        <ScreenHeader
+          title={isEmployee ? t('profile.myFarm') : t('farms.all')}
+          subtitle={isEmployee ? undefined : t('farms.illustrationText')}
+          large
+          actions={
+            isEmployee
+              ? []
+              : [
+                  { icon: includeArchived ? 'archive' : 'archive-outline' as any, onPress: () => setIncludeArchived((v) => !v), tint: includeArchived ? theme.colors.primary : theme.colors.textSecondary },
+                  { icon: 'add', onPress: () => navigation.navigate('CreateFarm'), tint: theme.colors.text },
+                ]
+          }
+        />
+      }
+    >
       {loading && !refreshing ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <View style={S.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
         <FlatList
           key={numColumns}
           data={farms}
           numColumns={numColumns}
-          keyExtractor={(item: any) => item.id.toString()}
+          keyExtractor={(item: any) => String(item.id)}
           renderItem={renderItem}
-          contentContainerStyle={styles.list}
-          columnWrapperStyle={numColumns > 1 ? styles.columnWrapper : null}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
+          style={{ width: '100%' }}
+          contentContainerStyle={[contentW, { paddingTop: space.md, paddingBottom: space.xxl, gap: space.sm }]}
+          columnWrapperStyle={numColumns > 1 ? { gap: space.sm } : undefined}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} tintColor={theme.colors.primary} />}
           ListEmptyComponent={
             <EmptyState
-              icon="office-building"
+              icon="home-group"
               title={t('common.noData')}
-              description={userRole !== 'EMPLOYE' ? t('farms.addFarm') : undefined}
+              description={isEmployee ? undefined : t('farms.addFarm')}
+              action={isEmployee ? undefined : { label: t('farms.addFarm'), onPress: () => navigation.navigate('CreateFarm') }}
             />
           }
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean, isTablet: boolean) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-    marginBottom: theme.spacing.s,
-    maxWidth: 1000,
-    alignSelf: 'center',
-    width: '100%',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  subtitle: {
-    fontSize: 14,
-    color: theme.colors.textSecondary,
-    marginTop: 2,
-  },
-  addCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...theme.shadows.medium,
-  },
-  list: {
-    padding: theme.spacing.m,
-    paddingBottom: 40,
-    maxWidth: 1000,
-    alignSelf: 'center',
-    width: '100%',
-  },
-  columnWrapper: {
-    justifyContent: 'flex-start',
-    gap: theme.spacing.m,
-  },
-  tabletCardContainer: {
-    flex: isDesktop ? 0.32 : 0.49,
-  },
-  farmCard: {
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    flex: 1,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  iconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    backgroundColor: theme.colors.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.m,
-  },
-  cardInfo: {
-    flex: 1,
-  },
-  farmName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-  },
-  locationRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  farmLocation: {
-    fontSize: 13,
-    color: theme.colors.textSecondary,
-    marginLeft: 4,
-  },
-  editBtn: {
-    padding: 8,
-    backgroundColor: theme.colors.background,
-    borderRadius: 10,
-  },
-  reactivateBtn: {
-    padding: 8,
-    backgroundColor: theme.colors.success + '15',
-    borderRadius: 10,
-  },
-  filterBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: theme.spacing.s,
-    ...theme.shadows.light,
-  },
-  filterBtnActive: {
-    backgroundColor: theme.colors.primary,
-  },
-  archivedCard: {
-    opacity: 0.6,
-    backgroundColor: theme.colors.surface,
-    borderColor: theme.colors.border,
-  },
-  archiveBadge: {
-    backgroundColor: theme.colors.textSecondary + '20',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    marginLeft: 8,
-  },
-  archiveBadgeText: {
-    fontSize: 10,
-    color: theme.colors.textSecondary,
-    fontWeight: 'bold',
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    marginTop: 50,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: theme.colors.textSecondary,
-  },
-  emptyLink: {
-    fontSize: 16,
-    color: theme.colors.primary,
-    fontWeight: 'bold',
-    marginTop: 10,
-    textDecorationLine: 'underline',
-  }
+const createStyles = (theme: any) => StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+  card: { marginBottom: 0, borderRadius: radius.lg, overflow: 'hidden' },
+  cardInner: { flexDirection: 'row', alignItems: 'center', gap: space.sm, padding: space.md },
+  iconBox: { width: 48, height: 48, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center' },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  name: { fontSize: 16.5, fontWeight: '800', color: theme.colors.text, flexShrink: 1 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+  meta: { fontSize: 13, color: theme.colors.textSecondary, flexShrink: 1 },
+  actBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.background },
 });

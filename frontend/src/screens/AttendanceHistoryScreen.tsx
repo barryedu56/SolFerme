@@ -1,17 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, FlatList, SafeAreaView, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
-import { Card } from '../components/Card';
-import { repositoryProvider } from '../repositories';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { repositoryProvider } from '../repositories';
 import { useTheme } from '../context/ThemeContext';
 import { useTranslation } from '../context/LanguageContext';
-import { useBreakpoint } from '../hooks/useBreakpoint';
+import { useContentWidth, Screen, ScreenHeader, Card, Badge, EmptyState, space, radius } from '../components/ui';
 
 export const AttendanceHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
-  const { isDesktop } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
+  const S = useMemo(() => createStyles(theme), [theme]);
+  const contentW = useContentWidth('narrow');
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -20,24 +19,21 @@ export const AttendanceHistoryScreen = ({ navigation }: any) => {
   const fetchHistory = async () => {
     try {
       const res = await repositoryProvider.api.get('/attendances/');
-      // On groupe par date
       const grouped = res.data.reduce((acc: any, curr: any) => {
         const date = curr.date;
         if (!acc[date]) acc[date] = [];
         acc[date].push(curr);
         return acc;
       }, {});
-
       const sorted = Object.keys(grouped)
         .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())
-        .map(date => ({
+        .map((date) => ({
           date,
           data: grouped[date],
           present: grouped[date].filter((a: any) => a.status === 'PRESENT').length,
           late: grouped[date].filter((a: any) => a.status === 'LATE').length,
           absent: grouped[date].filter((a: any) => a.status === 'ABSENT').length,
         }));
-
       setHistory(sorted);
     } catch (e) {
       console.error(e);
@@ -47,169 +43,74 @@ export const AttendanceHistoryScreen = ({ navigation }: any) => {
     }
   };
 
-  useEffect(() => {
-    fetchHistory();
-  }, []);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchHistory();
-  };
+  useEffect(() => { fetchHistory(); }, []);
+  const onRefresh = () => { setRefreshing(true); fetchHistory(); };
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'PRESENT': return theme.colors.success;
-      case 'LATE': return theme.colors.warning;
+      case 'PRESENT': return '#2E7D32';
+      case 'LATE': return '#F57C00';
       case 'ABSENT': return theme.colors.danger;
       default: return theme.colors.textSecondary;
     }
   };
 
   const renderItem = ({ item }: { item: any }) => (
-    <Card style={styles.dateCard}>
-      <View style={styles.cardHeader}>
-        <View style={styles.dateInfo}>
-          <MaterialIcons name="event" size={20} color={theme.colors.primary} />
-          <Text style={styles.dateText}>
+    <Card style={S.card}>
+      <View style={S.head}>
+        <View style={S.dateInfo}>
+          <MaterialIcons name="event" size={18} color={theme.colors.primary} />
+          <Text style={[S.dateText, { color: theme.colors.text }]}>
             {new Date(item.date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' })}
           </Text>
         </View>
-        <View style={styles.statsRow}>
-          <View style={[styles.statBadge, { backgroundColor: theme.colors.success + '20' }]}>
-            <Text style={[styles.statValue, { color: theme.colors.success }]}>{item.present}</Text>
-          </View>
-          <View style={[styles.statBadge, { backgroundColor: theme.colors.warning + '20' }]}>
-            <Text style={[styles.statValue, { color: theme.colors.warning }]}>{item.late}</Text>
-          </View>
-          <View style={[styles.statBadge, { backgroundColor: theme.colors.danger + '20' }]}>
-            <Text style={[styles.statValue, { color: theme.colors.danger }]}>{item.absent}</Text>
-          </View>
+        <View style={S.pills}>
+          <View style={[S.pill, { backgroundColor: '#2E7D32' + '20' }]}><Text style={[S.pillTxt, { color: '#2E7D32' }]}>{item.present}</Text></View>
+          <View style={[S.pill, { backgroundColor: '#F57C00' + '20' }]}><Text style={[S.pillTxt, { color: '#F57C00' }]}>{item.late}</Text></View>
+          <View style={[S.pill, { backgroundColor: theme.colors.danger + '20' }]}><Text style={[S.pillTxt, { color: theme.colors.danger }]}>{item.absent}</Text></View>
         </View>
       </View>
 
-      <View style={styles.divider} />
+      <View style={[S.divider, { backgroundColor: theme.colors.border }]} />
 
       {item.data.map((att: any, idx: number) => (
-        <View key={att.id} style={[styles.empRow, idx === item.data.length - 1 && { borderBottomWidth: 0 }]}>
-          <Text style={styles.empName}>{att.employee_name || `Employé #${att.employee}`}</Text>
-          <View style={[styles.statusTag, { backgroundColor: getStatusColor(att.status) + '15' }]}>
-            <Text style={[styles.statusText, { color: getStatusColor(att.status) }]}>
-              {t(`attendance.${att.status.toLowerCase()}`)}
-            </Text>
-          </View>
+        <View key={att.id} style={[S.empRow, { borderBottomColor: theme.colors.border }, idx === item.data.length - 1 && { borderBottomWidth: 0 }]}>
+          <Text style={[S.empName, { color: theme.colors.text }]} numberOfLines={1}>{att.employee_name || `Employé #${att.employee}`}</Text>
+          <Badge label={t(`attendance.${att.status.toLowerCase()}`)} color={getStatusColor(att.status)} />
         </View>
       ))}
     </Card>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t('attendance.history')}</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
+    <Screen header={<ScreenHeader title={t('attendance.history')} onBack={() => navigation.goBack()} />}>
       {loading && !refreshing ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <View style={S.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
         <FlatList
           data={history}
           renderItem={renderItem}
-          keyExtractor={item => item.date}
-          contentContainerStyle={[styles.list, isDesktop && styles.listDesktop]}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="history" size={60} color={theme.colors.border} />
-              <Text style={styles.emptyText}>{t('common.noData')}</Text>
-            </View>
-          }
+          keyExtractor={(item) => item.date}
+          style={{ width: '100%' }}
+          contentContainerStyle={[contentW, { paddingTop: space.md, paddingBottom: space.xxl, gap: space.sm }]}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} tintColor={theme.colors.primary} />}
+          ListEmptyComponent={<EmptyState icon="history" title={t('common.noData')} />}
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.l,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    ...theme.shadows.light,
-  },
-  headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
-  list: { padding: theme.spacing.m },
-  listDesktop: {
-    maxWidth: 800,
-    width: '100%',
-    alignSelf: 'center',
-  },
-  dateCard: {
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: theme.spacing.s,
-  },
-  dateInfo: { flexDirection: 'row', alignItems: 'center' },
-  dateText: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: theme.colors.text,
-    marginLeft: 8,
-    textTransform: 'capitalize'
-  },
-  statsRow: { flexDirection: 'row' },
-  statBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 6,
-  },
-  statValue: { fontSize: 12, fontWeight: 'bold' },
-  divider: {
-    height: 0.8,
-    backgroundColor: theme.colors.border + '40',
-    marginVertical: theme.spacing.s,
-  },
-  empRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 0.8,
-    borderBottomColor: theme.colors.border + '20',
-  },
-  empName: { fontSize: 14, color: theme.colors.text },
-  statusTag: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  statusText: { fontSize: 11, fontWeight: 'bold' },
-  emptyContainer: { alignItems: 'center', marginTop: 100 },
-  emptyText: { marginTop: 16, color: theme.colors.textSecondary, fontSize: 16 }
+const createStyles = (theme: any) => StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  card: { marginBottom: 0, borderRadius: radius.lg },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  dateInfo: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+  dateText: { fontSize: 14.5, fontWeight: '800', textTransform: 'capitalize' },
+  pills: { flexDirection: 'row', gap: 6 },
+  pill: { minWidth: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
+  pillTxt: { fontSize: 12, fontWeight: '800' },
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: space.sm },
+  empRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, gap: 8 },
+  empName: { fontSize: 13.5, flex: 1 },
 });

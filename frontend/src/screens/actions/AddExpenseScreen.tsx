@@ -136,7 +136,7 @@ export const AddExpenseScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]}>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
                <Text style={styles.label}>{t('expense.category')}</Text>
@@ -180,11 +180,11 @@ export const AddExpenseScreen = ({ route, navigation }: any) => {
 
 const createStyles = (theme: any) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.background },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: theme.spacing.m, paddingTop: theme.spacing.l },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: theme.spacing.m, paddingTop: theme.spacing.l, maxWidth: 760, width: '100%', alignSelf: 'center' },
   backButton: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.surface, ...theme.shadows.light },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m },
-  scrollDesktop: { maxWidth: 640, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   formCard: { padding: theme.spacing.m, borderRadius: theme.borderRadius.xl, marginBottom: theme.spacing.l },
   inputGroup: { marginBottom: theme.spacing.m },
   label: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: 8, fontWeight: '600' },

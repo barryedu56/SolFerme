@@ -1,21 +1,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, FlatList, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
-import { Card } from '../components/Card';
+import { View, Text, StyleSheet, FlatList, Pressable, ActivityIndicator, Alert } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { repositoryProvider } from '../repositories';
-import { MaterialIcons } from '@expo/vector-icons';
 import { generatePayrollPDF } from '../utils/reportGenerator';
 import { formatCurrency } from '../utils/formatters';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
-import { useBreakpoint } from '../hooks/useBreakpoint';
+import { Screen, ScreenHeader, useContentWidth, Card, EmptyState, space, radius } from '../components/ui';
 
 export const EmployeePayrollScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
   const { t, activeLanguage } = useTranslation();
   const { userName } = useAuth();
-  const { isDesktop } = useBreakpoint();
-  const styles = useMemo(() => createStyles(theme, isDesktop), [theme, isDesktop]);
+  const S = useMemo(() => createStyles(theme), [theme]);
+  const contentW = useContentWidth('narrow');
   const [loading, setLoading] = useState(true);
   const [payrolls, setPayrolls] = useState<any[]>([]);
 
@@ -31,9 +30,7 @@ export const EmployeePayrollScreen = ({ navigation }: any) => {
     }
   };
 
-  useEffect(() => {
-    fetchPayrolls();
-  }, []);
+  useEffect(() => { fetchPayrolls(); }, []);
 
   const handleGeneratePDF = async (item: any) => {
     try {
@@ -44,7 +41,7 @@ export const EmployeePayrollScreen = ({ navigation }: any) => {
         bonus: parseFloat(item.bonus),
         deduction: parseFloat(item.deduction),
         amount_paid: parseFloat(item.amount_paid),
-        month: item.month
+        month: item.month,
       };
       await generatePayrollPDF(payrollData, t);
     } catch (error) {
@@ -52,150 +49,72 @@ export const EmployeePayrollScreen = ({ navigation }: any) => {
     }
   };
 
+  const Row = ({ label, value, color }: any) => (
+    <View style={{ flex: 1 }}>
+      <Text style={S.detLabel}>{label}</Text>
+      <Text style={[S.detValue, { color: color || theme.colors.text }]}>{value}</Text>
+    </View>
+  );
+
   const renderItem = ({ item }: { item: any }) => (
-    <Card style={styles.payCard}>
-      <View style={styles.cardHeader}>
-        <View style={styles.monthContainer}>
-          <MaterialIcons name="event-note" size={20} color={theme.colors.primary} />
-          <Text style={styles.monthText}>{item.month}</Text>
+    <Card style={S.card}>
+      <View style={S.head}>
+        <View style={S.monthRow}>
+          <MaterialIcons name="event-note" size={19} color={theme.colors.primary} />
+          <Text style={[S.month, { color: theme.colors.text }]}>{item.month}</Text>
         </View>
-        <TouchableOpacity style={styles.downloadBtn} onPress={() => handleGeneratePDF(item)}>
-          <MaterialIcons name="file-download" size={24} color={theme.colors.primary} />
-        </TouchableOpacity>
+        <Pressable style={[S.dl, { backgroundColor: theme.colors.primary + '20' }]} onPress={() => handleGeneratePDF(item)} hitSlop={6}>
+          <MaterialIcons name="file-download" size={20} color={theme.colors.primary} />
+        </Pressable>
       </View>
 
-      <View style={styles.divider} />
+      <View style={[S.divider, { backgroundColor: theme.colors.border }]} />
 
-      <View style={styles.detailsRow}>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('payroll.baseSalary')}</Text>
-          <Text style={styles.detailValue}>{formatCurrency(item.base_salary)}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('payroll.bonus')}</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.success }]}>+ {formatCurrency(item.bonus)}</Text>
-        </View>
+      <View style={S.detRow}>
+        <Row label={t('payroll.baseSalary')} value={formatCurrency(item.base_salary)} />
+        <Row label={t('payroll.bonus')} value={`+ ${formatCurrency(item.bonus)}`} color="#2E7D32" />
+      </View>
+      <View style={S.detRow}>
+        <Row label={t('payroll.deduction')} value={`- ${formatCurrency(item.deduction)}`} color={theme.colors.danger} />
+        <Row label={t('payroll.netAmount')} value={formatCurrency(item.amount_paid)} color={theme.colors.primary} />
       </View>
 
-      <View style={styles.detailsRow}>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('payroll.deduction')}</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.danger }]}>- {formatCurrency(item.deduction)}</Text>
-        </View>
-        <View style={styles.detailItem}>
-          <Text style={styles.detailLabel}>{t('payroll.netAmount')}</Text>
-          <Text style={styles.netValue}>{formatCurrency(item.amount_paid)}</Text>
-        </View>
-      </View>
-
-      <View style={styles.footer}>
-        <MaterialIcons name="calendar-today" size={14} color={theme.colors.textSecondary} />
-        <Text style={styles.footerText}>
-          {t('profile.paidOn')} {new Date(item.date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}
-        </Text>
+      <View style={[S.footer, { borderTopColor: theme.colors.border }]}>
+        <MaterialIcons name="calendar-today" size={13} color={theme.colors.textSecondary} />
+        <Text style={S.footerText}>{t('profile.paidOn')} {new Date(item.date).toLocaleDateString(activeLanguage === 'fr' ? 'fr-FR' : 'en-US')}</Text>
       </View>
     </Card>
   );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={styles.title}>{t('profile.paymentHistory')}</Text>
-        <View style={{ width: 40 }} />
-      </View>
-
+    <Screen header={<ScreenHeader title={t('profile.paymentHistory')} onBack={() => navigation.goBack()} />}>
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <View style={S.center}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       ) : (
         <FlatList
           data={payrolls}
           keyExtractor={(item: any) => item.id.toString()}
           renderItem={renderItem}
-          contentContainerStyle={[styles.list, isDesktop && styles.listDesktop]}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <MaterialIcons name="payments" size={64} color={theme.colors.textSecondary + '40'} />
-              <Text style={styles.emptyText}>{t('profile.noPayments')}</Text>
-            </View>
-          }
+          style={{ width: '100%' }}
+          contentContainerStyle={[contentW, { paddingTop: space.md, paddingBottom: space.xxl, gap: space.sm }]}
+          ListEmptyComponent={<EmptyState icon="cash-multiple" title={t('profile.noPayments')} />}
         />
       )}
-    </SafeAreaView>
+    </Screen>
   );
 };
 
-const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: theme.spacing.m,
-    paddingTop: theme.spacing.xl,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: theme.colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-    ...theme.shadows.light,
-  },
-  title: { fontSize: 20, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase' },
-  list: { padding: theme.spacing.m, maxWidth: 600, alignSelf: 'center', width: '100%' },
-  listDesktop: { maxWidth: 800 },
-  payCard: {
-    marginBottom: theme.spacing.m,
-    padding: theme.spacing.m,
-    borderRadius: theme.borderRadius.xl,
-    borderWidth: 0.8,
-    borderColor: theme.colors.border,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  monthContainer: { flexDirection: 'row', alignItems: 'center' },
-  monthText: { fontSize: 18, fontWeight: '900', color: theme.colors.text, marginLeft: 8 },
-  downloadBtn: {
-    padding: 8,
-    backgroundColor: theme.colors.primary + '20',
-    borderRadius: 12,
-  },
-  divider: {
-    height: 0.8,
-    backgroundColor: theme.colors.border,
-    marginBottom: 16,
-  },
-  detailsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  detailItem: { flex: 1 },
-  detailLabel: { fontSize: 12, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: '700', textTransform: 'uppercase' },
-  detailValue: { fontSize: 14, fontWeight: '900', color: theme.colors.text },
-  netValue: { fontSize: 16, fontWeight: '900', color: theme.colors.primary },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    paddingTop: 12,
-    borderTopWidth: 0.8,
-    borderTopColor: theme.colors.border + '40',
-  },
-  footerText: { fontSize: 12, color: theme.colors.textSecondary, marginLeft: 4, fontWeight: '600' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyContainer: { alignItems: 'center', marginTop: 100 },
-  emptyText: { fontSize: 16, color: theme.colors.textSecondary, marginTop: 16, fontWeight: '600' },
+const createStyles = (theme: any) => StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 60 },
+  card: { marginBottom: 0, borderRadius: radius.lg },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  monthRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  month: { fontSize: 17, fontWeight: '900' },
+  dl: { padding: 8, borderRadius: radius.sm },
+  divider: { height: StyleSheet.hairlineWidth, marginVertical: space.md },
+  detRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.sm },
+  detLabel: { fontSize: 11, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.3 },
+  detValue: { fontSize: 14, fontWeight: '900' },
+  footer: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4, paddingTop: space.sm, borderTopWidth: StyleSheet.hairlineWidth },
+  footerText: { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '600' },
 });

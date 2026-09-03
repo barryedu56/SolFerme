@@ -272,7 +272,7 @@ export const EditEmployeeScreen = ({ route, navigation }: any) => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
+        <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Text style={styles.sectionTitle}>{t('employees.form.userAccount')}</Text>
           <Card style={styles.formCard}>
             <View style={styles.inputGroup}>
@@ -543,6 +543,9 @@ const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.crea
     justifyContent: 'space-between',
     padding: theme.spacing.m,
     paddingTop: theme.spacing.l,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backBtn: {
     width: 40,
@@ -556,7 +559,7 @@ const createStyles = (theme: any, isDesktop: boolean = false) => StyleSheet.crea
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
   scrollDesktop: {
-    maxWidth: 800,
+    maxWidth: 760,
     width: '100%',
     alignSelf: 'center',
   },

@@ -5,7 +5,8 @@ from .models import (
     FeedInventory, HealthInventory, FeedPurchase, HealthPurchase,
     Reminder, ActivityLog, Payroll, Task, Attendance, HealthAlert,
     PreparedFeedInventory, FeedPreparation, FeedPreparationIngredient,
-    Bonus, EmployeeRequest, PasswordResetCode, EggConversion
+    Bonus, EmployeeRequest, PasswordResetCode, EggConversion, ContactMessage,
+    DeviceToken
 )
 
 @admin.register(User)
@@ -46,3 +47,18 @@ admin.site.register(Bonus)
 admin.site.register(EmployeeRequest)
 admin.site.register(PasswordResetCode)
 admin.site.register(EggConversion)
+
+
+@admin.register(DeviceToken)
+class DeviceTokenAdmin(admin.ModelAdmin):
+    list_display = ('user', 'platform', 'updated_at')
+    list_filter = ('platform',)
+    search_fields = ('user__email', 'token')
+
+
+@admin.register(ContactMessage)
+class ContactMessageAdmin(admin.ModelAdmin):
+    list_display = ('name', 'email', 'subject', 'is_handled', 'created_at')
+    list_filter = ('is_handled', 'created_at')
+    search_fields = ('name', 'email', 'subject', 'message')
+    readonly_fields = ('name', 'email', 'subject', 'message', 'ip_address', 'created_at')

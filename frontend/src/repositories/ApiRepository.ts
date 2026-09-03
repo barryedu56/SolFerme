@@ -85,6 +85,10 @@ export class ApiRepository {
   private async isOnline(): Promise<boolean> {
     const state = await NetInfo.fetch();
     if (Platform.OS === 'web') {
+      // Sur web, navigator.onLine est plus fiable que NetInfo pour détecter
+      // la déconnexion réseau totale. NetInfo retourne souvent isConnected=true
+      // même quand le réseau est coupé sur certains navigateurs.
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
       return Boolean(state.isConnected);
     }
     return Boolean(state.isConnected && state.isInternetReachable);
@@ -912,6 +916,56 @@ export class ApiRepository {
     }
   }
 
+  /**
+   * Calcule localement la réponse d'un endpoint « calculé » (statistiques, résumés)
+   * à partir des données SQLite. Renvoie null si l'endpoint n'est pas reconnu.
+   * Utilisé aussi bien hors-ligne que lorsque le serveur est injoignable alors que
+   * l'appareil se croit en ligne (Internet actif mais backend KO).
+   */
+  private async computeLocalComputedResponse<T>(endpoint: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T> | null> {
+    try {
+      const endpointId = getEndpointId(endpoint);
+
+      // /farms/statistics/ (niveau collection, pas d'ID)
+      if (endpoint.includes('/farms/statistics') && typeof endpointId !== 'number') {
+        const params = this.resolveParams(endpoint, config);
+        const period = params.period as string | undefined;
+        const farmId = params.farm ? Number(params.farm) : undefined;
+        const lotId = params.lot ? Number(params.lot) : undefined;
+        const farmStats = await this.computeLocalFarmStatistics(period, farmId, lotId);
+        console.info(`[ApiRepo] Statistiques ferme calculées localement pour ${endpoint}`);
+        return buildLocalResponse<T>(farmStats as unknown as T);
+      }
+
+      // /lots/{id}/statistics/ (avec ID)
+      if (endpoint.includes('/statistics') && typeof endpointId === 'number') {
+        const lotStats = await this.computeLocalLotStatistics(endpointId);
+        console.info(`[ApiRepo] Statistiques lot calculées localement pour ${endpoint}`);
+        return buildLocalResponse<T>(lotStats as unknown as T);
+      }
+
+      // /payrolls/summary/ — résumé de paie
+      if (endpoint.includes('/payrolls/summary')) {
+        const summary = await this.computeLocalPayrollSummary();
+        return buildLocalResponse<T>(summary as unknown as T);
+      }
+      // /employees/stats/ — statistiques employés
+      if (endpoint.includes('/employees/stats')) {
+        const stats = await this.computeLocalEmployeeStats();
+        return buildLocalResponse<T>(stats as unknown as T);
+      }
+      // /employees/me/ — profil employé courant
+      if (endpoint.includes('/employees/me')) {
+        const meData = await this.computeLocalEmployeeMe();
+        if (meData !== null) return buildLocalResponse<T>(meData as unknown as T);
+        return buildLocalResponse<T>({ detail: 'Non trouvé.' } as unknown as T);
+      }
+    } catch (e: any) {
+      console.warn(`[ApiRepo] Échec calcul local pour ${endpoint}:`, e?.message || e);
+    }
+    return null;
+  }
+
   async get<T = any>(endpoint: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
     const syncable = this.isSyncable(endpoint) && !this.isComputedEndpoint(endpoint);
 
@@ -926,6 +980,29 @@ export class ApiRepository {
         const localData = await getLocalData<T>(endpoint, config?.params as Record<string, any> | undefined);
         if (localData !== null) return buildLocalResponse<T>(localData);
       } catch {}
+      return buildLocalResponse<T>([] as unknown as T);
+    }
+
+    // 🔧 FINDING 1 — Endpoints « calculés » (statistiques, résumés) : ils n'ont pas
+    // de table SQLite directe et n'étaient traités qu'en mode strictement hors-ligne.
+    // Quand l'Internet est actif mais le serveur injoignable, `isOnline()` renvoie
+    // `true` : l'ancien code tombait alors sur `apiClient.get()` en fin de méthode et
+    // levait une erreur réseau (→ écrans avec stats à 0 et `purchase_date` = now()).
+    // On tente désormais l'API en ligne PUIS on retombe systématiquement sur le
+    // calcul local dès que le serveur ne répond pas.
+    if (this.isComputedEndpoint(endpoint) && this.isSyncable(endpoint) && !hasNegativeId) {
+      if (await this.isOnline()) {
+        try {
+          return await apiClient.get<T>(endpoint, config);
+        } catch (apiError: any) {
+          console.warn(`[ApiRepo] Endpoint calculé ${endpoint} : serveur injoignable, calcul local.`, apiError?.message || apiError);
+          const local = await this.computeLocalComputedResponse<T>(endpoint, config);
+          if (local) return local;
+          throw apiError;
+        }
+      }
+      const local = await this.computeLocalComputedResponse<T>(endpoint, config);
+      if (local) return local;
       return buildLocalResponse<T>([] as unknown as T);
     }
 
@@ -984,37 +1061,10 @@ export class ApiRepository {
       } catch (apiError: any) {
         // API échoue (401, 500, réseau...) → fallback local
         console.warn(`[ApiRepo] API GET failed for ${endpoint}, trying local:`, apiError?.message || apiError);
-        // 🔧 Même en ligne si l'API échoue, servir les données locales (inclut les items offline)
+        // 🔧 Même en ligne si l'API échoue, servir les données locales (inclut les items offline).
+        // NB : les endpoints « calculés » sont interceptés plus haut (voir FINDING 1).
         if (syncable) {
           try {
-            if (this.isComputedEndpoint(endpoint)) {
-              if (endpoint.includes('/farms/statistics')) {
-                const params = this.resolveParams(endpoint, config);
-                const period = params.period as string | undefined;
-                const farmId = params.farm ? Number(params.farm) : undefined;
-                const lotId = params.lot ? Number(params.lot) : undefined;
-                const farmStats = await this.computeLocalFarmStatistics(period, farmId, lotId);
-                console.info(`[ApiRepo] Serving computed local farm statistics for ${endpoint} (API failed)`);
-                return buildLocalResponse<T>(farmStats as unknown as T);
-              }
-              const endpointId = getEndpointId(endpoint);
-              if (endpoint.includes('/statistics') && typeof endpointId === 'number') {
-                const lotStats = await this.computeLocalLotStatistics(endpointId);
-                console.info(`[ApiRepo] Serving computed local lot statistics for ${endpoint} (API failed)`);
-                return buildLocalResponse<T>(lotStats as unknown as T);
-              }
-              // 🔧 /payrolls/summary/ et /employees/stats/ — computed endpoints offline
-              if (endpoint.includes('/payrolls/summary')) {
-                const summary = await this.computeLocalPayrollSummary();
-                console.info(`[ApiRepo] Serving computed local payroll summary (API failed)`);
-                return buildLocalResponse<T>(summary as unknown as T);
-              }
-              if (endpoint.includes('/employees/stats')) {
-                const stats = await this.computeLocalEmployeeStats();
-                console.info(`[ApiRepo] Serving computed local employee stats (API failed)`);
-                return buildLocalResponse<T>(stats as unknown as T);
-              }
-            }
             const localData = await getLocalData<T>(endpoint, config?.params as Record<string, any> | undefined);
             if (localData !== null) {
               console.info(`[ApiRepo] Serving local data for ${endpoint} (API failed)`);
@@ -1140,13 +1190,20 @@ export class ApiRepository {
         }
         return response;
       } catch (error: any) {
+        // Basculer en Offline-First UNIQUEMENT si le serveur n'a pas répondu
+        // (réseau coupé / timeout). Une réponse HTTP du serveur — 4xx comme 5xx —
+        // signifie que le backend a traité et REFUSÉ l'opération : on ne doit pas
+        // fabriquer un faux succès local (risque de divergence SQLite ↔ MySQL).
         if (!error.response) {
           try {
             const row = await handleOfflineWrite<T>('POST', endpoint, body);
             return buildLocalResponse<T>(row);
           } catch (offlineFallbackError: any) {
+            // 🔧 FINDING 2 — Ne PAS relancer l'erreur réseau : elle masquerait la
+            // vraie cause (validation métier, contrainte SQLite…) derrière un
+            // trompeur « Impossible de contacter le serveur ».
             console.error('[ApiRepo] Offline fallback write failed:', offlineFallbackError?.message);
-            throw error;
+            throw offlineFallbackError;
           }
         }
         throw error;
@@ -1185,13 +1242,16 @@ export class ApiRepository {
         }
         return response;
       } catch (error: any) {
+        // Voir commentaire dans post() : fallback Offline uniquement si aucune
+        // réponse serveur. Un refus HTTP (4xx/5xx) ne doit pas devenir un faux succès.
         if (!error.response) {
           try {
             const row = await handleOfflineWrite<T>('PUT', endpoint, body);
             return buildLocalResponse<T>(row);
           } catch (offlineFallbackError: any) {
+            // 🔧 FINDING 2 — propager la vraie erreur offline, pas l'erreur réseau.
             console.error('[ApiRepo] Offline fallback write failed:', offlineFallbackError?.message);
-            throw error;
+            throw offlineFallbackError;
           }
         }
         throw error;
@@ -1221,6 +1281,8 @@ export class ApiRepository {
         }
         return response;
       } catch (error: any) {
+        // Voir commentaire dans post() : fallback Offline uniquement si aucune
+        // réponse serveur. Un refus HTTP (4xx/5xx) ne doit pas devenir un faux succès.
         if (!error.response) {
           const row = await handleOfflineWrite<T>('PATCH', endpoint, body);
           return buildLocalResponse<T>(row);

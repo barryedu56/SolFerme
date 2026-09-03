@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, ActivityIndicator, RefreshControl, TouchableOpacity, Image, TextInput, Alert, Switch, Platform } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Image, TextInput, Alert, Switch, Platform } from 'react-native';
+import { Screen, useContentWidth } from '../components/ui';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { toast } from '../utils/toast';
 import { Card } from '../components/Card';
@@ -9,6 +10,8 @@ import { useAuth } from '../context/AuthContext';
 import { repositoryProvider } from '../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
+import { appendImageToFormData, MULTIPART_HEADERS } from '../utils/imageUpload';
+import { PhotoActionSheet } from '../components/PhotoActionSheet';
 import { useTranslation } from '../context/LanguageContext';
 import { useWindowDimensions } from 'react-native';
 import Constants from 'expo-constants';
@@ -26,6 +29,7 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
   const { width } = useWindowDimensions();
   const { isDesktop } = useBreakpoint();
   const isTablet = width > 600;
+  const contentW = useContentWidth('narrow');
 
   const styles = useMemo(() => createStyles(theme), [theme]);
 
@@ -123,27 +127,18 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
     });
 
     if (!result.canceled) {
-      handleUploadImage(result.assets[0].uri);
+      handleUploadImage(result.assets[0]);
     }
   };
 
-  const handleUploadImage = async (uri: string) => {
+  const handleUploadImage = async (asset: ImagePicker.ImagePickerAsset) => {
     try {
       setUpdating(true);
       const formData = new FormData();
-      const filename = uri.split('/').pop();
-      const match = /\.(\w+)$/.exec(filename || '');
-      const type = match ? `image/${match[1]}` : `image`;
-
-      // @ts-ignore
-      formData.append('profile_image', {
-        uri: uri,
-        name: filename || 'profile.jpg',
-        type: type,
-      });
+      appendImageToFormData(formData, asset, 'profile_image');
 
       await repositoryProvider.api.patch('/auth/user/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: MULTIPART_HEADERS,
       });
 
       await fetchProfile();
@@ -172,21 +167,17 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
     }
   };
 
+  // `Alert.alert(title, message, buttons)` avec plusieurs boutons ne fait rien
+  // sur Web (no-op de react-native-web) — d'où le bouton photo "mort" quand
+  // une photo existait déjà. On passe par une feuille d'actions maison,
+  // identique sur Android/iOS/Web (voir <PhotoActionSheet/>).
+  const [photoSheetVisible, setPhotoSheetVisible] = useState(false);
   const showImageOptions = () => {
     if (!employeeData?.user_image) {
       pickImage();
       return;
     }
-
-    Alert.alert(
-      t('profile.photoTitle'),
-      t('profile.photoOption'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('profile.removePhoto'), onPress: handleRemoveImage, style: 'destructive' },
-        { text: t('profile.changePhoto'), onPress: pickImage }
-      ]
-    );
+    setPhotoSheetVisible(true);
   };
 
   const handleUpdateProfile = async () => {
@@ -255,38 +246,42 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
+    // Alert.alert à boutons multiples ne fait rien sur Web (no-op de
+    // react-native-web) — sans ce branchement, ce bouton était mort sur Web.
+    if (Platform.OS === 'web') {
+      if (window.confirm(t('profile.logoutConfirm'))) logout();
+      return;
+    }
     Alert.alert(
       t('common.logout'),
       t('profile.logoutConfirm'),
       [
         { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.logout'), style: 'destructive', onPress: async () => await logout() }
+        { text: t('common.logout'), style: 'destructive', onPress: () => logout() }
       ]
     );
   };
 
   if (loading && !refreshing) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
+      <Screen edges={['top', 'bottom']}>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      </Screen>
     );
   }
 
   const displayImage = getProfileImageUrl(employeeData?.user_image);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView
-        contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[theme.colors.primary]} />}
-      >
+    <Screen scroll padded={false} width="wide" refreshing={refreshing} onRefresh={onRefresh} edges={['top']}>
         <LinearGradient
           colors={[theme.colors.primary, theme.colors.primary + '80']}
           style={styles.upperHeader}
         >
+          <View style={[styles.headerInner, contentW]}>
           <View style={styles.headerTop}>
             {!isDesktop && Platform.OS !== 'web' && (
               <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
@@ -334,9 +329,10 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
                </View>
              )}
           </View>
+          </View>
         </LinearGradient>
 
-        <View style={[styles.contentOverlap, isTablet && styles.tabletContent]}>
+        <View style={[styles.contentOverlap, contentW]}>
             {isEditing ? (
             <Card style={styles.mainCard}>
                <Text style={[styles.cardTitle, { color: theme.colors.text }]}>{t('profile.editInfo')}</Text>
@@ -624,8 +620,19 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
             </>
           )}
         </View>
-      </ScrollView>
-    </SafeAreaView>
+
+        <PhotoActionSheet
+          visible={photoSheetVisible}
+          onClose={() => setPhotoSheetVisible(false)}
+          onChangePhoto={pickImage}
+          onRemovePhoto={handleRemoveImage}
+          title={t('profile.photoTitle')}
+          subtitle={t('profile.photoOption')}
+          changeLabel={t('profile.changePhoto')}
+          removeLabel={t('profile.removePhoto')}
+          cancelLabel={t('common.cancel')}
+        />
+    </Screen>
   );
 };
 
@@ -654,12 +661,13 @@ const createStyles = (theme: any) => StyleSheet.create({
   container: { flex: 1 },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   upperHeader: {
-    paddingTop: 50,
+    paddingTop: 24,
     paddingBottom: 60,
-    paddingHorizontal: 20,
+    width: '100%',
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
   },
+  headerInner: { width: '100%' },
   headerTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',

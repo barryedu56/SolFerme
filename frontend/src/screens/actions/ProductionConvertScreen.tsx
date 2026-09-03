@@ -123,7 +123,7 @@ export const ProductionConvertScreen = ({ route, navigation }: any) => {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={[styles.scroll, isDesktop && styles.scrollDesktop]}>
+      <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]}>
         <Card style={styles.infoCard}>
           <Text style={styles.infoLabel}>
             {t('production.infoDate', { date: formattedDate })}
@@ -195,6 +195,9 @@ const createStyles = (theme: any) => StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     padding: theme.spacing.m, paddingTop: Platform.OS === 'ios' ? 0 : theme.spacing.l,
     backgroundColor: theme.colors.background,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   backButton: {
     width: 40, height: 40, borderRadius: 20, backgroundColor: theme.colors.surface,
@@ -202,7 +205,7 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: theme.colors.text },
   scroll: { padding: theme.spacing.m, paddingBottom: 40 },
-  scrollDesktop: { maxWidth: 640, width: '100%', alignSelf: 'center' },
+  scrollDesktop: { maxWidth: 760, width: '100%', alignSelf: 'center' },
   infoCard: { padding: theme.spacing.m, marginBottom: theme.spacing.l, borderWidth: 0.8, borderColor: theme.colors.border },
   infoLabel: { fontSize: 14, color: theme.colors.textSecondary, marginBottom: theme.spacing.m, textAlign: 'center' },
   statsRow: { flexDirection: 'row', justifyContent: 'space-around' },
