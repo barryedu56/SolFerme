@@ -872,43 +872,61 @@ const validateSalePayment = async (data?: any, existingRecord?: any): Promise<vo
   }
 };
 
+/** Effet signé d'un mouvement de poules sur `lots.current_quantity`. */
+const movementQtyEffect = (m: any): number => {
+  if (!m || m.status !== 'ACTIF') return 0;
+  const q = Number(m.quantity || 0);
+  if (m.type === 'AJOUT') return q;
+  if (m.type === 'MORT' || m.type === 'VENTE') return -q;
+  return 0; // MALADE / GUERI : statut sanitaire, pas de variation d'effectif
+};
+
 const updateLotQuantityForMovement = async (movement: any, previousMovement?: any): Promise<void> => {
-  const lotId = movement?.lot_id;
+  const lotId = movement?.lot_id ?? previousMovement?.lot_id;
   if (typeof lotId !== 'number') return;
 
   const lot = await fetchRow<any>('lots', 'id = ?', [lotId]);
   if (!lot) return;
 
-  // Recalcul absolu basé sur tous les mouvements actifs du lot
-  const allMovements = await queryAll<any>(
-    `SELECT type, SUM(quantity) as total FROM chicken_movements WHERE lot_id = ? AND status = 'ACTIF' GROUP BY type`,
-    [lotId]
-  );
-  
-  const totalAdded = Number(allMovements.find((m: any) => m.type === 'AJOUT')?.total || 0);
-  const totalDead = Number(allMovements.find((m: any) => m.type === 'MORT')?.total || 0);
-  const totalSold = Number(allMovements.find((m: any) => m.type === 'VENTE')?.total || 0);
-
-  const newQty = Math.max(0, Number(lot.initial_quantity) + totalAdded - totalDead - totalSold);
   const currentQty = Number(lot.current_quantity || 0);
+
+  // 🔧 Finding 4 — ajustement DELTA signé, jamais de recalcul absolu depuis
+  // `initial_quantity` + un historique SQLite potentiellement tronqué (pull
+  // partiel, état « serveur coupé » sans rechargement) : ce recalcul produisait
+  // un `current_quantity` faussement bas → « stock insuffisant alors que j'en ai ».
+  // `current_quantity` reste la valeur autoritaire du serveur ; on n'y applique
+  // que l'effet de CE mouvement (en annulant d'abord celui de sa version
+  // précédente). Cohérent avec updateLotQuantityForSale.
+  const newQty = Math.max(
+    0,
+    currentQty - movementQtyEffect(previousMovement) + movementQtyEffect(movement)
+  );
 
   let newStatus = lot.status;
   let newMotifFin = lot.motif_fin;
 
   if (newQty === 0 && lot.status === 'ACTIF') {
     newStatus = 'TERMINE';
-    const initialPlusAdded = Number(lot.initial_quantity) + totalAdded;
-    if (initialPlusAdded > 0) {
-      const soldRatio = totalSold / initialPlusAdded;
-      const deadRatio = totalDead / initialPlusAdded;
-      if (soldRatio >= 0.5 && totalSold >= totalDead) {
+    // motif_fin : heuristique best-effort à partir des mouvements locaux connus
+    // (purement cosmétique — la resynchro serveur la corrige). N'entre PAS dans
+    // le calcul de newQty.
+    try {
+      const totals = await queryAll<any>(
+        `SELECT type, SUM(quantity) as total FROM chicken_movements WHERE lot_id = ? AND status = 'ACTIF' GROUP BY type`,
+        [lotId]
+      );
+      const totalAdded = Number(totals.find((m: any) => m.type === 'AJOUT')?.total || 0);
+      const totalDead = Number(totals.find((m: any) => m.type === 'MORT')?.total || 0);
+      const totalSold = Number(totals.find((m: any) => m.type === 'VENTE')?.total || 0);
+      const base = Number(lot.initial_quantity) + totalAdded;
+      if (base > 0 && totalSold / base >= 0.5 && totalSold >= totalDead) {
         newMotifFin = 'VENTE_TOTALE';
-      } else if (deadRatio >= 0.7) {
+      } else if (base > 0 && totalDead / base >= 0.7) {
         newMotifFin = 'MORTALITE_TOTALE';
       } else {
         newMotifFin = 'FIN_ELEVAGE';
       }
-    } else {
+    } catch {
       newMotifFin = 'FIN_ELEVAGE';
     }
   } else if (newQty > 0 && lot.status === 'TERMINE') {
