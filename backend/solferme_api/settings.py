@@ -104,6 +104,18 @@ WSGI_APPLICATION = 'solferme_api.wsgi.application'
 
 import sys
 
+# Commande d'initialisation de connexion MySQL. En local on force aussi
+# innodb_strict_mode=0, mais les MySQL managés (PythonAnywhere…) interdisent de
+# régler cette variable de session -> surcharger via DB_INIT_COMMAND dans le .env
+# (p. ex. "SET sql_mode='STRICT_TRANS_TABLES'", ou vide pour ne rien envoyer).
+_DB_INIT_COMMAND = os.environ.get(
+    'DB_INIT_COMMAND',
+    "SET sql_mode='STRICT_TRANS_TABLES', innodb_strict_mode=0",
+)
+_DB_OPTIONS = {'charset': 'utf8', 'use_unicode': True}
+if _DB_INIT_COMMAND.strip():
+    _DB_OPTIONS['init_command'] = _DB_INIT_COMMAND
+
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -112,11 +124,7 @@ DATABASES = {
         'PASSWORD': os.environ.get('DB_PASSWORD', ''),
         'HOST': os.environ.get('DB_HOST', 'localhost'),
         'PORT': os.environ.get('DB_PORT', '3306'),
-        'OPTIONS': {
-            'charset': 'utf8',
-            'use_unicode': True,
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES', innodb_strict_mode=0",
-        },
+        'OPTIONS': _DB_OPTIONS,
     }
 }
 
