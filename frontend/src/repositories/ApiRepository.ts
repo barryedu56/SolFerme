@@ -98,6 +98,24 @@ export class ApiRepository {
     return Boolean(getTableNameFromEndpoint(endpoint));
   }
 
+  /**
+   * Endpoints « compte / profil » : toute écriture exige une connexion active.
+   * On refuse explicitement hors-ligne (comme /auth/user/ déjà) au lieu de
+   * mettre en file d'attente et de « faussement réussir » — règle métier :
+   * les données de compte ne se modifient pas hors-ligne. Cohérent entre le
+   * compte Propriétaire (édition photo d'un employé via /users/<id>/) et le
+   * compte Employé (édition de son profil via /auth/user/).
+   */
+  private isAccountEndpoint(endpoint: string): boolean {
+    return /\/(users|auth\/user|auth\/change-password)(\/|$|\?)/.test(endpoint);
+  }
+
+  private async assertOnlineForAccount(endpoint: string): Promise<void> {
+    if (this.isAccountEndpoint(endpoint) && !(await this.isOnline())) {
+      throw new Error("Cette action nécessite une connexion internet active.");
+    }
+  }
+
   /** Un endpoint avec une action est un computed endpoint — pas d'équivalent SQLite */
   private isComputedEndpoint(endpoint: string): boolean {
     const parsed = parseEndpoint(endpoint);
@@ -1164,6 +1182,7 @@ export class ApiRepository {
   }
 
   async post<T = any>(endpoint: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    await this.assertOnlineForAccount(endpoint);
     if (this.isSyncable(endpoint)) {
       if (!(await this.isOnline())) {
         try {
@@ -1218,6 +1237,7 @@ export class ApiRepository {
   }
 
   async put<T = any>(endpoint: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    await this.assertOnlineForAccount(endpoint);
     if (this.isSyncable(endpoint)) {
       if (!(await this.isOnline())) {
         try {
@@ -1266,6 +1286,7 @@ export class ApiRepository {
   }
 
   async patch<T = any>(endpoint: string, body?: unknown, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    await this.assertOnlineForAccount(endpoint);
     if (this.isSyncable(endpoint)) {
       if (!(await this.isOnline())) {
         const row = await handleOfflineWrite<T>('PATCH', endpoint, body);
@@ -1299,6 +1320,7 @@ export class ApiRepository {
   }
 
   async delete<T = any>(endpoint: string, config?: AxiosRequestConfig): Promise<AxiosResponse<T>> {
+    await this.assertOnlineForAccount(endpoint);
     if (this.isSyncable(endpoint)) {
       if (!(await this.isOnline())) {
         const row = await handleOfflineWrite<T>('DELETE', endpoint, null);
