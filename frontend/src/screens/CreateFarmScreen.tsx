@@ -11,6 +11,22 @@ import { toast } from '../utils/toast';
 import { BrandLogo } from '../components/BrandLogo';
 import { Screen, ScreenHeader, Card, space, radius } from '../components/ui';
 
+/**
+ * ⚠️ Défini AU NIVEAU MODULE, jamais dans le corps de CreateFarmScreen.
+ * Un composant recréé à chaque render (nouvelle référence de fonction) fait
+ * démonter/remonter le <Input> sous-jacent à chaque frappe → le champ perd le
+ * focus après chaque lettre (bug web signalé).
+ */
+const Field = ({ icon, label, styles, primaryColor, ...inputProps }: any) => (
+  <View style={styles.inputGroup}>
+    <View style={styles.labelRow}>
+      <MaterialIcons name={icon} size={18} color={primaryColor} />
+      <Text style={styles.label}>{label}</Text>
+    </View>
+    <Input {...inputProps} style={[styles.fieldInput, inputProps.style]} />
+  </View>
+);
+
 export const CreateFarmScreen = ({ navigation, route }: any) => {
   const { theme, isDarkMode } = useTheme();
   const { t } = useTranslation();
@@ -115,16 +131,6 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
     ]);
   };
 
-  const Field = ({ icon, label, ...inputProps }: any) => (
-    <View style={styles.inputGroup}>
-      <View style={styles.labelRow}>
-        <MaterialIcons name={icon} size={18} color={theme.colors.primary} />
-        <Text style={styles.label}>{label}</Text>
-      </View>
-      <Input {...inputProps} style={[styles.fieldInput, inputProps.style]} />
-    </View>
-  );
-
   const headerActions: any[] = isEditing
     ? [
         ...(editFarm.status === 'ARCHIVE' ? [{ icon: 'unarchive', onPress: handleReactivate, tint: '#2E7D32' }] : []),
@@ -146,17 +152,17 @@ export const CreateFarmScreen = ({ navigation, route }: any) => {
         )}
 
         <Card style={styles.formCard}>
-          <Field icon="business" label={t('farms.nameLabel')} placeholder={t('farms.namePlaceholder')} value={name} onChangeText={setName} />
-          <Field icon="place" label={t('farms.locationLabel')} placeholder={t('farms.locationPlaceholder')} value={location} onChangeText={setLocation} />
+          <Field styles={styles} primaryColor={theme.colors.primary} icon="business" label={t('farms.nameLabel')} placeholder={t('farms.namePlaceholder')} value={name} onChangeText={setName} />
+          <Field styles={styles} primaryColor={theme.colors.primary} icon="place" label={t('farms.locationLabel')} placeholder={t('farms.locationPlaceholder')} value={location} onChangeText={setLocation} />
           <View style={{ marginBottom: 0 }}>
-            <Field icon="phone" label={t('farms.phoneLabel')} placeholder={t('farms.phonePlaceholder')} value={phone} onChangeText={setPhone} isPhone maxLength={9} />
+            <Field styles={styles} primaryColor={theme.colors.primary} icon="phone" label={t('farms.phoneLabel')} placeholder={t('farms.phonePlaceholder')} value={phone} onChangeText={setPhone} isPhone maxLength={9} />
           </View>
         </Card>
 
         <Card style={styles.formCard}>
-          <Field icon="straighten" label={t('farms.capacityLabel')} placeholder={t('farms.capacityPlaceholder')} value={capacity} onChangeText={setCapacity} isNumeric />
+          <Field styles={styles} primaryColor={theme.colors.primary} icon="straighten" label={t('farms.capacityLabel')} placeholder={t('farms.capacityPlaceholder')} value={capacity} onChangeText={setCapacity} isNumeric />
           <View style={{ marginBottom: 0 }}>
-            <Field icon="notes" label={t('farms.descriptionLabel')} placeholder={t('farms.descriptionPlaceholder')} value={description} onChangeText={setDescription} multiline numberOfLines={3} style={{ height: 80, textAlignVertical: 'top' }} />
+            <Field styles={styles} primaryColor={theme.colors.primary} icon="notes" label={t('farms.descriptionLabel')} placeholder={t('farms.descriptionPlaceholder')} value={description} onChangeText={setDescription} multiline numberOfLines={3} style={{ height: 80, textAlignVertical: 'top' }} />
           </View>
         </Card>
 
