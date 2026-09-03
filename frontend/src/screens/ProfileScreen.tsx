@@ -14,6 +14,7 @@ import { appendImageToFormData, MULTIPART_HEADERS } from '../utils/imageUpload';
 import { PhotoActionSheet } from '../components/PhotoActionSheet';
 import Constants from 'expo-constants';
 import { getProfileImageUrl } from '../utils/media';
+import { getErrorMessage } from '../utils/errors';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Screen, useContentWidth, space, radius } from '../components/ui';
 
@@ -130,7 +131,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
       toast.success(t('common.success'), t('profile.updatePhotoSuccess'));
     } catch (e) {
       console.error('Upload error:', e);
-      toast.error(t('common.error'), t('profile.updatePhotoError'));
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.updatePhotoError')));
     } finally {
       setUpdating(false);
     }
@@ -146,7 +147,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
       toast.success(t('common.success'), t('profile.removePhotoSuccess'));
     } catch (e) {
       console.error('Remove error:', e);
-      toast.error(t('common.error'), t('profile.removePhotoError'));
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.removePhotoError')));
     } finally {
       setUpdating(false);
     }
@@ -172,7 +173,7 @@ export const ProfileScreen = ({ navigation, route }: any) => {
       toast.success(t('common.success'), t('profile.saveChangesSuccess'));
       await AsyncStorage.setItem('user_data', JSON.stringify(res.data));
     } catch (e) {
-      toast.error(t('common.error'), t('profile.updateError'));
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.updateError')));
     } finally {
       setUpdating(false);
     }

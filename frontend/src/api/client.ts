@@ -72,6 +72,11 @@ let API_URL = DEFAULT_API_URL;
 
 export const apiClient = axios.create({
   baseURL: API_URL, // Sera mis à jour par initApiUrl() au démarrage
+  // Sans timeout, une requête vers un serveur injoignable (mode « serveur mort,
+  // Internet OK ») peut rester suspendue indéfiniment sur le web → l'écran
+  // « ne fait rien » et aucune erreur ne remonte. 20 s couvre les connexions
+  // lentes et les envois de photo, sans laisser l'utilisateur bloqué.
+  timeout: 20000,
   headers: {
     'Content-Type': 'application/json',
   },

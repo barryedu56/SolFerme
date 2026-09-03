@@ -11,6 +11,8 @@ import { appendImageToFormData, MULTIPART_HEADERS } from '../utils/imageUpload';
 import { useTranslation } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { getErrorMessage } from '../utils/errors';
+import { toast } from '../utils/toast';
 
 export const EmployeeDetailScreen = ({ route, navigation }: any) => {
   const { employeeId, farms } = route.params;
@@ -132,10 +134,12 @@ export const EmployeeDetailScreen = ({ route, navigation }: any) => {
       });
 
       await fetchData();
-      Alert.alert(t('common.success'), t('profile.updatePhotoSuccess'));
+      toast.success(t('common.success'), t('profile.updatePhotoSuccess'));
     } catch (e) {
       console.error('Upload error:', e);
-      Alert.alert(t('common.error'), t('profile.updatePhotoError'));
+      // Message réel (ex. « Cette action nécessite une connexion internet
+      // active. » hors-ligne) plutôt qu'un « Échec de l'import » générique.
+      toast.error(t('common.error'), getErrorMessage(e, t('profile.updatePhotoError')));
     } finally {
       setUpdatingPhoto(false);
     }
