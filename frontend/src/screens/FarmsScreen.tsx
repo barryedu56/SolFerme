@@ -109,7 +109,7 @@ export const FarmsScreen = ({ navigation }: any) => {
             isEmployee
               ? []
               : [
-                  { icon: includeArchived ? 'archive' : 'archive-outline' as any, onPress: () => setIncludeArchived((v) => !v), tint: includeArchived ? theme.colors.primary : theme.colors.textSecondary },
+                  { icon: includeArchived ? 'unarchive' : 'archive', onPress: () => setIncludeArchived((v) => !v), tint: includeArchived ? theme.colors.primary : theme.colors.textSecondary },
                   { icon: 'add', onPress: () => navigation.navigate('CreateFarm'), tint: theme.colors.text },
                 ]
           }

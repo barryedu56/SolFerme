@@ -96,6 +96,24 @@ const isClientError = (error: any) => {
   return error?.response && error.response.status >= 400 && error.response.status < 500 && error.response.status !== 401;
 };
 
+// URIs de fichiers locaux (photos choisies pendant une session hors-ligne).
+// Impossible à transmettre en JSON → le backend rejette tout le CREATE/PATCH
+// (« profile_image: The submitted data was not a file »), ce qui bloquait la
+// synchro de l'employé/utilisateur entier. On les retire du payload : la photo
+// reste en cache SQLite pour l'affichage local, l'utilisateur la re-téléverse
+// une fois en ligne (PATCH multipart classique, déjà fonctionnel).
+const LOCAL_FILE_URI_RE = /^(file:|content:|blob:|data:)/i;
+const stripUnsendableFields = (payload: any): any => {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const out: Record<string, any> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k === '_local_image') continue;
+    if (typeof v === 'string' && LOCAL_FILE_URI_RE.test(v)) continue;
+    out[k] = v;
+  }
+  return out;
+};
+
 const getQueueItemPriority = (item: any): number => {
   const parsed = parseEndpoint(item.endpoint);
   let tablePriority = SYNC_QUEUE_PRIORITY[parsed.tableName || ''] ?? 50;
@@ -411,7 +429,7 @@ export class SyncManager {
         resolvedEndpoint = await this.resolveEndpoint(item.endpoint, item.table_name, item.local_id);
         const payload = JSON.parse(item.payload_json);
         const { resolved, unresolved } = await resolveLocalIdsInPayload(payload);
-        resolvedPayload = resolved;
+        resolvedPayload = stripUnsendableFields(resolved);
 
         if (unresolved) {
           const retryCount = (item.retry_count || 0) + 1;
