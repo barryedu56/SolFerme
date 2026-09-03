@@ -7,6 +7,9 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -16,6 +19,9 @@
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api"
+      },
       "android": {
         "buildType": "apk"
       },
@@ -24,6 +30,10 @@
       }
     },
     "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api"
+      },
       "android": {
         "buildType": "app-bundle"
       },
