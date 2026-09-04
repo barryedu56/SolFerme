@@ -14,7 +14,8 @@ Complément du guide d'installation : [DEPLOIEMENT_PYTHONANYWHERE.md](DEPLOIEMEN
 > | Code | `~/SolFerme` (= `/home/ahmad5/SolFerme`) |
 > | Config secrète | `~/SolFerme/backend/.env` |
 > | Environnement Python | `solferme` (`~/.virtualenvs/solferme`) |
-> | Sauvegardes | `~/solferme-backups/` |
+> | Sauvegardes locales | `~/solferme-backups/` (14 derniers jours) |
+> | Sauvegardes hors-site | Google Drive, dossier **SolFerme-Backups** (90 derniers jours), compte `barryedu56@gmail.com`, remote rclone `gdrive` |
 > | Fichier WSGI | `/var/www/ahmad5_pythonanywhere_com_wsgi.py` |
 > | Base de données | `ahmad5$solferme` sur `ahmad5.mysql.pythonanywhere-services.com` |
 
@@ -165,26 +166,36 @@ python manage.py shell -c "from farm_management.models import *; print('Fermes:'
 
 ## 5. Les sauvegardes
 
-Le script : `~/SolFerme/backend/scripts/backup_db.sh`.
-Il fait un `mysqldump` compressé daté dans `~/solferme-backups/` et garde 14 jours.
+**État : en place et vérifié (2026-09-04). Entièrement automatique — rien à faire au quotidien.**
 
-### Sauvegarde manuelle (à tout moment)
+Chaque nuit à **02:00**, une tâche planifiée (onglet Tasks) lance
+`~/SolFerme/backend/scripts/backup_db.sh`, qui :
+
+1. Copie toute la base (`mysqldump`) dans un fichier daté, compressé
+2. L'enregistre en local : `~/solferme-backups/` (garde les **14** derniers jours)
+3. L'envoie aussi sur **Google Drive** (rclone, remote `gdrive`, dossier
+   **SolFerme-Backups**, garde les **90** derniers jours) — pour survivre à la
+   perte du compte PythonAnywhere lui-même
+
+### Vérifier que ça tourne (de temps en temps, pas obligatoire)
+
+- Onglet **Tasks** → icône 📋 sur la ligne « Daily 02:00 » → journal des dernières exécutions
+- Google Drive (`barryedu56@gmail.com`) → dossier **SolFerme-Backups** → un fichier `.sql.gz` daté du jour
+
+### Sauvegarde manuelle / export à la demande
+
+La **même commande**, à tout moment, fait exactement la même chose (local + Drive) :
 
 ```bash
 bash ~/SolFerme/backend/scripts/backup_db.sh
 ```
 
-Sortie attendue : `OK — XX Ko, N table(s) détectée(s)`.
+Sortie attendue : `OK — XX Ko, N table(s) détectée(s)` puis `Copie hors-site OK (rétention 90 j).`
 
 ### Récupérer une copie sur ton PC
 
-Onglet **Files** → dossier `solferme-backups/` → clic sur le `.sql.gz` → **Download**.
-
-### Sauvegarde automatique (à mettre en place)
-
-Onglet **Tasks** → **Scheduled tasks** :
-- Fréquence **daily**, heure **02:00**
-- Commande : `bash /home/ahmad5/SolFerme/backend/scripts/backup_db.sh`
+- Depuis PythonAnywhere : onglet **Files** → `solferme-backups/` → clic sur le `.sql.gz` → **Download**
+- Depuis Google Drive : directement sur drive.google.com, dossier **SolFerme-Backups**
 
 ### Restaurer
 
@@ -207,6 +218,71 @@ gunzip -c "$FICHIER" | mysql \
 ```
 
 Tout revient à l'état de la date du fichier. Puis onglet **Web** → **Reload**.
+
+**Si même le serveur PythonAnywhere est perdu** : récupère le fichier depuis
+Google Drive (à la main, ou avec rclone configuré sur n'importe quelle autre
+machine — `rclone copy gdrive:SolFerme-Backups/<fichier> .`), puis réinjecte-le
+sur la nouvelle base MySQL avec la même commande.
+
+### Si la copie Google Drive s'arrête (jeton expiré)
+
+L'appli Google `SolFerme Backup` est en statut **« Test »** — pense à cliquer
+**« Publier l'application »** dans Google Cloud Console (Google Auth Platform →
+Audience) pour éviter toute expiration du jeton par inactivité prolongée.
+Si malgré tout `rclone` réclame une nouvelle autorisation un jour, seule la
+**sauvegarde locale** est affectée entre-temps — refaire simplement l'étape
+« Configurer le remote gdrive » ci-dessous.
+
+<details>
+<summary>Reconfigurer le remote Google Drive depuis zéro (rare — nouveau serveur, jeton révoqué...)</summary>
+
+**a) Installer rclone sur le serveur** (sans droits admin) :
+
+```bash
+mkdir -p ~/bin && cd /tmp
+wget https://downloads.rclone.org/rclone-current-linux-amd64.zip
+unzip -oq rclone-current-linux-amd64.zip
+cp rclone-*-linux-amd64/rclone ~/bin/ && chmod +x ~/bin/rclone
+~/bin/rclone version
+```
+
+**b) Configurer le remote `gdrive`** — `~/bin/rclone config` :
+- `n` (new remote) → nom : **`gdrive`**
+- Storage : **`drive`** (Google Drive)
+- `client_id` / `client_secret` : l'identifiant OAuth créé pour SolFerme Backup
+  dans Google Cloud Console (projet **SolFerme Backup**, écran de consentement
+  externe + testeur `barryedu56@gmail.com` + scope `drive.file` déjà en place ;
+  si le projet Cloud n'existe plus, refaire un « ID client OAuth » type
+  *Application de bureau* dans APIs et services → Identifiants)
+- `scope` : **`3`** (`drive.file` — rclone ne voit QUE les fichiers qu'il crée, le
+  plus sûr)
+- `service_account_file` : **vide — appuyer sur Entrée, ne rien taper** (surtout
+  pas `n`, sinon la config est cassée en silence) · advanced config : `n`
+- « Use web browser to automatically authenticate? » : **`n`** (on est sur un serveur)
+- rclone affiche une commande `rclone authorize "drive" "..."` → **la copier**
+
+**c) Autoriser depuis un PC avec navigateur :**
+
+```powershell
+C:\platform-tools\rclone.exe authorize "drive" "...colle-la-commande-du-serveur..."
+```
+
+Le navigateur s'ouvre → connexion **barryedu56@gmail.com** → écran « Google n'a
+pas validé cette application » → **Continuer** → autoriser l'accès →
+« Success! ». rclone affiche un bloc `eyJ0b2tlbi...` → **le copier**, le coller
+dans le `rclone config` du serveur qui attend au prompt `config_token>`. Puis :
+Shared Drive → `n`, garder → `y`, `q`.
+
+**d) Vérifier :**
+
+```bash
+~/bin/rclone lsd gdrive:
+bash ~/SolFerme/backend/scripts/backup_db.sh
+```
+
+La sortie doit finir par `Copie hors-site OK`.
+
+</details>
 
 ### Copie hors-site vers Google Drive (rclone)
 
@@ -466,7 +542,9 @@ python manage.py collectstatic --noinput        # si statiques admin changés
 # --- Base de données ---
 python manage.py dbshell                         # console SQL
 python manage.py shell                           # console Python/Django
-bash ~/SolFerme/backend/scripts/backup_db.sh     # sauvegarde immédiate
+bash ~/SolFerme/backend/scripts/backup_db.sh     # sauvegarde immédiate (local + Drive)
+~/bin/rclone lsd gdrive:                          # vérifier l'accès à Google Drive
+~/bin/rclone ls gdrive:SolFerme-Backups           # lister les sauvegardes sur Drive
 
 # --- Comptes ---
 python manage.py changepassword <email>
