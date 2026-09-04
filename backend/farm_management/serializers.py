@@ -816,6 +816,11 @@ class ExpenseSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by']
 
 class ReminderSerializer(serializers.ModelSerializer):
+    # 🔧 Sans ça, le frontend n'a que les ID (farm/lot) → cartes de rappel
+    # affichant "Ferme #12" au lieu du nom réel pour un utilisateur normal.
+    farm_name = serializers.ReadOnlyField(source='farm.name')
+    lot_name = serializers.ReadOnlyField(source='lot.name')
+
     class Meta:
         model = Reminder
         fields = '__all__'

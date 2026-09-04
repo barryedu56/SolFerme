@@ -20,6 +20,12 @@ export const RemindersScreen = ({ navigation }: any) => {
   const [refreshing, setRefreshing] = useState(false);
   const [reminders, setReminders] = useState<any[]>([]);
   const [filter, setFilter] = useState('ALL');
+  // 🔧 Le backend renseigne farm_name/lot_name (voir ReminderSerializer), mais
+  // la copie locale hors-ligne (SQLite) ne stocke que farm_id/lot_id. On
+  // résout donc aussi les noms côté client depuis les fermes/lots déjà en
+  // cache — ça couvre le cas hors-ligne sans dépendre du backend.
+  const [farmNames, setFarmNames] = useState<Record<number, string>>({});
+  const [lotNames, setLotNames] = useState<Record<number, string>>({});
   const { isDesktop, isTablet } = useBreakpoint();
   const numColumns = isDesktop ? 3 : isTablet ? 2 : 1;
   const contentW = useContentWidth('wide');
@@ -39,8 +45,25 @@ export const RemindersScreen = ({ navigation }: any) => {
     }
   };
 
+  // Répertoire ferme/lot → nom, pour l'affichage (marche en ligne et hors-ligne).
+  const fetchNamesDirectory = async () => {
+    try {
+      const [farms, lots] = await Promise.all([
+        repositoryProvider.farm.list(),
+        repositoryProvider.lot.list(),
+      ]);
+      setFarmNames(Object.fromEntries((farms || []).map((f: any) => [f.id, f.name])));
+      setLotNames(Object.fromEntries((lots || []).map((l: any) => [l.id, l.name])));
+    } catch {
+      // best-effort : sans ce répertoire, on retombe sur "Ferme #X" / "Lot #X"
+    }
+  };
+
   useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => fetchReminders());
+    const unsubscribe = navigation.addListener('focus', () => {
+      fetchReminders();
+      fetchNamesDirectory();
+    });
     return unsubscribe;
   }, [navigation]);
 
@@ -162,7 +185,8 @@ export const RemindersScreen = ({ navigation }: any) => {
             <View style={S.metaItem}>
               <MaterialCommunityIcons name="home-group" size={14} color={theme.colors.textSecondary} />
               <Text style={S.metaText} numberOfLines={1}>
-                {item.farm_name || `Ferme #${item.farm}`}{item.lot ? ` · ${item.lot_name || `Lot #${item.lot}`}` : ''}
+                {item.farm_name || farmNames[item.farm] || `Ferme #${item.farm}`}
+                {item.lot ? ` · ${item.lot_name || lotNames[item.lot] || `Lot #${item.lot}`}` : ''}
               </Text>
             </View>
           </View>
