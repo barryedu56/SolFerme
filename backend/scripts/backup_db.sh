@@ -59,7 +59,7 @@ OUT="$BACKUP_DIR/solferme_${STAMP}.sql.gz"
 echo "[$(date '+%Y-%m-%d %H:%M')] Sauvegarde de '${DB_NAME}' -> ${OUT}"
 if mysqldump --defaults-extra-file="$CNF" \
       --no-tablespaces --single-transaction --skip-lock-tables \
-      --routines --triggers --events \
+      --routines --triggers \
       --default-character-set=utf8mb4 \
       "$DB_NAME" | gzip -9 > "${OUT}.part"; then
   mv "${OUT}.part" "$OUT"
