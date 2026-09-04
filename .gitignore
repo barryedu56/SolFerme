@@ -16,6 +16,9 @@ backend/staticfiles/
 db.sqlite3
 *.db
 frontend/SolFermeOffline.db
+*.sql
+*.sql.gz
+solferme-backups/
 
 # IDE
 .vscode/
