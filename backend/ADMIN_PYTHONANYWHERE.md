@@ -208,8 +208,55 @@ gunzip -c "$FICHIER" | mysql \
 
 Tout revient à l'état de la date du fichier. Puis onglet **Web** → **Reload**.
 
-> **À faire bientôt** : une copie **hors de PythonAnywhere** (Google Drive via
-> `rclone`, ou téléchargement manuel hebdo) — pour survivre à la perte du compte PA.
+### Copie hors-site vers Google Drive (rclone)
+
+Pour survivre à la perte de tout le compte PythonAnywhere. Une fois configuré,
+le script `backup_db.sh` envoie **automatiquement** chaque sauvegarde sur Drive
+(rétention 90 jours côté Drive, 14 jours en local).
+
+**a) Installer rclone sur le serveur** (sans droits admin) :
+
+```bash
+mkdir -p ~/bin && cd /tmp
+wget -q https://downloads.rclone.org/rclone-current-linux-x86_64.zip
+unzip -oq rclone-current-linux-x86_64.zip
+cp rclone-*-linux-*/rclone ~/bin/ && chmod +x ~/bin/rclone
+~/bin/rclone version
+```
+
+**b) Configurer le remote `gdrive`** — `~/bin/rclone config` :
+- `n` (new remote) → nom : **`gdrive`**
+- Storage : **`drive`** (Google Drive)
+- `client_id` / `client_secret` : laisser **vide** (Entrée)
+- `scope` : **`3`** (`drive.file` — rclone ne voit QUE les fichiers qu'il crée, le
+  plus sûr)
+- `service_account_file` : vide · advanced config : `n`
+- « Use web browser to automatically authenticate? » : **`n`** (on est sur un serveur)
+- rclone affiche une commande `rclone authorize "drive" "..."` → **la copier**
+
+**c) Autoriser depuis ton PC** (qui a un navigateur) :
+
+```powershell
+C:\platform-tools\rclone.exe authorize "drive" "...colle-la-commande-du-serveur..."
+```
+
+Le navigateur s'ouvre → connexion **barryedu56@gmail.com** → Autoriser.
+rclone affiche un bloc `{"access_token":...}` → **le copier**, le coller dans le
+`rclone config` du serveur qui attend. Puis : Shared Drive → `n`, garder → `y`, `q`.
+
+**d) Créer le dossier + tester :**
+
+```bash
+~/bin/rclone mkdir gdrive:SolFerme-Backups
+bash ~/SolFerme/backend/scripts/backup_db.sh
+```
+
+La sortie doit finir par `Copie hors-site OK`. Vérifie dans Google Drive : dossier
+**SolFerme-Backups** contenant le `.sql.gz` du jour.
+
+**Restaurer depuis Drive** (le jour où même le serveur est perdu) : sur n'importe
+quelle machine avec rclone configuré →
+`rclone copy gdrive:SolFerme-Backups/solferme_AAAA-MM-JJ_HHMM.sql.gz .`
 
 ---
 
