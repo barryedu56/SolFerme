@@ -218,9 +218,9 @@ le script `backup_db.sh` envoie **automatiquement** chaque sauvegarde sur Drive
 
 ```bash
 mkdir -p ~/bin && cd /tmp
-wget -q https://downloads.rclone.org/rclone-current-linux-x86_64.zip
-unzip -oq rclone-current-linux-x86_64.zip
-cp rclone-*-linux-*/rclone ~/bin/ && chmod +x ~/bin/rclone
+wget https://downloads.rclone.org/rclone-current-linux-amd64.zip
+unzip -oq rclone-current-linux-amd64.zip
+cp rclone-*-linux-amd64/rclone ~/bin/ && chmod +x ~/bin/rclone
 ~/bin/rclone version
 ```
 
