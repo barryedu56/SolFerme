@@ -8,8 +8,9 @@
 #    • Export manuel, à tout moment : la MÊME commande dans une console Bash.
 #      Le fichier .sql.gz est ensuite téléchargeable depuis l'onglet Files.
 #
-#  Restauration (le jour où c'est nécessaire) :
-#    gunzip < solferme_AAAA-MM-JJ_HHMM.sql.gz | mysql --defaults-extra-file=... 'ahmad5$solferme'
+#  Restauration (⚠️ ÉCRASE la base — uniquement en cas de perte de données) :
+#    gunzip -c ~/solferme-backups/solferme_AAAA-MM-JJ_HHMM.sql.gz \
+#      | mysql --user=ahmad5 --host=ahmad5.mysql.pythonanywhere-services.com -p 'ahmad5$solferme'
 #
 #  Réglages via variables d'environnement (optionnel) :
 #    SOLFERME_BACKUP_DIR        (défaut : ~/solferme-backups)

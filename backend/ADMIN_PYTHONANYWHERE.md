@@ -186,16 +186,27 @@ Onglet **Tasks** → **Scheduled tasks** :
 - Fréquence **daily**, heure **02:00**
 - Commande : `bash /home/ahmad5/SolFerme/backend/scripts/backup_db.sh`
 
-### Restaurer (le jour où c'est nécessaire)
+### Restaurer
+
+> ⚠️ **La restauration ÉCRASE la base en ligne.** À ne lancer QUE le jour où tu
+> as réellement perdu des données. Pas pour « voir si ça marche ».
+
+**Pour tester une sauvegarde sans risque**, restaure-la dans une base *séparée* :
+onglet Databases → créer une base `test` → `ahmad5$test` devient ta cible.
 
 ```bash
-# 1. (si besoin) vider la base : onglet Databases → supprimer puis recréer 'solferme'
-# 2. réinjecter le dump :
-gunzip -c ~/solferme-backups/solferme_2026-09-04_0200.sql.gz \
-  | mysql --user=ahmad5 --host=ahmad5.mysql.pythonanywhere-services.com -p 'ahmad5$solferme'
+# 1. Choisir le fichier réel (adapte la date/heure) :
+ls -1t ~/solferme-backups/
+FICHIER=~/solferme-backups/solferme_2026-09-04_1109.sql.gz
+
+# 2. Réinjecter (mot de passe MySQL demandé) :
+gunzip -c "$FICHIER" | mysql \
+  --user=ahmad5 \
+  --host=ahmad5.mysql.pythonanywhere-services.com \
+  -p 'ahmad5$solferme'          # <- cible ; mettre 'ahmad5$test' pour un test
 ```
 
-Tout revient à l'état de la date du fichier.
+Tout revient à l'état de la date du fichier. Puis onglet **Web** → **Reload**.
 
 > **À faire bientôt** : une copie **hors de PythonAnywhere** (Google Drive via
 > `rclone`, ou téléchargement manuel hebdo) — pour survivre à la perte du compte PA.
