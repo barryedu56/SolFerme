@@ -5,24 +5,54 @@
  * Le hors-ligne des DONNÉES est déjà géré par SQLite/OPFS (indépendant de ce SW).
  * Ce SW ne s'occupe QUE des fichiers de l'application.
  *
+ * 🔧 Le SW ne contrôle PAS la page qui l'enregistre lors de sa toute première
+ * visite (spec navigateur) : les requêtes du gros bundle JS, des polices et du
+ * WASM SQLite, faites AVANT que le SW soit actif, ne passent jamais par lui et
+ * ne sont donc jamais mises en cache par le simple mode « stale-while-revalidate »
+ * ci-dessous. Résultat observé : après installation, 1ʳᵉ ouverture hors-ligne →
+ * page blanche (seule la page HTML avait été pré-chargée). Fix : au moment de
+ * l'installation, précharger explicitement TOUS les fichiers listés dans
+ * precache-manifest.json (généré à chaque build par scripts/build-pwa-manifest.js).
+ *
  * Stratégies :
  *   - Navigation (documents)      → network-first, repli sur la dernière page en cache.
- *   - Assets statiques même-origine → stale-while-revalidate.
+ *   - Assets statiques même-origine → stale-while-revalidate (rattrapage best-effort).
  *   - Tout le reste (API, autres origines) → passe-plat (jamais intercepté).
  *
- * Bumper CACHE_VERSION à chaque changement structurel de ce fichier.
+ * CACHE_VERSION est tamponné avec un identifiant de build à chaque déploiement
+ * (scripts/build-pwa-manifest.js) : le contenu de ce fichier change donc à
+ * chaque déploiement, ce qui déclenche la détection de mise à jour du SW par
+ * le navigateur (sinon un SW dont le code ne change jamais n'est jamais
+ * réinstallé, et precache-manifest.json ne serait relu qu'au hasard).
  */
-const CACHE_VERSION = 'solferme-v1';
+const CACHE_VERSION = 'solferme-__BUILD_ID__';
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const OFFLINE_URL = '/';
+const MANIFEST_URL = '/precache-manifest.json';
 
 self.addEventListener('install', (event) => {
-  // Pré-charge la page d'entrée pour garantir un boot hors-ligne.
   event.waitUntil(
-    caches.open(RUNTIME_CACHE)
-      .then((cache) => cache.add(new Request(OFFLINE_URL, { cache: 'reload' })))
-      .catch(() => {})
-      .then(() => self.skipWaiting())
+    caches.open(RUNTIME_CACHE).then(async (cache) => {
+      // Toujours garantir la page d'entrée, même si le manifeste est absent.
+      await cache.add(new Request(OFFLINE_URL, { cache: 'reload' })).catch(() => {});
+
+      // Préchargement complet de l'app (JS, CSS, polices, WASM, icônes) listée
+      // au moment du build → démarrage 100% hors-ligne dès la 1ʳᵉ visite.
+      try {
+        const res = await fetch(new Request(MANIFEST_URL, { cache: 'reload' }));
+        if (res.ok) {
+          const files = await res.json();
+          await Promise.all(
+            files.map((f) => cache.add(new Request(f, { cache: 'reload' })).catch(() => {}))
+          );
+        }
+      } catch {
+        // Pas de manifeste (ex: dev local sans build) : le mode
+        // stale-while-revalidate rattrapera au mieux au fil des visites.
+      }
+
+      return self.skipWaiting();
+    })
   );
 });
 
