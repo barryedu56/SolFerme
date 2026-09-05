@@ -376,7 +376,15 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         chicken_revenues_period = sales_period.filter(product_type='CHICKEN').aggregate(total=Sum('total_amount'))['total'] or 0
 
         period_expense_amount = expenses_period.aggregate(total=Sum('amount'))['total'] or 0
-        period_lot_investment = all_lots.filter(purchase_date__gte=start_date.date()).aggregate(total=Sum('purchase_price'))['total'] or 0
+        if lot_id:
+            # Vue centrée sur UN lot : son investissement initial (achat des
+            # sujets + coûts de mise en place) lui est propre — on le compte
+            # quelle que soit la période. Sinon un lot acheté il y a 3 mois
+            # affiche 0 de dépenses en vue « semaine » alors que son écran
+            # Détail montre le coût réel (incohérence signalée).
+            period_lot_investment = all_lots.aggregate(total=Sum('purchase_price'))['total'] or 0
+        else:
+            period_lot_investment = all_lots.filter(purchase_date__gte=start_date.date()).aggregate(total=Sum('purchase_price'))['total'] or 0
 
         # We need to exclude expenses already linked to FeedPurchase, HealthPurchase or Payroll to avoid double counting if they are duplicated in Expense model
         # Looking at models.py, FeedPurchase/HealthPurchase/Payroll have a OneToOneField(Expense) called 'expense'.
@@ -389,8 +397,15 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
 
         period_standalone_expenses = expenses_period.exclude(id__in=linked_expense_ids).aggregate(total=Sum('amount'))['total'] or 0
 
-        period_feed_purchase_cost = FeedPurchase.objects.filter(farm__in=farms, date__gte=start_date.date(), status='ACTIVE').aggregate(total=Sum('total_price'))['total'] or 0
-        period_health_purchase_cost = HealthPurchase.objects.filter(farm__in=farms, date__gte=start_date.date(), status='ACTIVE').aggregate(total=Sum('total_price'))['total'] or 0
+        feed_pq = FeedPurchase.objects.filter(farm__in=farms, date__gte=start_date.date(), status='ACTIVE')
+        health_pq = HealthPurchase.objects.filter(farm__in=farms, date__gte=start_date.date(), status='ACTIVE')
+        if lot_id:
+            # Quand on filtre sur un lot, ne compter que SES achats aliment/santé
+            # (pas ceux des autres lots de la même ferme).
+            feed_pq = feed_pq.filter(lot_id=lot_id)
+            health_pq = health_pq.filter(lot_id=lot_id)
+        period_feed_purchase_cost = feed_pq.aggregate(total=Sum('total_price'))['total'] or 0
+        period_health_purchase_cost = health_pq.aggregate(total=Sum('total_price'))['total'] or 0
         period_payroll_cost = Payroll.objects.filter(employee__farm__in=farms, date__gte=start_date.date(), status='ACTIVE').aggregate(total=Sum('amount_paid'))['total'] or 0
 
         period_total_expenses = float(period_standalone_expenses) + float(period_lot_investment) + float(period_feed_purchase_cost) + float(period_health_purchase_cost) + float(period_payroll_cost)

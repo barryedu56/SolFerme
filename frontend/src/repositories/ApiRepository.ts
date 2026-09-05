@@ -417,9 +417,17 @@ export class ApiRepository {
         `SELECT COALESCE(SUM(total_price), 0) as cnt FROM health_purchases WHERE status = 'ACTIF' ${lotIn}`,
         [...lotP]
       );
+      // Filtre sur les lots : par id précis quand un lot est sélectionné (la
+      // table `lots` a `id`, pas `lot_id` — d'où un clause dédiée), sinon par
+      // ferme. Cohérent avec le backend (investissement du lot compté en entier
+      // quand on filtre sur ce lot, quelle que soit la période).
+      const lotSelfW = (hasLotFilter && lotIds.length > 0)
+        ? `AND id IN (${lotIds.map(() => '?').join(',')})`
+        : farmW;
+      const lotSelfP: any[] = (hasLotFilter && lotIds.length > 0) ? lotIds : farmP;
       const lotPurchasesCost = await queryOne<{ cnt: number }>(
-        `SELECT COALESCE(SUM(purchase_price), 0) as cnt FROM lots WHERE status != 'ANNULEE' ${farmW}`,
-        [...farmP]
+        `SELECT COALESCE(SUM(purchase_price), 0) as cnt FROM lots WHERE status != 'ANNULEE' ${lotSelfW}`,
+        [...lotSelfP]
       ).catch(() => ({ cnt: 0 }));
       const payrollCost = await queryOne<{ cnt: number }>(
         `SELECT COALESCE(SUM(amount_paid), 0) as cnt FROM payrolls WHERE status = 'ACTIF' ${empW}`,
