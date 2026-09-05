@@ -10,7 +10,7 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
-        "EXPO_PUBLIC_SENTRY_DSN": "",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "android": {
@@ -24,7 +24,7 @@
       "distribution": "internal",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
-        "EXPO_PUBLIC_SENTRY_DSN": "",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "android": {
@@ -38,7 +38,7 @@
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
-        "EXPO_PUBLIC_SENTRY_DSN": "",
+        "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "android": {
