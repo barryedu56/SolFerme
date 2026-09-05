@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, ScrollView, Pressable, Platform } from 'react-native';
+import * as Sentry from '@sentry/react-native';
 
 interface Props {
   children: React.ReactNode;
@@ -25,6 +26,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
     this.setState({ info: info.componentStack || '' });
     // eslint-disable-next-line no-console
     console.error('[ErrorBoundary]', error, info.componentStack);
+    // Remonter à Sentry (no-op si Sentry désactivé / DSN absent).
+    Sentry.captureException(error, {
+      contexts: { react: { componentStack: info.componentStack } },
+    });
   }
 
   render() {

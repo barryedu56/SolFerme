@@ -1,6 +1,9 @@
-const { getDefaultConfig } = require('expo/metro-config');
+// getSentryExpoConfig = getDefaultConfig d'Expo + les réglages Sentry (Debug IDs
+// pour relier les source maps aux erreurs). Sans upload de source maps c'est
+// inoffensif ; ça prépare le terrain pour quand SENTRY_AUTH_TOKEN sera ajouté.
+const { getSentryExpoConfig } = require('@sentry/react-native/metro');
 
-const config = getDefaultConfig(__dirname);
+const config = getSentryExpoConfig(__dirname);
 
 const {
   resolver: { sourceExts, assetExts }

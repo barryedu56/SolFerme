@@ -53,7 +53,11 @@ export default {
         {
           "color": "#F9D760"
         }
-      ]
+      ],
+      // Sentry : capture les crashs natifs + erreurs JS. L'upload des source
+      // maps (pour dé-minifier les stack traces JS) ne s'active que si
+      // SENTRY_AUTH_TOKEN est présent au build — à ajouter dans eas.json plus tard.
+      "@sentry/react-native"
     ],
     extra: {
       apiUrl: process.env.EXPO_PUBLIC_API_URL,

@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
+import * as Sentry from '@sentry/react-native';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { ThemeProvider } from './src/context/ThemeContext';
@@ -11,6 +12,18 @@ import { LanguageProvider } from './src/context/LanguageContext';
 import { registerForPushNotificationsAsync } from './src/utils/notifications';
 import { registerDeviceForPush } from './src/utils/deviceRegistration';
 import { syncManager } from './src/utils/syncManager';
+
+// Sentry : monitoring des crashs et erreurs. Le DSN (public par nature — il
+// n'autorise que l'envoi d'événements) vient de EXPO_PUBLIC_SENTRY_DSN, injecté
+// au build via eas.json. Désactivé en dev et si le DSN est absent.
+const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
+Sentry.init({
+  dsn: SENTRY_DSN,
+  enabled: !__DEV__ && !!SENTRY_DSN,
+  environment: __DEV__ ? 'development' : 'production',
+  sendDefaultPii: false,   // pas d'e-mail / IP envoyés
+  tracesSampleRate: 0,     // erreurs uniquement (économise le quota gratuit)
+});
 
 /**
  * Démarre la synchronisation Offline-First UNIQUEMENT pour les comptes métier
@@ -49,7 +62,7 @@ function PushBootstrap() {
   return null;
 }
 
-export default function App() {
+function App() {
   useEffect(() => {
     registerForPushNotificationsAsync();
   }, []);
@@ -77,3 +90,5 @@ export default function App() {
     </GestureHandlerRootView>
   );
 }
+
+export default Sentry.wrap(App);
