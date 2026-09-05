@@ -30,13 +30,14 @@ Complément du guide d'installation : [DEPLOIEMENT_PYTHONANYWHERE.md](DEPLOIEMEN
 5. [Les sauvegardes](#5-les-sauvegardes)
 6. [Les tâches planifiées](#6-les-tâches-planifiées)
 7. [Les logs — où regarder quand ça casse](#7-les-logs--où-regarder-quand-ça-casse)
-8. [Le fichier `.env` (configuration)](#8-le-fichier-env-configuration)
-9. [Gérer les comptes utilisateurs](#9-gérer-les-comptes-utilisateurs)
-10. [Surveiller la santé et les quotas](#10-surveiller-la-santé-et-les-quotas)
-11. [HTTPS et domaine](#11-https-et-domaine)
-12. [Sécurité — les règles à ne jamais enfreindre](#12-sécurité--les-règles-à-ne-jamais-enfreindre)
-13. [Quand quelque chose casse — diagnostic](#13-quand-quelque-chose-casse--diagnostic)
-14. [Aide-mémoire commandes](#14-aide-mémoire-commandes)
+8. [Sentry — monitoring d'erreurs](#8-sentry--monitoring-derreurs)
+9. [Le fichier `.env` (configuration)](#9-le-fichier-env-configuration)
+10. [Gérer les comptes utilisateurs](#10-gérer-les-comptes-utilisateurs)
+11. [Surveiller la santé et les quotas](#11-surveiller-la-santé-et-les-quotas)
+12. [HTTPS et domaine](#12-https-et-domaine)
+13. [Sécurité — les règles à ne jamais enfreindre](#13-sécurité--les-règles-à-ne-jamais-enfreindre)
+14. [Quand quelque chose casse — diagnostic](#14-quand-quelque-chose-casse--diagnostic)
+15. [Aide-mémoire commandes](#15-aide-mémoire-commandes)
 
 ---
 
@@ -387,7 +388,57 @@ Les logs sont **rotés** automatiquement (anciens dans `/var/log/`, suffixés `.
 
 ---
 
-## 8. Le fichier `.env` (configuration)
+## 8. Sentry — monitoring d'erreurs
+
+Les logs PythonAnywhere ne servent que si **toi** vas les lire. Sentry, lui,
+**t'alerte automatiquement** (e-mail) dès qu'une erreur 500 se produit — sur le
+serveur **ou** dans l'app mobile chez un utilisateur — avec la trace complète.
+
+### Ce qui est déjà configuré
+
+- **Deux projets Sentry** : `solferme-backend` (Django) et `solferme-mobile` (React Native).
+- Côté serveur : le paquet `sentry-sdk` est dans `requirements.txt`. Sentry ne
+  s'active **que si** `SENTRY_DSN` est présent dans le `.env` **et** `DEBUG=False`.
+- Aucune info personnelle (e-mail, IP) n'est envoyée (`send_default_pii=False`).
+- Pas de suivi de performance pour l'instant (quota gratuit préservé).
+
+### Le `.env` du serveur
+
+```ini
+SENTRY_DSN=https://xxxxxxxx@o0000.ingest.de.sentry.io/0000000
+SENTRY_ENVIRONMENT=production
+```
+
+Le **DSN n'est pas un secret** (il autorise seulement l'envoi d'événements), mais
+on le garde en variable d'env. Après l'avoir ajouté : onglet **Web** → **Reload**.
+
+### Vérifier que ça marche
+
+```bash
+cd ~/SolFerme/backend
+python manage.py shell -c "import sentry_sdk; sentry_sdk.capture_message('Test SolFerme depuis le serveur')"
+```
+
+→ un événement « Test SolFerme… » doit apparaître dans le projet
+`solferme-backend` sur sentry.io en quelques secondes.
+
+### Au quotidien
+
+- Tu reçois un **e-mail** à chaque nouvelle erreur. Le tableau de bord Sentry
+  regroupe les erreurs identiques, montre la fréquence, la stack, l'appareil.
+- Quand tu as corrigé un bug : marque l'« issue » comme **Resolved** dans Sentry.
+  Si elle réapparaît, Sentry te re-alerte (régression).
+- **Quota gratuit** : ~5 000 erreurs/mois, 2 projets. Large pour commencer.
+
+### Frontend (app mobile)
+
+Le DSN de `solferme-mobile` est injecté au **build EAS** via `eas.json`
+(`EXPO_PUBLIC_SENTRY_DSN`). Il ne prend effet qu'à partir du **prochain build** —
+un APK déjà installé ne remonte rien tant qu'il n'est pas remplacé.
+
+---
+
+## 9. Le fichier `.env` (configuration)
 
 Emplacement : `~/SolFerme/backend/.env`. **Jamais commité, jamais partagé.**
 
@@ -417,7 +468,7 @@ Colle le résultat dans `DJANGO_SECRET_KEY`, Reload.
 
 ---
 
-## 9. Gérer les comptes utilisateurs
+## 10. Gérer les comptes utilisateurs
 
 ### Le compte SuperAdmin (un seul autorisé)
 
@@ -451,7 +502,7 @@ python manage.py shell -c "from farm_management.models import User; [print(u.id,
 
 ---
 
-## 10. Surveiller la santé et les quotas
+## 11. Surveiller la santé et les quotas
 
 Onglet **Account** :
 
@@ -473,7 +524,7 @@ Onglet **Account** :
 
 ---
 
-## 11. HTTPS et domaine
+## 12. HTTPS et domaine
 
 - **Certificat HTTPS** : fourni automatiquement pour `ahmad5.pythonanywhere.com`.
 - **Forcer HTTPS** : onglet Web → section Security → activé.
@@ -487,7 +538,7 @@ Onglet **Account** :
 
 ---
 
-## 12. Sécurité — les règles à ne jamais enfreindre
+## 13. Sécurité — les règles à ne jamais enfreindre
 
 1. `DJANGO_DEBUG=False` en production. Toujours. (`True` expose la config et le code.)
 2. Le `.env` ne quitte **jamais** le serveur. Pas de commit, pas de partage, pas de capture d'écran.
@@ -505,7 +556,7 @@ Onglet **Account** :
 
 ---
 
-## 13. Quand quelque chose casse — diagnostic
+## 14. Quand quelque chose casse — diagnostic
 
 | Symptôme | Cause probable | Quoi faire |
 |---|---|---|
@@ -519,12 +570,13 @@ Onglet **Account** :
 | App mobile : « impossible de joindre le serveur » | API down, ou mauvaise URL dans l'app | Ouvrir `https://ahmad5.pythonanywhere.com/api/` dans un navigateur : doit répondre du JSON. |
 | Tout est lent | Quota CPU du jour épuisé | Onglet Account → attendre le reset à minuit UTC. |
 
-**Réflexe général** : `error.log` d'abord, `server.log` ensuite, puis le log de la
+**Réflexe général** : commence par **Sentry** (il t'a probablement déjà envoyé un
+e-mail avec la stack), sinon `error.log`, puis `server.log`, puis le log de la
 tâche concernée.
 
 ---
 
-## 14. Aide-mémoire commandes
+## 15. Aide-mémoire commandes
 
 ```bash
 # --- Toujours en début de session ---
