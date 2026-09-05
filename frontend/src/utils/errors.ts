@@ -49,6 +49,14 @@ export const getErrorMessage = (error: any, defaultMessage: string = 'Une erreur
 
         const firstKey = Object.keys(data)[0];
         const firstError = data[firstKey];
+        const firstErrText = Array.isArray(firstError) ? firstError[0] : firstError;
+
+        // 🔧 « invalid pk "-1" - object does not exist » : le formulaire référence
+        // un enregistrement créé hors-ligne (id négatif) qui n'a pas encore été
+        // synchronisé côté serveur. Message clair au lieu du jargon DRF.
+        if (typeof firstErrText === 'string' && /invalid pk ["']?-\d/i.test(firstErrText)) {
+          return "Un élément lié (ferme, lot…) n'est pas encore synchronisé avec le serveur. Patientez que la synchronisation se termine, puis réessayez.";
+        }
 
         if (Array.isArray(firstError) && typeof firstError[0] === 'string') {
           return firstError[0];

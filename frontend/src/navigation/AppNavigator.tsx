@@ -4,6 +4,7 @@ import { NavigationContainer, createNavigationContainerRef, CommonActions, Drawe
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createDrawerNavigator, DrawerContentScrollView } from '@react-navigation/drawer';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -242,6 +243,9 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { isDesktop, isDesktopOrTablet } = useBreakpoint();
+  // 🔧 Android edge-to-edge (Expo SDK 54) : l'app dessine sous la barre de
+  // navigation système. Sans cette marge, la barre système masque les onglets.
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -252,8 +256,8 @@ function MainTabNavigator({ userRole }: { userRole: string | null }) {
         tabBarStyle: {
           backgroundColor: theme.colors.surface,
           borderTopColor: theme.colors.border,
-          height: 60,
-          paddingBottom: 8,
+          height: 60 + insets.bottom,
+          paddingBottom: 8 + insets.bottom,
           display: isDesktopOrTablet && Platform.OS === 'web' ? 'none' : 'flex',
         },
         tabBarIcon: ({ color, size }) => {

@@ -78,18 +78,27 @@ export const AddExpenseScreen = ({ route, navigation }: any) => {
         else { Alert.alert(t('common.success'), successMsg); }
       } else {
         // Mode creation : POST
-        let farmId = null;
+        // 🔧 Choisir une ferme SYNCHRONISÉE (id serveur positif). Une ferme
+        // créée hors-ligne a un id négatif que le serveur refuse
+        // (« invalid pk "-1" »). mergeApiWithLocal place les items non
+        // synchronisés EN TÊTE de la liste — d'où le bug si on prenait farms[0].
+        const pickFarmId = (list: any[]): number | null => {
+          if (!Array.isArray(list) || list.length === 0) return null;
+          const synced = list.find((f: any) => Number(f?.id) > 0);
+          return Number((synced || list[0]).id) || null;
+        };
+
+        let farmId: number | null = null;
         try {
           const farmsRes = await repositoryProvider.api.get('/farms/');
-          if (farmsRes.data && farmsRes.data.length > 0) {
-            farmId = farmsRes.data[0].id;
-          }
+          const list = Array.isArray(farmsRes.data) ? farmsRes.data : (farmsRes.data?.results || []);
+          farmId = pickFarmId(list);
         } catch (err) {
           // API failed, fallback to context
         }
 
         if (!farmId && userFarms && userFarms.length > 0) {
-          farmId = userFarms[0].id;
+          farmId = pickFarmId(userFarms);
         }
 
         if (!farmId) {

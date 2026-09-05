@@ -64,8 +64,10 @@ export const FinanceScreen = ({ navigation }: any) => {
       }
 
       const params: any = { period };
-      if (selectedFarm) params.farm = selectedFarm;
-      if (selectedLot) params.lot = selectedLot;
+      // Ne filtrer que par des id SERVEUR (positifs). Une ferme/un lot créé
+      // hors-ligne (id négatif) ferait échouer /farms/statistics/.
+      if (selectedFarm && selectedFarm > 0) params.farm = selectedFarm;
+      if (selectedLot && selectedLot > 0) params.lot = selectedLot;
 
       const res = await repositoryProvider.api.get('/farms/statistics/', { params }).catch(() => ({
         data: {
@@ -74,19 +76,24 @@ export const FinanceScreen = ({ navigation }: any) => {
           recent_transactions: [],
         },
       }));
-      const { summary, charts, recent_transactions } = res.data;
+      // 🔧 Défensif : selon la source (serveur / calcul local / repli), la forme
+      // peut varier. On ne laisse jamais un `summary` manquant casser l'écran.
+      const data = (res && res.data) || {};
+      const summary = data.summary || {};
+      const charts = data.charts || null;
+      const recent_transactions = data.recent_transactions || [];
 
       setTrend(summary.revenue_trend || 0);
-      setRawCharts(charts || null);
+      setRawCharts(charts);
 
       const combined = (recent_transactions || []).map((tr: any) => ({
         id: tr.id, title: tr.title, amount: tr.amount, date: tr.date, type: tr.type, status: tr.status,
       }));
       setFinanceData({
-        revenues: summary.revenues,
+        revenues: summary.revenues || 0,
         encaissements: summary.encaissements || 0,
         creances: summary.creances || 0,
-        expenses: summary.expenses,
+        expenses: summary.expenses || 0,
         transactions: combined,
       });
 
