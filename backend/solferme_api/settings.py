@@ -42,6 +42,27 @@ elif not SECRET_KEY:
 
 ALLOWED_HOSTS = [host for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '*' if DEBUG else '').split(',') if host]
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Sentry — monitoring d'erreurs (500, exceptions, plantages des tâches cron).
+# Actif uniquement si SENTRY_DSN est défini dans le .env ET DEBUG=False.
+# Le DSN n'est pas un secret (il autorise seulement l'envoi d'événements),
+# mais on le garde en variable d'env pour ne pas le versionner.
+# ─────────────────────────────────────────────────────────────────────────────
+SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
+if SENTRY_DSN and not DEBUG:
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        environment=os.environ.get('SENTRY_ENVIRONMENT', 'production'),
+        release=os.environ.get('SENTRY_RELEASE') or None,
+        # Ne PAS envoyer d'infos personnelles (e-mail, IP, cookies) à Sentry.
+        send_default_pii=False,
+        # Erreurs uniquement pour l'instant : pas de traces de performance
+        # (économise le quota gratuit). À monter à ~0.1 plus tard si besoin.
+        traces_sample_rate=0.0,
+    )
+
 
 # Application definition
 
