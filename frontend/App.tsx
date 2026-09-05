@@ -13,10 +13,13 @@ import { registerForPushNotificationsAsync } from './src/utils/notifications';
 import { registerDeviceForPush } from './src/utils/deviceRegistration';
 import { syncManager } from './src/utils/syncManager';
 
-// Sentry : monitoring des crashs et erreurs. Le DSN (public par nature — il
-// n'autorise que l'envoi d'événements) vient de EXPO_PUBLIC_SENTRY_DSN, injecté
-// au build via eas.json. Désactivé en dev et si le DSN est absent.
-const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN;
+// Sentry : monitoring des crashs et erreurs. Le DSN est PUBLIC par nature (il
+// n'autorise que l'envoi d'événements) — versionné pour que web (npm run deploy),
+// mobile (eas.json) et local le trouvent sans configuration. Projet
+// @solferme/solferme-mobile ; les événements web y sont taggés platform=web.
+// Désactivé en dev (__DEV__).
+const SENTRY_DSN = process.env.EXPO_PUBLIC_SENTRY_DSN
+  || 'https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192';
 Sentry.init({
   dsn: SENTRY_DSN,
   enabled: !__DEV__ && !!SENTRY_DSN,
