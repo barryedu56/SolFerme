@@ -4,7 +4,16 @@ import { DataChangeEvent, subscribeToTables } from '../utils/dataEvents';
 export const useDataChange = (
   tableNames: string[],
   onChange: () => void,
-  debounceMs = 100
+  debounceMs = 100,
+  /**
+   * Réagir aussi aux évènements « SYNC » (une ligne persistée depuis le serveur
+   * lors d'une simple lecture). Par défaut NON : sinon un écran qui s'auto-
+   * rafraîchit sur une table qu'il lit lui-même se re-fetch en boucle
+   * (lecture → persistance → évènement SYNC → lecture → …). Les vraies
+   * mutations (CREATE/UPDATE/DELETE) et les fins de synchro de fond
+   * (action 'UPDATE' émise par le SyncManager) déclenchent toujours le refresh.
+   */
+  reactToSync = false
 ): void => {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -16,14 +25,15 @@ export const useDataChange = (
   };
 
   const handleEvent = useCallback(
-    (_event: DataChangeEvent) => {
+    (event: DataChangeEvent) => {
+      if (event.action === 'SYNC' && !reactToSync) return;
       clearTimer();
       timerRef.current = setTimeout(() => {
         timerRef.current = null;
         onChange();
       }, debounceMs);
     },
-    [debounceMs, onChange]
+    [debounceMs, onChange, reactToSync]
   );
 
   useEffect(() => {

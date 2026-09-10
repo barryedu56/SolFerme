@@ -41,6 +41,7 @@ export const FarmsScreen = ({ navigation }: any) => {
 
   useAutoRefreshData(['farms'], fetchFarms, 150);
   useEffect(() => { fetchFarms(); }, [includeArchived]);
+  useEffect(() => navigation.addListener('focus', fetchFarms), [navigation, includeArchived]);
 
   const onRefresh = () => { setRefreshing(true); fetchFarms(); };
 

@@ -6,6 +6,7 @@ import { buildLocalResponse, getLocalData, handleOfflineWrite, CANCELLABLE_TABLE
 import { deleteRow, fetchRow, queryAll, queryOne, updateRow } from '../database/localDatabase';
 import { getEndpointId, getTableNameFromEndpoint, parseEndpoint } from '../utils/offlineSyncUtils';
 import { syncManager } from '../utils/syncManager';
+import { emitDataChange } from '../utils/dataEvents';
 import { formatCurrency } from '../utils/formatters';
 
 /**
@@ -80,6 +81,41 @@ export class ApiRepository {
       return { ...endpointParams, ...config.params };
     }
     return endpointParams;
+  }
+
+  /** Tables dont une mise en cache de fond est déjà en cours (évite l'empilement). */
+  private cachingTables = new Set<string>();
+
+  /**
+   * Persiste dans SQLite, en tâche de fond, les items d'une réponse serveur.
+   * Lancé sans `await` par `get()` : les données sont déjà rendues à l'écran.
+   * On ne groupe PAS en transaction unique (elle verrouillerait tout SQLite
+   * pendant plusieurs secondes sur une longue liste) — chaque ligne rend la main
+   * entre deux écritures. Les évènements `SYNC` émis sont ignorés par
+   * `useDataChange` (sinon boucle lecture → persistance → refetch).
+   */
+  private async cacheRemoteItemsInBackground(tableName: string, items: any[]): Promise<void> {
+    if (!items.length || this.cachingTables.has(tableName)) return;
+    this.cachingTables.add(tableName);
+    try {
+      for (const item of items) {
+        await syncManager.persistRemoteItem(tableName, item).catch(() => {});
+      }
+    } finally {
+      this.cachingTables.delete(tableName);
+    }
+  }
+
+  /**
+   * Notifie l'UI qu'une mutation en ligne a abouti → les écrans concernés se
+   * rafraîchissent immédiatement (au lieu d'attendre un re-focus ou le pull de
+   * fond). Émet un vrai évènement CREATE/UPDATE/DELETE (pas SYNC).
+   */
+  private notifyMutation(endpoint: string, action: 'CREATE' | 'UPDATE' | 'DELETE'): void {
+    try {
+      const tableName = getTableNameFromEndpoint(endpoint);
+      if (tableName) emitDataChange({ tableName, action });
+    } catch { /* best-effort */ }
   }
 
   private async isOnline(): Promise<boolean> {
@@ -1055,13 +1091,13 @@ export class ApiRepository {
     if (syncable && (await this.isOnline())) {
       try {
         const response = await apiClient.get<T>(endpoint, config);
-        // Persister immédiatement dans SQLite pour le prochain accès hors-ligne
+        // Mettre à jour le cache SQLite EN ARRIÈRE-PLAN : ne pas bloquer le retour
+        // des données à l'écran (la persistance ligne à ligne d'une longue liste
+        // ajoutait plusieurs secondes de latence perçue après chaque écran).
         const tableName = getTableNameFromEndpoint(endpoint);
         if (tableName && response.data) {
           const items = Array.isArray(response.data) ? response.data : [response.data];
-          for (const item of items) {
-            await syncManager.persistRemoteItem(tableName, item).catch(() => {});
-          }
+          void this.cacheRemoteItemsInBackground(tableName, items);
         }
 
         // 🔧 Fusionner les items locaux non-synchronisés avec la réponse API
@@ -1226,6 +1262,7 @@ export class ApiRepository {
         if (tableName && response.data) {
           await syncManager.persistRemoteItem(tableName, response.data).catch(() => {});
         }
+        this.notifyMutation(endpoint, 'CREATE');
         // Si l'endpoint a une action (ex: /health-alerts/27/mark_as_viewed/),
         // on ne peut pas GET dessus → puller le endpoint parent à la place
         if (this.isComputedEndpoint(endpoint)) {
@@ -1281,6 +1318,7 @@ export class ApiRepository {
         if (tableName && response.data) {
           await syncManager.persistRemoteItem(tableName, response.data).catch(() => {});
         }
+        this.notifyMutation(endpoint, 'UPDATE');
         if (this.isComputedEndpoint(endpoint)) {
           syncManager.pullEndpoint(this.getParentEndpoint(endpoint)).catch(() => undefined);
         } else {
@@ -1321,6 +1359,7 @@ export class ApiRepository {
 
       try {
         const response = await apiClient.patch<T>(endpoint, body, config);
+        this.notifyMutation(endpoint, 'UPDATE');
         if (this.isComputedEndpoint(endpoint)) {
           syncManager.pullEndpoint(this.getParentEndpoint(endpoint)).catch(() => undefined);
         } else {
@@ -1379,6 +1418,7 @@ export class ApiRepository {
             }
           } catch { /* silencieux — le pullEndpoint ci-dessous nettoiera */ }
         }
+        this.notifyMutation(endpoint, 'DELETE');
         // 2. Puller le endpoint parent (liste) pour rafraîchir le miroir SQLite
         syncManager.pullEndpoint(this.getParentEndpoint(endpoint)).catch(() => undefined);
         return response;
