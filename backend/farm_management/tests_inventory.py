@@ -379,3 +379,58 @@ class StockGeneralParFermeTestCase(TestCase):
                                     date=timezone.now().date(), cost=0, created_by=self.user)
         # Achat imputé lot A, soin sur lot B, mais stock commun ferme = 7
         self.assertEqual(float(HealthInventory.objects.get(farm=self.farm, product_name='Vaccin').quantity), 7.0)
+
+    def test_editing_only_distribution_date_does_not_fail_on_stock(self):
+        """Changer uniquement la date d'une distribution existante ne doit pas
+        déclencher « stock insuffisant » (la ligne éditée doit être recréditée)."""
+        from datetime import timedelta
+        from .serializers import FeedSerializer, FeedPreparationSerializer
+        today = timezone.now().date()
+        FeedPurchase.objects.create(farm=self.farm, lot=None, date=today - timedelta(days=20),
+                                    feed_type='Maïs', quantity_kg=100, total_price=1000, created_by=self.user)
+        prep = FeedPreparationSerializer(data={
+            'lot': self.lotA.id, 'feed_name': 'Ponte', 'quantity_produced_kg': 50,
+            'date': (today - timedelta(days=15)).isoformat(),
+            'ingredients': [{'material_name': 'Maïs', 'quantity_used_kg': 50}],
+        })
+        self.assertTrue(prep.is_valid(), prep.errors)
+        prep.save(created_by=self.user)
+
+        # Distribution de 50 kg (tout le stock préparé du lot A) il y a 10 jours
+        feed = Feed.objects.create(lot=self.lotA, feed_type='Ponte', quantity_kg=50, cost=0,
+                                   date=today - timedelta(days=10), created_by=self.user)
+        self.assertEqual(float(PreparedFeedInventory.objects.get(farm=self.farm, lot=self.lotA, feed_name='Ponte').quantity_kg), 0.0)
+
+        # On ne change QUE la date (recule de 2 jours, reste après le mélange) → doit passer
+        s = FeedSerializer(instance=feed, data={
+            'lot': self.lotA.id, 'feed_type': 'Ponte', 'quantity_kg': 50, 'cost': 0,
+            'date': (today - timedelta(days=8)).isoformat(),
+        })
+        self.assertTrue(s.is_valid(), s.errors)
+
+        # Mais reculer la date AVANT le mélange doit être refusé
+        s2 = FeedSerializer(instance=feed, data={
+            'lot': self.lotA.id, 'feed_type': 'Ponte', 'quantity_kg': 50, 'cost': 0,
+            'date': (today - timedelta(days=20)).isoformat(),
+        })
+        self.assertFalse(s2.is_valid())
+
+    def test_melange_activity_log_uses_business_date(self):
+        """Un mélange antidaté apparaît dans l'historique à SA date, pas à aujourd'hui."""
+        from datetime import date
+        from .models import ActivityLog
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from .views import FeedPreparationViewSet
+        FeedPurchase.objects.create(farm=self.farm, lot=None, date=date(2026, 7, 1),
+                                    feed_type='Maïs', quantity_kg=100, total_price=1000, created_by=self.user)
+        factory = APIRequestFactory()
+        req = factory.post('/api/feed-preparations/', {
+            'farm': self.farm.id, 'feed_name': 'Ponte', 'quantity_produced_kg': 40,
+            'date': '2026-07-10',
+            'ingredients': [{'material_name': 'Maïs', 'quantity_used_kg': 40}],
+        }, format='json')
+        force_authenticate(req, user=self.user)
+        resp = FeedPreparationViewSet.as_view({'post': 'create'})(req)
+        self.assertEqual(resp.status_code, 201, resp.data)
+        log = ActivityLog.objects.filter(module='Alimentation', action__icontains='Préparation').latest('id')
+        self.assertEqual(log.date.date(), date(2026, 7, 10))

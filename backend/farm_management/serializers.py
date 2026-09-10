@@ -110,11 +110,16 @@ def validate_inventory_integrity(farm_or_lot, item_type, name, exclude_id=None, 
             prepared_qs = prepared_qs.filter(lot=lot)
         prepared_inventory = prepared_qs.first()
         if prepared_inventory:
-            current_stock = float(prepared_inventory.quantity_kg)
             if mock_item and not is_purchase:
-                required = float(getattr(mock_item, 'quantity_kg', 0) or 0)
-                if current_stock + 0.01 < required:
-                    return False, f"Le {mock_item.date.strftime('%d/%m/%Y')}, stock de '{name}' insuffisant ({current_stock:.1f} kg disponibles, {required:.1f} requis)."
+                # Distribution d'aliment préparé : contrôle CHRONOLOGIQUE complet
+                # (production des mélanges vs distributions, triées par date). Ceci
+                # crédite correctement la ligne éditée via `exclude_id` — sinon un
+                # simple changement de date sur une distribution existante était
+                # rejeté à tort (« stock insuffisant ») parce qu'on comparait au
+                # stock instantané sans re-créditer cette même ligne.
+                return validate_prepared_feed_integrity(
+                    farm, name, exclude_id=exclude_id, mock_item=mock_item, is_prod=False, lot=lot
+                )
             return True, None
 
         # Matière première : achats de la ferme − consommation dans ses mélanges

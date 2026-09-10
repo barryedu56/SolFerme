@@ -29,6 +29,28 @@ from .serializers import (
 
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework.throttling import ScopedRateThrottle
+from datetime import datetime, date as _date_cls
+
+
+def _log_date(business_date):
+    """Datetime à stocker dans ActivityLog.date : la DATE MÉTIER de l'opération
+    (celle saisie par l'utilisateur), avec l'heure courante pour garder un ordre
+    lisible entre opérations du même jour. Évite qu'une écriture antidatée
+    (ex: mélange du 10/07 saisi aujourd'hui) apparaisse à la date du jour dans
+    l'historique."""
+    now = timezone.now()
+    d = business_date
+    if isinstance(d, str):
+        try:
+            d = datetime.strptime(d[:10], '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            return now
+    if isinstance(d, datetime):
+        d = d.date()
+    if not isinstance(d, _date_cls) or d == now.date():
+        return now
+    naive = datetime.combine(d, now.time())
+    return timezone.make_aware(naive) if timezone.is_naive(naive) else naive
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
@@ -1401,39 +1423,46 @@ class FeedViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
             action="Alimentation",
             module="Alimentation",
             related_id=instance.id,
-            description=f"Distribution : {instance.quantity_kg} kg de {instance.feed_type} (Lot {instance.lot.name})"
+            description=f"Distribution : {instance.quantity_kg} kg de {instance.feed_type} (Lot {instance.lot.name})",
+            date=_log_date(instance.date),
         )
 
     def perform_update(self, serializer):
         old_instance = self.get_object()
         new_instance = serializer.save()
-        if old_instance.quantity_kg != new_instance.quantity_kg or old_instance.status != new_instance.status:
-            description = f"Distribution modifiée (Lot {new_instance.lot.name}) : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg"
-            
-            # Update existing ActivityLog instead of creating a new one to avoid duplication
-            updated = ActivityLog.objects.filter(
-                related_id=new_instance.id,
-                module="Alimentation"
-            ).exclude(
-                action__icontains="Annul"
-            ).update(
+        qty_status_changed = (old_instance.quantity_kg != new_instance.quantity_kg
+                              or old_instance.status != new_instance.status)
+        date_changed = old_instance.date != new_instance.date
+        if not (qty_status_changed or date_changed):
+            return
+
+        log_qs = ActivityLog.objects.filter(
+            related_id=new_instance.id, module="Alimentation"
+        ).exclude(action__icontains="Annul")
+
+        # Toujours recaler la date de l'historique sur la date métier de la distribution.
+        fields = {'date': _log_date(new_instance.date)}
+        if qty_status_changed:
+            fields.update(
                 user=self.request.user,
                 farm=new_instance.lot.farm,
                 lot=new_instance.lot,
                 action="Modification Alimentation",
-                description=description
+                description=f"Distribution modifiée (Lot {new_instance.lot.name}) : {old_instance.quantity_kg}kg -> {new_instance.quantity_kg}kg",
             )
-            
-            if not updated:
-                ActivityLog.objects.create(
-                    user=self.request.user,
-                    farm=new_instance.lot.farm,
-                    lot=new_instance.lot,
-                    action="Modification Alimentation",
-                    module="Alimentation",
-                    related_id=new_instance.id,
-                    description=description
-                )
+        updated = log_qs.update(**fields)
+
+        if not updated and qty_status_changed:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=new_instance.lot.farm,
+                lot=new_instance.lot,
+                action="Modification Alimentation",
+                module="Alimentation",
+                related_id=new_instance.id,
+                description=fields['description'],
+                date=_log_date(new_instance.date),
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -3114,14 +3143,17 @@ class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
             module="Alimentation",
             related_id=instance.id,
             description=self._prep_desc(instance),
+            date=_log_date(instance.date),
         )
 
     def perform_update(self, serializer):
         instance = serializer.save()
         desc = self._prep_desc(instance)
+        # Recale aussi la date de l'historique sur la date métier du mélange
+        # (ex: l'utilisateur corrige une date oubliée).
         updated = ActivityLog.objects.filter(
             related_id=instance.id, module="Alimentation", action__icontains="Préparation"
-        ).update(description=desc)
+        ).update(description=desc, date=_log_date(instance.date))
         if not updated:
             ActivityLog.objects.create(
                 user=self.request.user,
@@ -3131,6 +3163,7 @@ class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
                 module="Alimentation",
                 related_id=instance.id,
                 description=desc,
+                date=_log_date(instance.date),
             )
 
     def destroy(self, request, *args, **kwargs):

@@ -1712,6 +1712,14 @@ const createActivityLogLocally = async (
     const actionLabel = baseAction;
     const description = buildDescription(tableName, method, data, action);
     const now = new Date().toISOString();
+    // Date de l'historique = date MÉTIER de l'opération (mélange, distribution,
+    // production… antidatés) avec l'heure courante pour l'ordre. Miroir de
+    // _log_date() côté backend.
+    const logDate = (() => {
+      const bd = (data?.date || data?.purchase_date || '').toString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(bd) || bd === now.slice(0, 10)) return now;
+      return `${bd}T${now.slice(11)}`;
+    })();
 
     // Extraire farm_id et lot_id des données si disponibles (supporte les deux formes).
     // 🔧 Pour une modification/suppression de lot ou ferme, l'entité elle-même
@@ -1727,7 +1735,7 @@ const createActivityLogLocally = async (
       action: actionLabel,
       module: moduleLabel,
       description,
-      date: now,
+      date: logDate,
       farm_id: farmId,
       lot_id: lotId,
       related_id: id || null,
