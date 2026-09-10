@@ -136,33 +136,28 @@ export const InventoryScreen = ({ navigation }: any) => {
   const showFeed = selectedType === 'ALL' || selectedType === 'FEED';
   const showHealth = selectedType === 'ALL' || selectedType === 'HEALTH';
 
-  const StockCard = ({ name, qty, unit, statusType, icon, sub, onRestock }: any) => {
+  const StockCard = ({ name, qty, unit, statusType, icon, sub, onOpen }: any) => {
     const n = parseFloat(qty);
     const st = status(n, statusType);
     return (
       <View style={cellStyle}>
-        <Card style={S.stock} padding={space.sm}>
-          <View style={[S.stockIcon, { backgroundColor: st.color + '1F' }]}>
-            <MaterialCommunityIcons name={icon} size={20} color={st.color} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={[S.stockName, { color: theme.colors.text }]} numberOfLines={1}>{name}</Text>
-            {!!sub && <Text style={S.stockSub}>{sub}</Text>}
-            <View style={{ marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <Badge label={st.label} color={st.color} />
-              {!!onRestock && (
-                <Pressable onPress={onRestock} hitSlop={6} style={S.restockBtn}>
-                  <MaterialIcons name="add" size={13} color={theme.colors.primary} />
-                  <Text style={S.restockText}>Ajouter</Text>
-                </Pressable>
-              )}
+        <Pressable onPress={onOpen} style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}>
+          <Card style={S.stock} padding={space.sm}>
+            <View style={[S.stockIcon, { backgroundColor: st.color + '1F' }]}>
+              <MaterialCommunityIcons name={icon} size={20} color={st.color} />
             </View>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[S.stockQty, { color: st.color }]}>{formatNumber(n)}</Text>
-            <Text style={S.stockUnit}>{unit}</Text>
-          </View>
-        </Card>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[S.stockName, { color: theme.colors.text }]} numberOfLines={1}>{name}</Text>
+              {!!sub && <Text style={S.stockSub}>{sub}</Text>}
+              <View style={{ marginTop: 4 }}><Badge label={st.label} color={st.color} /></View>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[S.stockQty, { color: st.color }]}>{formatNumber(n)}</Text>
+              <Text style={S.stockUnit}>{unit}</Text>
+              <MaterialIcons name="chevron-right" size={16} color={theme.colors.textSecondary} style={{ marginTop: 2 }} />
+            </View>
+          </Card>
+        </Pressable>
       </View>
     );
   };
@@ -175,33 +170,41 @@ export const InventoryScreen = ({ navigation }: any) => {
   const openAppro = (type: 'feed' | 'health') =>
     navigation.navigate('Appro', { type, farmId: selectedFarm !== 'ALL' ? selectedFarm : undefined });
 
-  // ── Ajout rapide « + » sur une carte ──
-  const [quickAdd, setQuickAdd] = useState<{ type: 'feed' | 'health'; item: any } | null>(null);
+  // ── Fiche produit (au tap sur une carte) ──
+  type DetailKind = 'feed' | 'health' | 'prepared';
+  const [detail, setDetail] = useState<{ kind: DetailKind; item: any } | null>(null);
   const [qaQty, setQaQty] = useState('');
   const [qaPrice, setQaPrice] = useState('');
   const [qaMode, setQaMode] = useState<'total' | 'unit'>('total');
   const [qaSupplier, setQaSupplier] = useState('');
   const [qaDate, setQaDate] = useState(new Date().toISOString().split('T')[0]);
   const [qaSaving, setQaSaving] = useState(false);
+  // Saisie en sacs / conditionnement (option)
+  const [qaBags, setQaBags] = useState(false);
+  const [qaBagCount, setQaBagCount] = useState('');
+  const [qaBagSize, setQaBagSize] = useState('');
 
-  const openQuickAdd = (type: 'feed' | 'health', item: any) => {
+  const openDetail = (kind: DetailKind, item: any) => {
     setQaQty(''); setQaPrice(''); setQaMode('total'); setQaSupplier('');
     setQaDate(new Date().toISOString().split('T')[0]);
-    setQuickAdd({ type, item });
+    setQaBags(false); setQaBagCount(''); setQaBagSize('');
+    setDetail({ kind, item });
   };
-  const qaUnit = quickAdd?.type === 'feed' ? 'kg' : (quickAdd?.item?.unit || 'unité');
-  const qaComputedTotal = qaMode === 'unit' ? parseNum(qaQty) * parseNum(qaPrice) : parseNum(qaPrice);
 
-  const submitQuickAdd = async () => {
-    if (!quickAdd || qaSaving) return;
-    const farmId = restockFarmId(quickAdd.item);
+  const qaUnit = detail?.kind === 'feed' ? 'kg' : (detail?.item?.unit || 'unité');
+  const qaEffectiveQty = qaBags ? parseNum(qaBagCount) * parseNum(qaBagSize) : parseNum(qaQty);
+  const qaComputedTotal = qaMode === 'unit' ? qaEffectiveQty * parseNum(qaPrice) : parseNum(qaPrice);
+
+  const submitRestock = async () => {
+    if (!detail || qaSaving || detail.kind === 'prepared') return;
+    const farmId = restockFarmId(detail.item);
     if (!farmId) { Alert.alert(t('common.error'), "Ferme introuvable pour ce produit."); return; }
-    if (!(parseNum(qaQty) > 0) || !(qaComputedTotal > 0)) {
+    if (!(qaEffectiveQty > 0) || !(qaComputedTotal > 0)) {
       Alert.alert(t('common.error'), 'Renseignez une quantité et un prix valides.');
       return;
     }
     setQaSaving(true);
-    const isFeed = quickAdd.type === 'feed';
+    const isFeed = detail.kind === 'feed';
     const payload: any = {
       farm: farmId,
       lot: null,
@@ -210,20 +213,58 @@ export const InventoryScreen = ({ navigation }: any) => {
       total_price: Math.round(qaComputedTotal * 100) / 100,
       unit_price: qaMode === 'unit' ? Math.round(parseNum(qaPrice) * 100) / 100 : null,
       ...(isFeed
-        ? { feed_type: quickAdd.item.feed_type, quantity_kg: parseNum(qaQty) }
-        : { product_name: quickAdd.item.product_name, quantity: parseNum(qaQty), unit: quickAdd.item.unit || 'Flacon', product_type: quickAdd.item.product_type || 'Autre' }),
+        ? { feed_type: detail.item.feed_type, quantity_kg: qaEffectiveQty }
+        : { product_name: detail.item.product_name, quantity: qaEffectiveQty, unit: detail.item.unit || 'Flacon', product_type: detail.item.product_type || 'Autre' }),
     };
     try {
       await repositoryProvider.api.post(isFeed ? '/feed-purchases/' : '/health-purchases/', payload);
-      const nm = isFeed ? quickAdd.item.feed_type : quickAdd.item.product_name;
-      if (Platform.OS === 'web') toast.success(t('common.success'), `« ${nm} » réapprovisionné.`);
-      else toast.success(t('common.success'), `« ${nm} » réapprovisionné.`);
-      setQuickAdd(null);
+      const nm = isFeed ? detail.item.feed_type : detail.item.product_name;
+      toast.success(t('common.success'), `« ${nm} » réapprovisionné.`);
+      setDetail(null);
       fetchData();
     } catch (e: any) {
       Alert.alert(t('common.actionImpossible'), getErrorMessage(e, 'Échec du réapprovisionnement.'));
     } finally {
       setQaSaving(false);
+    }
+  };
+
+  // ── Refaire un mélange : ouvre le formulaire pré-rempli du dernier mélange identique ──
+  const [refaireLoading, setRefaireLoading] = useState(false);
+  const refaireMelange = async (item: any) => {
+    if (refaireLoading) return;
+    const farmId = restockFarmId(item);
+    if (!farmId) { Alert.alert(t('common.error'), "Ferme introuvable pour ce mélange."); return; }
+    setRefaireLoading(true);
+    try {
+      const res = await repositoryProvider.api.get<any[]>('/feed-preparations/', { params: { farm: farmId } });
+      const list = Array.isArray(res.data) ? res.data : ((res.data as any)?.results || []);
+      const matches = list
+        .filter((p: any) => p.feed_name === item.feed_name && (p.status === 'ACTIF' || p.status === 'ACTIVE'))
+        .filter((p: any) => (item.lot ? Number(p.lot) === Number(item.lot) : (p.lot == null)))
+        .sort((a: any, b: any) => String(b.date || b.created_at || '').localeCompare(String(a.date || a.created_at || '')));
+      const src = matches[0] || list.filter((p: any) => p.feed_name === item.feed_name).sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || '')))[0];
+      if (!src) {
+        Alert.alert(t('common.info'), "Aucun mélange précédent trouvé pour cet aliment. Créez-en un depuis Alimentation → Préparation.");
+        return;
+      }
+      setDetail(null);
+      // 'Preparation' est enregistré dans le stack principal (Inventory y est aussi) ;
+      // 'ActionPreparation' vit dans le stack Fermes et n'est pas atteignable d'ici.
+      navigation.navigate('Preparation', {
+        farmId,
+        item: {
+          // pas d'id → PreparationScreen pré-remplit puis CRÉE un nouveau mélange
+          feed_name: src.feed_name,
+          quantity_produced_kg: src.quantity_produced_kg,
+          lot: item.lot ?? src.lot ?? null,
+          ingredients: src.ingredients || [],
+        },
+      });
+    } catch (e: any) {
+      Alert.alert(t('common.error'), getErrorMessage(e, "Impossible de récupérer le dernier mélange."));
+    } finally {
+      setRefaireLoading(false);
     }
   };
 
@@ -290,21 +331,21 @@ export const InventoryScreen = ({ navigation }: any) => {
                 <>
                   <SectionHeader title={t('inventory.rawMaterials')} icon="grain" action={{ label: '+ Bon d\'appro', onPress: () => openAppro('feed') }} />
                   {sortedRaw.length > 0
-                    ? <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} onRestock={() => openQuickAdd('feed', item)} />)}</View>
+                    ? <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} onOpen={() => openDetail('feed', item)} />)}</View>
                     : <Text style={S.emptyLine}>Aucune matière première. Touchez « Bon d'appro » pour en acheter.</Text>}
                 </>
               )}
               {showFeed && sortedPrep.length > 0 && (
                 <>
                   <SectionHeader title={t('inventory.preparedFeeds')} icon="blender-outline" />
-                  <View style={S.grid}>{sortedPrep.map((item, i) => <StockCard key={i} name={item.feed_name} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon="food-variant" sub={item.lot ? `Réservé ${lotNameById.get(item.lot) || 'lot'}` : 'Ferme'} />)}</View>
+                  <View style={S.grid}>{sortedPrep.map((item, i) => <StockCard key={i} name={item.feed_name} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon="food-variant" sub={item.lot ? `Réservé ${lotNameById.get(item.lot) || 'lot'}` : 'Ferme'} onOpen={() => openDetail('prepared', item)} />)}</View>
                 </>
               )}
               {showHealth && (
                 <>
                   <SectionHeader title={t('inventory.healthProductsTitle')} icon="medical-bag" action={{ label: '+ Bon d\'appro', onPress: () => openAppro('health') }} />
                   {sortedHealth.length > 0
-                    ? <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} onRestock={() => openQuickAdd('health', item)} />)}</View>
+                    ? <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} onOpen={() => openDetail('health', item)} />)}</View>
                     : <Text style={S.emptyLine}>Aucun produit santé. Touchez « Bon d'appro » pour en acheter.</Text>}
                 </>
               )}
@@ -313,47 +354,112 @@ export const InventoryScreen = ({ navigation }: any) => {
         </>
       )}
 
-      {/* ── Ajout rapide sur un produit ── */}
-      <Modal visible={!!quickAdd} transparent animationType="slide" onRequestClose={() => setQuickAdd(null)}>
+      {/* ── Fiche produit ── */}
+      <Modal visible={!!detail} transparent animationType="slide" onRequestClose={() => setDetail(null)}>
         <View style={S.qaOverlay}>
           <View style={S.qaCard}>
-            <View style={S.qaHead}>
-              <Text style={S.qaTitle} numberOfLines={1}>
-                Ajouter du « {quickAdd?.type === 'feed' ? quickAdd?.item?.feed_type : quickAdd?.item?.product_name} »
-              </Text>
-              <Pressable onPress={() => setQuickAdd(null)} hitSlop={8}>
-                <MaterialIcons name="close" size={24} color={theme.colors.text} />
-              </Pressable>
-            </View>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              {detail && (() => {
+                const it = detail.item;
+                const nm = detail.kind === 'feed' ? it.feed_type : detail.kind === 'health' ? it.product_name : it.feed_name;
+                const q = parseFloat(detail.kind === 'health' ? it.quantity : it.quantity_kg) || 0;
+                const st = status(q, detail.kind === 'health' ? 'health' : 'feed');
+                const u = detail.kind === 'health' ? (it.unit || 'unité') : 'kg';
+                return (
+                  <>
+                    <View style={S.qaHead}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={S.qaTitle} numberOfLines={1}>{nm}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                          <Text style={S.qaBig}>{formatNumber(q)} {u}</Text>
+                          <Badge label={st.label} color={st.color} />
+                        </View>
+                        {detail.kind === 'prepared' && (
+                          <Text style={S.qaSub}>{it.lot ? `Réservé ${lotNameById.get(it.lot) || 'lot'}` : 'Stock général de la ferme'}</Text>
+                        )}
+                        {detail.kind === 'health' && !!it.product_type && (
+                          <Text style={S.qaSub}>{it.product_type}</Text>
+                        )}
+                      </View>
+                      <Pressable onPress={() => setDetail(null)} hitSlop={10} style={{ padding: 4 }}>
+                        <MaterialIcons name="close" size={22} color={theme.colors.textSecondary} />
+                      </Pressable>
+                    </View>
 
-            <View style={S.qaRow}>
-              <View style={{ flex: 1, marginRight: 8 }}>
-                <Text style={S.qaLabel}>Quantité ({qaUnit})</Text>
-                <Input placeholder="0" value={qaQty} onChangeText={setQaQty} isNumeric />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={S.qaLabel}>{qaMode === 'unit' ? `Prix / ${qaUnit}` : 'Prix total'} (GNF)</Text>
-                <Input placeholder="0" value={qaPrice} onChangeText={setQaPrice} isNumeric />
-              </View>
-            </View>
+                    <View style={S.qaDivider} />
 
-            <View style={S.qaSegment}>
-              <Pressable style={[S.qaSegBtn, qaMode === 'total' && S.qaSegBtnActive]} onPress={() => setQaMode('total')}>
-                <Text style={[S.qaSegText, qaMode === 'total' && S.qaSegTextActive]}>Prix total</Text>
-              </Pressable>
-              <Pressable style={[S.qaSegBtn, qaMode === 'unit' && S.qaSegBtnActive]} onPress={() => setQaMode('unit')}>
-                <Text style={[S.qaSegText, qaMode === 'unit' && S.qaSegTextActive]}>Prix par {qaUnit}</Text>
-              </Pressable>
-            </View>
-            {qaMode === 'unit' && (
-              <Text style={S.qaCalc}>= {qaComputedTotal.toLocaleString('fr-FR')} GNF</Text>
-            )}
+                    {detail.kind === 'prepared' ? (
+                      <>
+                        <Text style={S.qaSectionLabel}>Renouveler ce mélange</Text>
+                        <Text style={S.qaHint}>Ouvre le formulaire de mélange pré-rempli avec la dernière recette (nom, lot, ingrédients). Ajustez les quantités puis validez.</Text>
+                        <Button
+                          title="Refaire ce mélange"
+                          onPress={() => refaireMelange(it)}
+                          loading={refaireLoading}
+                          style={{ marginTop: space.sm, height: 52, borderRadius: radius.lg }}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <Text style={S.qaSectionLabel}>Réapprovisionner</Text>
 
-            <Text style={S.qaLabel}>Fournisseur (optionnel)</Text>
-            <Input placeholder="Nom du fournisseur" value={qaSupplier} onChangeText={setQaSupplier} />
-            <DatePicker label="Date" value={qaDate} onChange={setQaDate} />
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                          <Text style={S.qaLabel}>Saisir en sacs / conditionnement</Text>
+                          <Pressable
+                            onPress={() => setQaBags(v => !v)}
+                            style={[S.toggle, qaBags && S.toggleOn]}
+                          >
+                            <View style={[S.toggleKnob, qaBags && S.toggleKnobOn]} />
+                          </Pressable>
+                        </View>
 
-            <Button title="Ajouter au stock" onPress={submitQuickAdd} loading={qaSaving} style={{ marginTop: space.sm, height: 52, borderRadius: radius.lg }} />
+                        {qaBags ? (
+                          <>
+                            <View style={S.qaRow}>
+                              <View style={{ flex: 1, marginRight: 8 }}>
+                                <Text style={S.qaLabel}>Nombre de sacs</Text>
+                                <Input placeholder="0" value={qaBagCount} onChangeText={setQaBagCount} isNumeric />
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={S.qaLabel}>Contenu / sac ({qaUnit})</Text>
+                                <Input placeholder="0" value={qaBagSize} onChangeText={setQaBagSize} isNumeric />
+                              </View>
+                            </View>
+                            <Text style={S.qaCalc}>= {formatNumber(qaEffectiveQty)} {qaUnit}</Text>
+                          </>
+                        ) : (
+                          <>
+                            <Text style={S.qaLabel}>Quantité ({qaUnit})</Text>
+                            <Input placeholder="0" value={qaQty} onChangeText={setQaQty} isNumeric />
+                          </>
+                        )}
+
+                        <Text style={S.qaLabel}>{qaMode === 'unit' ? `Prix / ${qaUnit}` : 'Prix total'} (GNF)</Text>
+                        <Input placeholder="0" value={qaPrice} onChangeText={setQaPrice} isNumeric />
+                        <View style={S.qaSegment}>
+                          <Pressable style={[S.qaSegBtn, qaMode === 'total' && S.qaSegBtnActive]} onPress={() => setQaMode('total')}>
+                            <Text style={[S.qaSegText, qaMode === 'total' && S.qaSegTextActive]}>Prix total</Text>
+                          </Pressable>
+                          <Pressable style={[S.qaSegBtn, qaMode === 'unit' && S.qaSegBtnActive]} onPress={() => setQaMode('unit')}>
+                            <Text style={[S.qaSegText, qaMode === 'unit' && S.qaSegTextActive]}>Prix par {qaUnit}</Text>
+                          </Pressable>
+                        </View>
+                        {qaMode === 'unit' && (
+                          <Text style={S.qaCalc}>Total : {qaComputedTotal.toLocaleString('fr-FR')} GNF</Text>
+                        )}
+
+                        <Text style={S.qaLabel}>Fournisseur (optionnel)</Text>
+                        <Input placeholder="Nom du fournisseur" value={qaSupplier} onChangeText={setQaSupplier} />
+                        <DatePicker label="Date" value={qaDate} onChange={setQaDate} />
+
+                        <Button title="Ajouter au stock" onPress={submitRestock} loading={qaSaving} style={{ marginTop: space.sm, height: 52, borderRadius: radius.lg }} />
+                        <Text style={S.qaHint}>Le stock entre dans le stock général de la ferme. Pour imputer le coût à un lot, utilisez le « Bon d'appro ».</Text>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -380,16 +486,37 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   restockText: { fontSize: 10, fontWeight: '800', color: theme.colors.primary },
   emptyLine: { fontSize: 13, color: theme.colors.textSecondary, fontStyle: 'italic', marginBottom: space.md, paddingHorizontal: 4 },
-  qaOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  qaCard: { backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '88%' },
-  qaHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 8 },
+  qaOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: Platform.OS === 'web' ? 'center' : 'flex-end',
+    alignItems: 'center',
+    padding: Platform.OS === 'web' ? space.md : 0,
+  },
+  qaCard: {
+    backgroundColor: theme.colors.background,
+    width: '100%', maxWidth: 460, alignSelf: 'center',
+    borderRadius: Platform.OS === 'web' ? radius.xl : 0,
+    borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
+    padding: 20, maxHeight: Platform.OS === 'web' ? '90%' : '88%',
+    ...(Platform.OS === 'web' ? { borderWidth: 1, borderColor: theme.colors.border } : null),
+  },
+  qaHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4, gap: 8 },
   qaTitle: { fontSize: 16, fontWeight: 'bold', color: theme.colors.text, flex: 1 },
   qaRow: { flexDirection: 'row' },
-  qaLabel: { fontSize: 11, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: '700', textTransform: 'uppercase' },
+  qaLabel: { fontSize: 11, color: theme.colors.textSecondary, marginTop: 10, marginBottom: 4, fontWeight: '700', textTransform: 'uppercase' },
   qaSegment: { flexDirection: 'row', backgroundColor: theme.colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: theme.colors.border, padding: 3, marginTop: 4 },
   qaSegBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: radius.sm },
   qaSegBtnActive: { backgroundColor: theme.colors.primary },
   qaSegText: { fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary },
   qaSegTextActive: { color: '#fff' },
   qaCalc: { marginTop: 6, fontSize: 13, fontWeight: '700', color: theme.colors.primary, textAlign: 'right' },
+  qaBig: { fontSize: 20, fontWeight: '900', color: theme.colors.text },
+  qaSub: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 4, fontWeight: '600' },
+  qaDivider: { height: StyleSheet.hairlineWidth, backgroundColor: theme.colors.border, marginVertical: space.md },
+  qaSectionLabel: { fontSize: 13, fontWeight: '900', color: theme.colors.text, textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: space.sm },
+  qaHint: { fontSize: 12, color: theme.colors.textSecondary, fontStyle: 'italic', marginTop: 8 },
+  toggle: { width: 44, height: 26, borderRadius: 13, backgroundColor: theme.colors.border, padding: 3, justifyContent: 'center' },
+  toggleOn: { backgroundColor: theme.colors.primary },
+  toggleKnob: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#fff' },
+  toggleKnobOn: { alignSelf: 'flex-end' },
 });

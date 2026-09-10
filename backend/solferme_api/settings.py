@@ -50,7 +50,23 @@ ALLOWED_HOSTS = [host for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '*' if 
 # ─────────────────────────────────────────────────────────────────────────────
 SENTRY_DSN = os.environ.get('SENTRY_DSN', '').strip()
 if SENTRY_DSN and not DEBUG:
+    import errno
     import sentry_sdk
+
+    def _sentry_before_send(event, hint):
+        """Filtre le bruit inévitable en environnement uWSGI/PythonAnywhere :
+        « OSError: write error » / Broken pipe = le client web s'est déconnecté
+        avant la fin de la réponse. Ce n'est pas un bug applicatif."""
+        exc = (hint or {}).get('exc_info')
+        if exc:
+            err = exc[1]
+            if isinstance(err, (BrokenPipeError, ConnectionResetError)):
+                return None
+            if isinstance(err, OSError):
+                msg = str(err).lower()
+                if 'write error' in msg or 'broken pipe' in msg or getattr(err, 'errno', None) in (errno.EPIPE, errno.ECONNRESET):
+                    return None
+        return event
 
     sentry_sdk.init(
         dsn=SENTRY_DSN,
@@ -61,6 +77,7 @@ if SENTRY_DSN and not DEBUG:
         # Erreurs uniquement pour l'instant : pas de traces de performance
         # (économise le quota gratuit). À monter à ~0.1 plus tard si besoin.
         traces_sample_rate=0.0,
+        before_send=_sentry_before_send,
     )
 
 

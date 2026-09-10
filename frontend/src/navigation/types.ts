@@ -8,6 +8,7 @@ export type RootStackParamList = {
   AddExpense: { farmId?: number } | undefined;
   Purchase: { type?: 'feed' | 'health'; farmId?: number; lotId?: number; item?: any } | undefined;
   Appro: { type?: 'feed' | 'health'; farmId?: number; prefillName?: string } | undefined;
+  Preparation: { lotId?: number; farmId: number; lotName?: string; item?: any };
   HealthAlertDetail: { alert: any } | undefined;
   Inventory: { lotId?: number; farmId?: number } | undefined;
   AttendanceHistory: { employeeId?: number } | undefined;
