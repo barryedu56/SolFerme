@@ -57,7 +57,7 @@ export type FarmsStackParamList = {
   ActionVentePoules: { lotId: number; lotName: string; lotPurchaseDate?: string; currentQuantity?: number; item?: any };
   ActionAlimentation: { lotId: number; lotName: string; farmId: number; lotPurchaseDate?: string; item?: any; activeTab?: string };
   ActionSante: { lotId: number; lotName: string; farmId: number; lotPurchaseDate?: string; item?: any; activeTab?: string };
-  ActionPreparation: { lotId: number; farmId: number; lotName?: string };
+  ActionPreparation: { lotId?: number; farmId: number; lotName?: string; item?: any };
   ActionMouvement: { lotId: number; lotName: string; lotPurchaseDate?: string; item?: any };
   ActionEtatPoules: { lotId: number; lotName: string };
   ActionReminder: { lotId?: number; farmId?: number };

@@ -9,7 +9,7 @@ import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatNumber } from '../utils/formatters';
 import { generateInventoryPDF } from '../utils/reportGenerator';
 import { STOCK_THRESHOLDS } from '../constants/InventoryConstants';
-import { Screen, ScreenHeader, Card, StatTile, Chip, SectionHeader, Badge, EmptyState, space, radius } from '../components/ui';
+import { Screen, ScreenHeader, Card, StatTile, Chip, SectionHeader, Badge, space, radius } from '../components/ui';
 
 const FEED_ICONS: Record<string, any> = { 'Maïs': 'corn', 'Tournesol': 'flower', 'Soja': 'leaf', 'Son': 'grain', 'Torto': 'seed-outline' };
 const getFeedIcon = (name: string) => FEED_ICONS[name] || 'package-variant';
@@ -71,16 +71,28 @@ export const InventoryScreen = ({ navigation }: any) => {
     (userFarms || []).forEach((f: any) => (f.lots || []).forEach((l: any) => map.set(l.id, f.id)));
     return map;
   }, [userFarms]);
+  const lotNameById = useMemo(() => {
+    const map = new Map<number, string>();
+    (userFarms || []).forEach((f: any) => (f.lots || []).forEach((l: any) => map.set(l.id, l.name)));
+    return map;
+  }, [userFarms]);
 
-  const filterByFarmLot = (items: any[]): any[] => {
-    if (selectedLot !== 'ALL') return items.filter((item) => item.lot === selectedLot);
-    if (selectedFarm !== 'ALL') return items.filter((item) => lotToFarm.get(item.lot) === selectedFarm);
-    return items;
+  // Matières premières & produits santé = stock FERME (le filtre lot ne s'applique pas).
+  const filterFarmOnly = (items: any[]): any[] => {
+    if (selectedFarm === 'ALL') return items;
+    return items.filter((item) => (item.farm ?? lotToFarm.get(item.lot)) === selectedFarm);
+  };
+  // Aliment préparé = ferme + réserve de lot éventuelle. Filtre lot = réserve du lot OU stock général.
+  const filterPrepared = (items: any[]): any[] => {
+    let out = items;
+    if (selectedFarm !== 'ALL') out = out.filter((item) => (item.farm ?? lotToFarm.get(item.lot)) === selectedFarm);
+    if (selectedLot !== 'ALL') out = out.filter((item) => item.lot === selectedLot || item.lot == null);
+    return out;
   };
 
-  const filteredRaw = useMemo(() => filterByFarmLot(inventory.rawMaterials), [inventory.rawMaterials, selectedFarm, selectedLot, lotToFarm]);
-  const filteredPrep = useMemo(() => filterByFarmLot(inventory.preparedFeeds), [inventory.preparedFeeds, selectedFarm, selectedLot, lotToFarm]);
-  const filteredHealth = useMemo(() => filterByFarmLot(inventory.health), [inventory.health, selectedFarm, selectedLot, lotToFarm]);
+  const filteredRaw = useMemo(() => filterFarmOnly(inventory.rawMaterials), [inventory.rawMaterials, selectedFarm, lotToFarm]);
+  const filteredPrep = useMemo(() => filterPrepared(inventory.preparedFeeds), [inventory.preparedFeeds, selectedFarm, selectedLot, lotToFarm]);
+  const filteredHealth = useMemo(() => filterFarmOnly(inventory.health), [inventory.health, selectedFarm, lotToFarm]);
 
   const sortFn = (a: any, b: any, getQty: (x: any) => number, getName: (x: any) => string) => {
     if (sortBy === 'name') return getName(a).localeCompare(getName(b));
@@ -117,7 +129,7 @@ export const InventoryScreen = ({ navigation }: any) => {
   const showFeed = selectedType === 'ALL' || selectedType === 'FEED';
   const showHealth = selectedType === 'ALL' || selectedType === 'HEALTH';
 
-  const StockCard = ({ name, qty, unit, statusType, icon, sub }: any) => {
+  const StockCard = ({ name, qty, unit, statusType, icon, sub, onRestock }: any) => {
     const n = parseFloat(qty);
     const st = status(n, statusType);
     return (
@@ -129,7 +141,15 @@ export const InventoryScreen = ({ navigation }: any) => {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[S.stockName, { color: theme.colors.text }]} numberOfLines={1}>{name}</Text>
             {!!sub && <Text style={S.stockSub}>{sub}</Text>}
-            <View style={{ marginTop: 4 }}><Badge label={st.label} color={st.color} /></View>
+            <View style={{ marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Badge label={st.label} color={st.color} />
+              {!!onRestock && (
+                <Pressable onPress={onRestock} hitSlop={6} style={S.restockBtn}>
+                  <MaterialIcons name="add-shopping-cart" size={13} color={theme.colors.primary} />
+                  <Text style={S.restockText}>Réappro</Text>
+                </Pressable>
+              )}
+            </View>
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={[S.stockQty, { color: st.color }]}>{formatNumber(n)}</Text>
@@ -140,7 +160,14 @@ export const InventoryScreen = ({ navigation }: any) => {
     );
   };
 
-  const empty = sortedRaw.length === 0 && sortedPrep.length === 0 && sortedHealth.length === 0;
+  // Ferme cible pour un réapprovisionnement : la ferme filtrée, sinon celle de l'item, sinon choix dans l'écran d'achat.
+  const restockFarmId = (item?: any): number | undefined =>
+    (selectedFarm !== 'ALL' ? selectedFarm : undefined) ?? item?.farm ?? lotToFarm.get(item?.lot);
+  const goRestockFeed = (item?: any) =>
+    navigation.navigate('Purchase', { type: 'feed', farmId: restockFarmId(item), item: item?.feed_type ? { feed_type: item.feed_type } : undefined });
+  const goRestockHealth = (item?: any) =>
+    navigation.navigate('Purchase', { type: 'health', farmId: restockFarmId(item), item: item?.product_name ? { product_name: item.product_name, product_type: item.product_type, unit: item.unit } : undefined });
+
 
   return (
     <Screen
@@ -198,30 +225,28 @@ export const InventoryScreen = ({ navigation }: any) => {
             {showHealth && <StatTile label={t('inventory.healthProducts')} value={formatNumber(totalHealth)} icon="medical-bag" accent="#8E24AA" />}
           </View>
 
-          {empty ? (
-            <EmptyState
-              icon="package-variant-closed"
-              title={t('inventory.noStockFound')}
-              description={selectedLot !== 'ALL' ? t('inventory.noStockForLot') : selectedFarm !== 'ALL' ? t('inventory.noStockForFarm') : t('inventory.startByRegistering')}
-            />
-          ) : (
+          {(
             <>
-              {showFeed && sortedRaw.length > 0 && (
+              {showFeed && (
                 <>
-                  <SectionHeader title={t('inventory.rawMaterials')} icon="grain" />
-                  <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} />)}</View>
+                  <SectionHeader title={t('inventory.rawMaterials')} icon="grain" action={{ label: '+ Réapprovisionner', onPress: () => goRestockFeed() }} />
+                  {sortedRaw.length > 0
+                    ? <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} onRestock={() => goRestockFeed(item)} />)}</View>
+                    : <Text style={S.emptyLine}>Aucune matière première. Touchez « Réapprovisionner » pour en acheter.</Text>}
                 </>
               )}
               {showFeed && sortedPrep.length > 0 && (
                 <>
                   <SectionHeader title={t('inventory.preparedFeeds')} icon="blender-outline" />
-                  <View style={S.grid}>{sortedPrep.map((item, i) => <StockCard key={i} name={item.feed_name} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon="food-variant" />)}</View>
+                  <View style={S.grid}>{sortedPrep.map((item, i) => <StockCard key={i} name={item.feed_name} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon="food-variant" sub={item.lot ? `Réservé ${lotNameById.get(item.lot) || 'lot'}` : 'Ferme'} />)}</View>
                 </>
               )}
-              {showHealth && sortedHealth.length > 0 && (
+              {showHealth && (
                 <>
-                  <SectionHeader title={t('inventory.healthProductsTitle')} icon="medical-bag" />
-                  <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} />)}</View>
+                  <SectionHeader title={t('inventory.healthProductsTitle')} icon="medical-bag" action={{ label: '+ Réapprovisionner', onPress: () => goRestockHealth() }} />
+                  {sortedHealth.length > 0
+                    ? <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} onRestock={() => goRestockHealth(item)} />)}</View>
+                    : <Text style={S.emptyLine}>Aucun produit santé. Touchez « Réapprovisionner » pour en acheter.</Text>}
                 </>
               )}
             </>
@@ -244,4 +269,11 @@ const createStyles = (theme: any) => StyleSheet.create({
   stockSub: { fontSize: 11, color: theme.colors.textSecondary, marginTop: 1 },
   stockQty: { fontSize: 19, fontWeight: '800' },
   stockUnit: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '600', marginTop: 2 },
+  restockBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    paddingHorizontal: 7, paddingVertical: 3, borderRadius: 10,
+    backgroundColor: theme.colors.primary + '18',
+  },
+  restockText: { fontSize: 10, fontWeight: '800', color: theme.colors.primary },
+  emptyLine: { fontSize: 13, color: theme.colors.textSecondary, fontStyle: 'italic', marginBottom: space.md, paddingHorizontal: 4 },
 });

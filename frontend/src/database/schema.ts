@@ -32,7 +32,7 @@
  *    (ex: -1, -2...). Le SyncManager remplace par le vrai ID après synchro.
  *  - `_needs_sync INTEGER DEFAULT 0` : marque les records créés/modifiés offline.
  */
-export const VERSION = 11;
+export const VERSION = 13;
 
 // Migrations incrémentales (appliquées seulement si _schema_version < VERSION)
 export const MIGRATIONS: { from: number; sql: string[] }[] = [
@@ -171,6 +171,84 @@ export const MIGRATIONS: { from: number; sql: string[] }[] = [
     sql: [
       // Ajout de la colonne period_key à la table payrolls pour gérer la périodicité
       `ALTER TABLE payrolls ADD COLUMN period_key TEXT`,
+    ],
+  },
+  {
+    from: 11,
+    sql: [
+      // Prix par unité (kg / flacon…) mémorisé quand l'achat est saisi en mode
+      // « prix par unité ». Null = achat saisi en « prix total ».
+      `ALTER TABLE feed_purchases ADD COLUMN unit_price REAL`,
+      `ALTER TABLE health_purchases ADD COLUMN unit_price REAL`,
+    ],
+  },
+  {
+    from: 12,
+    sql: [
+      // ─── Stock général par ferme ───
+      // feed_inventory / health_inventory / prepared_feed_inventory sont des
+      // tables DÉRIVÉES (recalculées depuis achats/mélanges/distributions).
+      // On les reconstruit vides : elles se repeuplent au prochain pull serveur
+      // et via les recalculs offline. Aucune donnée utilisateur perdue.
+      `DROP TABLE IF EXISTS feed_inventory`,
+      `DROP TABLE IF EXISTS health_inventory`,
+      `DROP TABLE IF EXISTS prepared_feed_inventory`,
+      `CREATE TABLE feed_inventory (
+        id INTEGER PRIMARY KEY,
+        farm_id INTEGER NOT NULL,
+        feed_type TEXT NOT NULL,
+        quantity_kg REAL DEFAULT 0,
+        updated_at TEXT,
+        _needs_sync INTEGER DEFAULT 0,
+        UNIQUE(farm_id, feed_type)
+      )`,
+      `CREATE TABLE health_inventory (
+        id INTEGER PRIMARY KEY,
+        farm_id INTEGER NOT NULL,
+        product_name TEXT NOT NULL,
+        product_type TEXT DEFAULT 'Autre',
+        quantity REAL DEFAULT 0,
+        unit TEXT DEFAULT 'Flacon',
+        updated_at TEXT,
+        _needs_sync INTEGER DEFAULT 0,
+        UNIQUE(farm_id, product_name)
+      )`,
+      `CREATE TABLE prepared_feed_inventory (
+        id INTEGER PRIMARY KEY,
+        farm_id INTEGER NOT NULL,
+        lot_id INTEGER,
+        feed_name TEXT NOT NULL,
+        quantity_kg REAL DEFAULT 0,
+        updated_at TEXT,
+        _needs_sync INTEGER DEFAULT 0,
+        UNIQUE(farm_id, lot_id, feed_name)
+      )`,
+      // feed_preparations contient des données utilisateur (mélanges) : on
+      // reconstruit la table en conservant les lignes et en dérivant farm_id
+      // depuis le lot. lot_id devient nullable.
+      `ALTER TABLE feed_preparations RENAME TO feed_preparations_old`,
+      `CREATE TABLE feed_preparations (
+        id INTEGER PRIMARY KEY,
+        farm_id INTEGER NOT NULL,
+        lot_id INTEGER,
+        feed_name TEXT NOT NULL,
+        quantity_produced_kg REAL NOT NULL,
+        date TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIF',
+        created_by_id INTEGER,
+        created_by_name TEXT,
+        created_at TEXT,
+        _needs_sync INTEGER DEFAULT 0
+      )`,
+      `INSERT INTO feed_preparations
+         (id, farm_id, lot_id, feed_name, quantity_produced_kg, date, status, created_by_id, created_by_name, created_at, _needs_sync)
+       SELECT fp.id,
+              COALESCE(l.farm_id, (SELECT MIN(id) FROM farms)),
+              fp.lot_id, fp.feed_name, fp.quantity_produced_kg, fp.date, fp.status,
+              fp.created_by_id, fp.created_by_name, fp.created_at, fp._needs_sync
+       FROM feed_preparations_old fp
+       LEFT JOIN lots l ON l.id = fp.lot_id`,
+      `DROP TABLE feed_preparations_old`,
     ],
   },
 ];
@@ -434,28 +512,28 @@ export const SCHEMA_SQL: string[] = [
     _needs_sync INTEGER DEFAULT 0
   )`,
 
-  // ─── 11. FEED INVENTORY (matières premières) ───
+  // ─── 11. FEED INVENTORY (matières premières) — niveau FERME ───
   `CREATE TABLE IF NOT EXISTS feed_inventory (
     id INTEGER PRIMARY KEY,
-    lot_id INTEGER NOT NULL,
+    farm_id INTEGER NOT NULL,
     feed_type TEXT NOT NULL,
     quantity_kg REAL DEFAULT 0,
     updated_at TEXT,
     _needs_sync INTEGER DEFAULT 0,
-    UNIQUE(lot_id, feed_type)
+    UNIQUE(farm_id, feed_type)
   )`,
 
-  // ─── 12. HEALTH INVENTORY ───
+  // ─── 12. HEALTH INVENTORY — niveau FERME ───
   `CREATE TABLE IF NOT EXISTS health_inventory (
     id INTEGER PRIMARY KEY,
-    lot_id INTEGER NOT NULL,
+    farm_id INTEGER NOT NULL,
     product_name TEXT NOT NULL,
     product_type TEXT DEFAULT 'Autre',
     quantity REAL DEFAULT 0,
     unit TEXT DEFAULT 'Flacon',
     updated_at TEXT,
     _needs_sync INTEGER DEFAULT 0,
-    UNIQUE(lot_id, product_name)
+    UNIQUE(farm_id, product_name)
   )`,
 
   // ─── 13. FEED PURCHASES ───
@@ -469,6 +547,7 @@ export const SCHEMA_SQL: string[] = [
     feed_type TEXT NOT NULL,
     quantity_kg REAL NOT NULL,
     total_price REAL NOT NULL,
+    unit_price REAL,
     supplier TEXT,
     status TEXT NOT NULL DEFAULT 'ACTIF',
     created_by_id INTEGER,
@@ -490,6 +569,7 @@ export const SCHEMA_SQL: string[] = [
     quantity REAL NOT NULL,
     unit TEXT DEFAULT 'Flacon',
     total_price REAL NOT NULL,
+    unit_price REAL,
     supplier TEXT,
     status TEXT NOT NULL DEFAULT 'ACTIF',
     created_by_id INTEGER,
@@ -499,21 +579,23 @@ export const SCHEMA_SQL: string[] = [
     _needs_sync INTEGER DEFAULT 0
   )`,
 
-  // ─── 15. PREPARED FEED INVENTORY ───
+  // ─── 15. PREPARED FEED INVENTORY — ferme + lot optionnel (réserve de lot) ───
   `CREATE TABLE IF NOT EXISTS prepared_feed_inventory (
     id INTEGER PRIMARY KEY,
-    lot_id INTEGER NOT NULL,
+    farm_id INTEGER NOT NULL,
+    lot_id INTEGER,
     feed_name TEXT NOT NULL,
     quantity_kg REAL DEFAULT 0,
     updated_at TEXT,
     _needs_sync INTEGER DEFAULT 0,
-    UNIQUE(lot_id, feed_name)
+    UNIQUE(farm_id, lot_id, feed_name)
   )`,
 
-  // ─── 16. FEED PREPARATIONS ───
+  // ─── 16. FEED PREPARATIONS — farm obligatoire, lot optionnel ───
   `CREATE TABLE IF NOT EXISTS feed_preparations (
     id INTEGER PRIMARY KEY,
-    lot_id INTEGER NOT NULL,
+    farm_id INTEGER NOT NULL,
+    lot_id INTEGER,
     feed_name TEXT NOT NULL,
     quantity_produced_kg REAL NOT NULL,
     date TEXT NOT NULL,

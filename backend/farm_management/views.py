@@ -421,14 +421,14 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         elif this_month_sales and this_month_sales > 0:
             revenue_trend = 100
 
-        # Feed stock
-        feed_stock = PreparedFeedInventory.objects.filter(lot__in=all_lots).aggregate(total=Sum('quantity_kg'))['total'] or 0
-        raw_material_stock = FeedInventory.objects.filter(lot__in=all_lots).aggregate(total=Sum('quantity_kg'))['total'] or 0
+        # Feed stock — niveau FERME (stock général) + réserves de lots
+        feed_stock = PreparedFeedInventory.objects.filter(farm__in=farms).aggregate(total=Sum('quantity_kg'))['total'] or 0
+        raw_material_stock = FeedInventory.objects.filter(farm__in=farms).aggregate(total=Sum('quantity_kg'))['total'] or 0
 
-        raw_materials_detail = list(FeedInventory.objects.filter(lot__in=all_lots).values('feed_type').annotate(total=Sum('quantity_kg')))
-        prepared_feeds_detail = list(PreparedFeedInventory.objects.filter(lot__in=all_lots).values('feed_name').annotate(total=Sum('quantity_kg')))
+        raw_materials_detail = list(FeedInventory.objects.filter(farm__in=farms).values('feed_type').annotate(total=Sum('quantity_kg')))
+        prepared_feeds_detail = list(PreparedFeedInventory.objects.filter(farm__in=farms).values('feed_name').annotate(total=Sum('quantity_kg')))
 
-        last_preparation = FeedPreparation.objects.filter(lot__in=all_lots).order_by('-date', '-created_at').first()
+        last_preparation = FeedPreparation.objects.filter(farm__in=farms).order_by('-date', '-created_at').first()
         last_distribution = Feed.objects.filter(lot__in=all_lots, status='ACTIVE').order_by('-date', '-created_at').first()
 
         # Bonus statistics (only ACTIVE bonuses)
@@ -722,14 +722,16 @@ class LotViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         available_casses = max(0, (total_oeufs_casses / 30) - total_sold_casses)
 
         total_feed_consumed = all_feeds.aggregate(total=Sum('quantity_kg'))['total'] or 0
-        # For a specific lot, we show the lot's feed stock
-        feed_stock = PreparedFeedInventory.objects.filter(lot=lot).aggregate(total=Sum('quantity_kg'))['total'] or 0
-        raw_material_stock = FeedInventory.objects.filter(lot=lot).aggregate(total=Sum('quantity_kg'))['total'] or 0
+        # Stock disponible pour ce lot = sa réserve d'aliment préparé + le stock
+        # préparé général de la ferme. Les matières premières sont au niveau ferme.
+        prepared_for_lot = PreparedFeedInventory.objects.filter(farm=lot.farm).filter(Q(lot=lot) | Q(lot__isnull=True))
+        feed_stock = prepared_for_lot.aggregate(total=Sum('quantity_kg'))['total'] or 0
+        raw_material_stock = FeedInventory.objects.filter(farm=lot.farm).aggregate(total=Sum('quantity_kg'))['total'] or 0
 
-        raw_materials_detail = list(FeedInventory.objects.filter(lot=lot).values('feed_type').annotate(total=Sum('quantity_kg')))
-        prepared_feeds_detail = list(PreparedFeedInventory.objects.filter(lot=lot).values('feed_name').annotate(total=Sum('quantity_kg')))
+        raw_materials_detail = list(FeedInventory.objects.filter(farm=lot.farm).values('feed_type').annotate(total=Sum('quantity_kg')))
+        prepared_feeds_detail = list(prepared_for_lot.values('feed_name').annotate(total=Sum('quantity_kg')))
 
-        last_preparation = FeedPreparation.objects.filter(lot=lot).order_by('-date', '-created_at').first()
+        last_preparation = FeedPreparation.objects.filter(farm=lot.farm).filter(Q(lot=lot) | Q(lot__isnull=True)).order_by('-date', '-created_at').first()
 
         total_health_purchased = all_health_purchases.aggregate(total=Sum('quantity'))['total'] or 0
         # Health consumed logic: mixing dose and quantity might be tricky in DB if one is string.
@@ -771,7 +773,7 @@ class LotViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         last_feed = all_feeds.order_by('-date', '-created_at').first()
         last_health = all_health.order_by('-date', '-created_at').first()
 
-        health_detail = list(HealthInventory.objects.filter(lot=lot).values(
+        health_detail = list(HealthInventory.objects.filter(farm=lot.farm).values(
             'product_name', 'quantity', 'unit'
         ))
 
@@ -802,7 +804,7 @@ class LotViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
             'last_preparation_date': last_preparation.date if last_preparation else None,
             'total_feed_consumed': float(total_feed_consumed),
             'last_feed_date': last_feed.date if last_feed else None,
-            'health_stock': float(HealthInventory.objects.filter(lot=lot).aggregate(total=Sum('quantity'))['total'] or 0),
+            'health_stock': float(HealthInventory.objects.filter(farm=lot.farm).aggregate(total=Sum('quantity'))['total'] or 0),
             'total_treatments': all_health.count(),
             'last_health_record': HealthRecordSerializer(last_health).data if last_health else None,
             'performance': performance,
@@ -1391,24 +1393,8 @@ class FeedViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         if instance.status == 'ANNULEE':
             return Response({"detail": "Cette consommation est déjà annulée."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validation chronologique
-        from .serializers import validate_inventory_integrity
-        ok, err = validate_inventory_integrity(instance.lot, 'FEED', instance.feed_type, exclude_id=instance.id, is_purchase=False)
-        if not ok:
-            return Response({"detail": "Impossible d'annuler cette distribution : le stock deviendrait incohérent à une date ultérieure."}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Restore inventory
-        from .models import PreparedFeedInventory
-        prepared_inventory, created = PreparedFeedInventory.objects.get_or_create(
-            lot=instance.lot,
-            feed_name=instance.feed_type,
-            defaults={'quantity_kg': 0}
-        )
-        prepared_inventory.quantity_kg += instance.quantity_kg
-        prepared_inventory.save()
-
         instance.status = 'ANNULEE'
-        instance.save()
+        instance.save()  # les signaux recréditent le stock préparé (réserve lot ou général)
 
         desc = f"Distribution de {instance.quantity_kg}kg annulée (Lot {instance.lot.name})"
         updated = ActivityLog.objects.filter(related_id=instance.id, module="Alimentation", action__icontains="Alimentation").update(
@@ -2765,20 +2751,22 @@ class FeedInventoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         queryset = FeedInventory.objects.all()
         if user.role == 'PROPRIETAIRE':
-            queryset = queryset.filter(lot__farm__owner=user)
+            queryset = queryset.filter(farm__owner=user)
         else:
-            queryset = queryset.filter(lot__farm__employees__user=user)
+            queryset = queryset.filter(farm__employees__user=user)
 
+        # Stock de matières premières = niveau FERME. `?lot=` est toléré et
+        # résolu vers la ferme du lot (rétro-compat écrans existants).
         if farm_id:
-            queryset = queryset.filter(lot__farm_id=farm_id)
-        if lot_id:
-            queryset = queryset.filter(lot_id=lot_id)
+            queryset = queryset.filter(farm_id=farm_id)
+        elif lot_id:
+            queryset = queryset.filter(farm__lots__id=lot_id)
 
         # Si include_zero est true, on inclut tous les stocks, sinon on filtre les stocks > 0
         if not include_zero:
             queryset = queryset.filter(quantity_kg__gt=0)
 
-        return queryset
+        return queryset.distinct()
 
 class HealthInventoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = HealthInventorySerializer
@@ -2792,20 +2780,20 @@ class HealthInventoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         queryset = HealthInventory.objects.all()
         if user.role == 'PROPRIETAIRE':
-            queryset = queryset.filter(lot__farm__owner=user)
+            queryset = queryset.filter(farm__owner=user)
         else:
-            queryset = queryset.filter(lot__farm__employees__user=user)
+            queryset = queryset.filter(farm__employees__user=user)
 
         if farm_id:
-            queryset = queryset.filter(lot__farm_id=farm_id)
-        if lot_id:
-            queryset = queryset.filter(lot_id=lot_id)
+            queryset = queryset.filter(farm_id=farm_id)
+        elif lot_id:
+            queryset = queryset.filter(farm__lots__id=lot_id)
 
         # Si include_zero est true, on inclut tous les stocks, sinon on filtre les stocks > 0
         if not include_zero:
             queryset = queryset.filter(quantity__gt=0)
 
-        return queryset
+        return queryset.distinct()
 
 class FeedPurchaseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FeedPurchaseSerializer
@@ -2871,9 +2859,9 @@ class FeedPurchaseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
 
         # Validation chronologique
         from .serializers import validate_inventory_integrity
-        ok, err = validate_inventory_integrity(instance.lot, 'FEED', instance.feed_type, exclude_id=instance.id, is_purchase=True)
+        ok, err = validate_inventory_integrity(instance.farm, 'FEED', instance.feed_type, exclude_id=instance.id, is_purchase=True)
         if not ok:
-            return Response({"detail": "Impossible d'annuler cet achat car une partie de cet aliment a déjà été utilisée. Annulez d'abord les distributions concernées."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Impossible d'annuler cet achat car une partie de cet aliment a déjà été utilisée. Annulez d'abord les distributions/mélanges concernés."}, status=status.HTTP_400_BAD_REQUEST)
 
         instance.status = 'ANNULEE'
         instance.save()
@@ -2959,7 +2947,7 @@ class HealthPurchaseViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
 
         # Validation chronologique
         from .serializers import validate_inventory_integrity
-        ok, err = validate_inventory_integrity(instance.lot, 'HEALTH', instance.product_name, exclude_id=instance.id, is_purchase=True)
+        ok, err = validate_inventory_integrity(instance.farm, 'HEALTH', instance.product_name, exclude_id=instance.id, is_purchase=True)
         if not ok:
             return Response({"detail": "Impossible d'annuler cet achat car ce produit a déjà été utilisé pour des soins. Annulez d'abord les soins concernés."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -3028,20 +3016,21 @@ class PreparedFeedInventoryViewSet(viewsets.ReadOnlyModelViewSet):
 
         queryset = PreparedFeedInventory.objects.all()
         if user.role == 'PROPRIETAIRE':
-            queryset = queryset.filter(lot__farm__owner=user)
+            queryset = queryset.filter(farm__owner=user)
         else:
-            queryset = queryset.filter(lot__farm__employees__user=user)
+            queryset = queryset.filter(farm__employees__user=user)
 
         if farm_id:
-            queryset = queryset.filter(lot__farm_id=farm_id)
+            queryset = queryset.filter(farm_id=farm_id)
         if lot_id:
-            queryset = queryset.filter(lot_id=lot_id)
+            # Réserve du lot OU stock général de sa ferme (lot NULL)
+            queryset = queryset.filter(Q(lot_id=lot_id) | Q(lot__isnull=True, farm__lots__id=lot_id))
 
         # Si include_zero est true, on inclut tous les stocks, sinon on filtre les stocks > 0
         if not include_zero:
             queryset = queryset.filter(quantity_kg__gt=0)
 
-        return queryset
+        return queryset.distinct()
 
 class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     serializer_class = FeedPreparationSerializer
@@ -3050,51 +3039,68 @@ class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if user.role == 'PROPRIETAIRE':
-            queryset = FeedPreparation.objects.filter(lot__farm__owner=user)
+            queryset = FeedPreparation.objects.filter(farm__owner=user)
         else:
-            queryset = FeedPreparation.objects.filter(lot__farm__employees__user=user)
-            
+            queryset = FeedPreparation.objects.filter(farm__employees__user=user)
+
+        farm_id = self.request.query_params.get('farm')
+        if farm_id:
+            queryset = queryset.filter(farm_id=farm_id)
         lot_id = self.request.query_params.get('lot')
         if lot_id:
             queryset = queryset.filter(lot_id=lot_id)
-            
+
         return queryset
+
+    @staticmethod
+    def _prep_desc(instance):
+        suffix = f" (Lot {instance.lot.name})" if instance.lot_id else " (ferme)"
+        return f"Mélange : {instance.quantity_produced_kg} kg de {instance.feed_name}{suffix}"
 
     def perform_create(self, serializer):
         instance = serializer.save(created_by=self.request.user)
         ActivityLog.objects.create(
             user=self.request.user,
-            farm=instance.lot.farm,
+            farm=instance.farm,
             lot=instance.lot,
             action="Préparation Aliment",
             module="Alimentation",
             related_id=instance.id,
-            description=f"Mélange : {instance.quantity_produced_kg} kg de {instance.feed_name} (Lot {instance.lot.name})"
+            description=self._prep_desc(instance),
         )
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        desc = self._prep_desc(instance)
+        updated = ActivityLog.objects.filter(
+            related_id=instance.id, module="Alimentation", action__icontains="Préparation"
+        ).update(description=desc)
+        if not updated:
+            ActivityLog.objects.create(
+                user=self.request.user,
+                farm=instance.farm,
+                lot=instance.lot,
+                action="Préparation Aliment",
+                module="Alimentation",
+                related_id=instance.id,
+                description=desc,
+            )
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
         if instance.status == 'ANNULEE':
             return Response({"detail": "Cette préparation est déjà annulée."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validation chronologique
+        # Validation chronologique (réserve du lot ou stock général ferme)
         from .serializers import validate_prepared_feed_integrity
-        ok, err = validate_prepared_feed_integrity(instance.lot, instance.feed_name, exclude_id=instance.id)
+        ok, err = validate_prepared_feed_integrity(
+            instance.farm, instance.feed_name, exclude_id=instance.id, lot=instance.lot
+        )
         if not ok:
             return Response({"detail": f"Impossible d'annuler : {err}"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Restore inventory
-        from .models import PreparedFeedInventory
-        prepared_inventory, created = PreparedFeedInventory.objects.get_or_create(
-            lot=instance.lot,
-            feed_name=instance.feed_name,
-            defaults={'quantity_kg': 0}
-        )
-        prepared_inventory.quantity_kg += instance.quantity_produced_kg
-        prepared_inventory.save()
-
         instance.status = 'ANNULEE'
-        instance.save()
+        instance.save()  # les signaux recalculent le stock préparé + matières premières
 
         desc = f"Préparation de {instance.quantity_produced_kg}kg ({instance.feed_name}) annulée"
         updated = ActivityLog.objects.filter(related_id=instance.id, module="Alimentation", action__icontains="Préparation").update(
@@ -3104,7 +3110,7 @@ class FeedPreparationViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
         if not updated:
             ActivityLog.objects.create(
                 user=self.request.user,
-                farm=instance.lot.farm,
+                farm=instance.farm,
                 lot=instance.lot,
                 action="Mélange Annulé",
                 module="Alimentation",

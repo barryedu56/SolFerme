@@ -71,29 +71,61 @@ def validate_egg_stock_integrity(lot, product_type, exclude_id=None, mock_item=N
             return False, f"Le {it['date'].strftime('%d/%m/%Y')}, stock de casiers {label} insuffisant pour valider cette opération."
     return True, None
 
-def validate_inventory_integrity(lot, item_type, name, exclude_id=None, mock_item=None, is_purchase=True):
-    """Validation générique pour Aliments et Santé. Séparée par LOT."""
+class _MockUsage:
+    """Petit objet-usage synthétique pour les balayages chronologiques."""
+    def __init__(self, date, qty, _id=0):
+        self.date = date
+        self.quantity_kg = qty
+        self.quantity = qty
+        self.id = _id
+
+
+def _farm_of(obj):
+    """Résout la ferme depuis un lot, une ferme, ou un objet exposant .farm."""
+    if obj is None:
+        return None
+    from .models import Farm, Lot
+    if isinstance(obj, Farm):
+        return obj
+    if isinstance(obj, Lot):
+        return obj.farm
+    return getattr(obj, 'farm', None)
+
+
+def validate_inventory_integrity(farm_or_lot, item_type, name, exclude_id=None, mock_item=None, is_purchase=True, lot=None):
+    """Validation chronologique du stock — niveau FERME.
+
+    `farm_or_lot` : une Farm (ou un Lot, dont on déduit la ferme — rétro-compat).
+    `lot` : pour l'aliment préparé uniquement, restreint à la réserve du lot.
+    """
+    from .models import PreparedFeedInventory
+    farm = _farm_of(farm_or_lot)
+    if farm is None:
+        return True, None
+
     if item_type == 'FEED':
-        # Check if this is a prepared feed (exists in PreparedFeedInventory)
-        from .models import PreparedFeedInventory
-        prepared_inventory = PreparedFeedInventory.objects.filter(lot=lot, feed_name=name).first()
-        
+        # Aliment préparé ? (présent dans le stock préparé de la ferme)
+        prepared_qs = PreparedFeedInventory.objects.filter(farm=farm, feed_name=name)
+        if lot is not None:
+            prepared_qs = prepared_qs.filter(lot=lot)
+        prepared_inventory = prepared_qs.first()
         if prepared_inventory:
-            # Use prepared feed inventory for validation
             current_stock = float(prepared_inventory.quantity_kg)
             if mock_item and not is_purchase:
-                # For distribution, subtract the quantity being distributed
-                required = float(mock_item.quantity_kg)
-                if current_stock < required:
+                required = float(getattr(mock_item, 'quantity_kg', 0) or 0)
+                if current_stock + 0.01 < required:
                     return False, f"Le {mock_item.date.strftime('%d/%m/%Y')}, stock de '{name}' insuffisant ({current_stock:.1f} kg disponibles, {required:.1f} requis)."
             return True, None
-        
-        # Fall back to raw material calculation for non-prepared feeds
-        purchases = list(FeedPurchase.objects.filter(lot=lot, feed_type=name, status='ACTIVE').order_by('date', 'id'))
-        usages = list(Feed.objects.filter(lot=lot, feed_type=name, status='ACTIVE').order_by('date', 'id'))
+
+        # Matière première : achats de la ferme − consommation dans ses mélanges
+        purchases = list(FeedPurchase.objects.filter(farm=farm, feed_type=name, status='ACTIVE').order_by('date', 'id'))
+        prep_ings = FeedPreparationIngredient.objects.filter(
+            preparation__farm=farm, material_name=name, preparation__status='ACTIVE'
+        ).select_related('preparation')
+        usages = [_MockUsage(pi.preparation.date, float(pi.quantity_used_kg), pi.id) for pi in prep_ings]
     else:
-        purchases = list(HealthPurchase.objects.filter(lot=lot, product_name=name, status='ACTIVE').order_by('date', 'id'))
-        usages = list(HealthRecord.objects.filter(lot=lot, product_name=name, status='ACTIVE').order_by('date', 'id'))
+        purchases = list(HealthPurchase.objects.filter(farm=farm, product_name=name, status='ACTIVE').order_by('date', 'id'))
+        usages = list(HealthRecord.objects.filter(lot__farm=farm, product_name=name, status='ACTIVE').order_by('date', 'id'))
 
     if exclude_id:
         if is_purchase: purchases = [p for p in purchases if p.id != exclude_id]
@@ -121,17 +153,34 @@ def validate_inventory_integrity(lot, item_type, name, exclude_id=None, mock_ite
             else:
                 unite = "unités"
                 try:
-                    inv = HealthInventory.objects.filter(lot=lot, product_name=name).first()
+                    inv = HealthInventory.objects.filter(farm=farm, product_name=name).first()
                     if inv: unite = inv.unit
                 except: pass
             msg = f"Le {it['date'].strftime('%d/%m/%Y')}, stock de '{name}' insuffisant ({stock + it['qty']:.1f} {unite} disponibles, {it['qty']:.1f} requis)."
             return False, msg
     return True, None
 
-def validate_prepared_feed_integrity(lot, feed_name, exclude_id=None, mock_item=None, is_prod=True):
-    """Validation chronologique pour l'aliment préparé."""
-    prods = list(FeedPreparation.objects.filter(lot=lot, feed_name=feed_name, status='ACTIVE').order_by('date', 'id'))
-    distributions = list(Feed.objects.filter(lot=lot, feed_type=feed_name, status='ACTIVE').order_by('date', 'id'))
+def validate_prepared_feed_integrity(farm_or_lot, feed_name, exclude_id=None, mock_item=None, is_prod=True, lot=None):
+    """Validation chronologique pour l'aliment préparé.
+
+    `lot` renseigné → réserve du lot (production du lot vs distributions du lot).
+    `lot` None      → stock général ferme (production sans lot vs distributions
+    des lots sans réserve propre)."""
+    farm = _farm_of(farm_or_lot)
+    if farm is None:
+        return True, None
+
+    prep_qs = FeedPreparation.objects.filter(farm=farm, feed_name=feed_name, status='ACTIVE')
+    if lot is not None:
+        prods = list(prep_qs.filter(lot=lot).order_by('date', 'id'))
+        distributions = list(Feed.objects.filter(lot=lot, feed_type=feed_name, status='ACTIVE').order_by('date', 'id'))
+    else:
+        prods = list(prep_qs.filter(lot__isnull=True).order_by('date', 'id'))
+        reserved_lot_ids = list(prep_qs.filter(lot__isnull=False).values_list('lot_id', flat=True).distinct())
+        distributions = list(
+            Feed.objects.filter(lot__farm=farm, feed_type=feed_name, status='ACTIVE')
+            .exclude(lot_id__in=reserved_lot_ids).order_by('date', 'id')
+        )
 
     if exclude_id:
         if is_prod: prods = [p for p in prods if p.id != exclude_id]
@@ -627,7 +676,9 @@ class FeedSerializer(serializers.ModelSerializer):
         f_type = data.get('feed_type', self.instance.feed_type if self.instance else None)
         if lot and f_type and data.get('status', self.instance.status if self.instance else 'ACTIVE') == 'ACTIVE':
             mock = Feed(date=data.get('date', self.instance.date if self.instance else None), quantity_kg=data.get('quantity_kg', self.instance.quantity_kg if self.instance else 0), feed_type=f_type)
-            ok, err = validate_inventory_integrity(lot, 'FEED', f_type, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=False)
+            # Aliment préparé : consomme la réserve du lot si elle existe, sinon le stock général ferme.
+            reserve_lot = lot if PreparedFeedInventory.objects.filter(farm=lot.farm, lot=lot, feed_name=f_type).exists() else None
+            ok, err = validate_inventory_integrity(lot.farm, 'FEED', f_type, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=False, lot=reserve_lot)
             if not ok: raise serializers.ValidationError(err)
         return data
 
@@ -653,9 +704,10 @@ class FeedPurchaseSerializer(serializers.ModelSerializer):
         if lot and lot.status == 'TERMINE':
             raise serializers.ValidationError("Ce lot est terminé. Réactivez-le pour effectuer des modifications.")
         f_type = data.get('feed_type', self.instance.feed_type if self.instance else None)
-        if lot and f_type and data.get('status', self.instance.status if self.instance else 'ACTIVE') == 'ACTIVE':
+        farm = data.get('farm', self.instance.farm if self.instance else None) or (lot.farm if lot else None)
+        if farm and f_type and data.get('status', self.instance.status if self.instance else 'ACTIVE') == 'ACTIVE':
             mock = FeedPurchase(date=data.get('date', self.instance.date if self.instance else None), quantity_kg=data.get('quantity_kg', self.instance.quantity_kg if self.instance else 0), feed_type=f_type)
-            ok, err = validate_inventory_integrity(lot, 'FEED', f_type, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=True)
+            ok, err = validate_inventory_integrity(farm, 'FEED', f_type, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=True)
             if not ok: raise serializers.ValidationError(err)
         return data
 
@@ -682,8 +734,8 @@ class HealthRecordSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Ce lot est terminé. Réactivez-le pour effectuer des modifications.")
         p_name = data.get('product_name', self.instance.product_name if self.instance else None)
         if lot and p_name:
-            # Récupérer l'unité et le type du produit si existant dans l'inventaire du LOT
-            existing = HealthInventory.objects.filter(lot=lot, product_name=p_name).first()
+            # Récupérer l'unité du produit si existant dans l'inventaire de la FERME
+            existing = HealthInventory.objects.filter(farm=lot.farm, product_name=p_name).first()
             if existing:
                 data['unit'] = existing.unit
 
@@ -693,7 +745,7 @@ class HealthRecordSerializer(serializers.ModelSerializer):
                 quantity=data.get('quantity', self.instance.quantity if self.instance else 0),
                 product_name=p_name
             )
-            ok, err = validate_inventory_integrity(lot, 'HEALTH', p_name, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=False)
+            ok, err = validate_inventory_integrity(lot.farm, 'HEALTH', p_name, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=False)
             if not ok: raise serializers.ValidationError(err)
         return data
 
@@ -720,16 +772,17 @@ class HealthPurchaseSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Ce lot est terminé. Réactivez-le pour effectuer des modifications.")
         p_name = data.get('product_name', self.instance.product_name if self.instance else None)
 
-        # S'il s'agit d'un produit existant dans le LOT, on force le type et l'unité
-        if lot and p_name:
-            existing = HealthInventory.objects.filter(lot=lot, product_name=p_name).first()
+        farm = data.get('farm', self.instance.farm if self.instance else None) or (lot.farm if lot else None)
+        # Produit déjà connu dans la FERME → on force le type et l'unité
+        if farm and p_name:
+            existing = HealthInventory.objects.filter(farm=farm, product_name=p_name).first()
             if existing:
                 data['product_type'] = existing.product_type
                 data['unit'] = existing.unit
 
-        if lot and p_name and data.get('status', self.instance.status if self.instance else 'ACTIVE') == 'ACTIVE':
+        if farm and p_name and data.get('status', self.instance.status if self.instance else 'ACTIVE') == 'ACTIVE':
             mock = HealthPurchase(date=data.get('date', self.instance.date if self.instance else None), quantity=data.get('quantity', self.instance.quantity if self.instance else 0), product_name=p_name)
-            ok, err = validate_inventory_integrity(lot, 'HEALTH', p_name, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=True)
+            ok, err = validate_inventory_integrity(farm, 'HEALTH', p_name, exclude_id=getattr(self.instance, 'id', None), mock_item=mock, is_purchase=True)
             if not ok: raise serializers.ValidationError(err)
         return data
 
@@ -926,7 +979,7 @@ class FeedInventorySerializer(serializers.ModelSerializer):
 class HealthInventorySerializer(serializers.ModelSerializer):
     class Meta:
         model = HealthInventory
-        fields = ['id', 'lot', 'product_name', 'product_type', 'quantity', 'unit', 'updated_at']
+        fields = ['id', 'farm', 'product_name', 'product_type', 'quantity', 'unit', 'updated_at']
 
 class HealthAlertSerializer(serializers.ModelSerializer):
     lot_name = serializers.ReadOnlyField(source='lot.name')
@@ -954,28 +1007,43 @@ class FeedPreparationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = FeedPreparation
-        fields = ['id', 'lot', 'feed_name', 'quantity_produced_kg', 'date', 'status', 'ingredients', 'created_by', 'created_by_name']
+        fields = ['id', 'farm', 'lot', 'feed_name', 'quantity_produced_kg', 'date', 'status', 'ingredients', 'created_by', 'created_by_name']
         read_only_fields = ['created_by']
+        extra_kwargs = {'farm': {'required': False}}
 
     def validate(self, data):
         lot = data.get('lot', self.instance.lot if self.instance else None)
+        farm = data.get('farm', self.instance.farm if self.instance else None) or (lot.farm if lot else None)
+        if farm is None:
+            raise serializers.ValidationError("Une ferme (ou un lot) est requise pour un mélange.")
+        data['farm'] = farm
+        if lot and lot.farm_id != farm.id:
+            raise serializers.ValidationError("Le lot n'appartient pas à cette ferme.")
         if lot and lot.status == 'ARCHIVE':
             raise serializers.ValidationError("Ce lot est archivé. Réactivez-le pour effectuer des modifications.")
         if lot and lot.status == 'TERMINE':
             raise serializers.ValidationError("Ce lot est terminé. Réactivez-le pour effectuer des modifications.")
         ingredients = data.get('ingredients', [])
 
+        from .models import FeedInventory, FeedPreparationIngredient
+        # En édition, les ingrédients existants ont déjà été déduits du stock :
+        # on les recrédite avant de vérifier la disponibilité des nouveaux.
+        already_consumed = {}
+        if self.instance:
+            for ing in FeedPreparationIngredient.objects.filter(preparation=self.instance):
+                already_consumed[ing.material_name] = already_consumed.get(ing.material_name, 0) + float(ing.quantity_used_kg)
+
         for ing in ingredients:
             material_name = ing.get('material_name')
-            qty_needed = ing.get('quantity_used_kg')
+            qty_needed = float(ing.get('quantity_used_kg') or 0)
 
-            from .models import FeedInventory
-            # Validation par LOT uniquement
-            inventory = FeedInventory.objects.filter(lot=lot, feed_type=material_name).first()
-            if not inventory or inventory.quantity_kg < qty_needed:
-                available = inventory.quantity_kg if inventory else 0
+            # Validation au niveau FERME (stock général de matières premières)
+            inventory = FeedInventory.objects.filter(farm=farm, feed_type=material_name).first()
+            available = float(inventory.quantity_kg) if inventory else 0
+            available += already_consumed.get(material_name, 0)
+            if available + 0.01 < qty_needed:
                 raise serializers.ValidationError(
-                    f"Stock insuffisant pour {material_name} dans ce lot. Disponible: {available}kg, requis: {qty_needed}kg"
+                    f"Stock insuffisant pour {material_name} dans la ferme. Disponible: {available}kg, requis: {qty_needed}kg"
                 )
         return data
 
@@ -987,6 +1055,24 @@ class FeedPreparationSerializer(serializers.ModelSerializer):
             FeedPreparationIngredient.objects.create(preparation=preparation, **ingredient_data)
 
         return preparation
+
+    def update(self, instance, validated_data):
+        # `ingredients` est un nested writable : DRF n'implémente pas update()
+        # tout seul. On met à jour les champs simples puis on remplace
+        # intégralement les ingrédients (delete + recreate). Les signaux
+        # post_save/post_delete sur FeedPreparation(Ingredient) recalculent
+        # ensuite les inventaires matières premières + aliment préparé.
+        ingredients_data = validated_data.pop('ingredients', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if ingredients_data is not None:
+            instance.ingredients.all().delete()
+            for ingredient_data in ingredients_data:
+                FeedPreparationIngredient.objects.create(preparation=instance, **ingredient_data)
+
+        return instance
 
 
 class PreparedFeedInventorySerializer(serializers.ModelSerializer):

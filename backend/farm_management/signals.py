@@ -46,54 +46,102 @@ def recalculate_lot_quantity(lot):
 
     lot.save(update_fields=['current_quantity', 'status', 'motif_fin'])
 
-def recalculate_feed_inventory(lot, feed_type):
-    """Recalcule le stock de matières premières (Raw Materials)."""
+def recalculate_feed_inventory(farm, feed_type):
+    """Recalcule le stock de matières premières (Raw Materials) — niveau FERME.
+    Stock = achats de la ferme − consommation dans les mélanges de la ferme."""
+    if farm is None:
+        return
     total_purchased = FeedPurchase.objects.filter(
-        lot=lot, feed_type=feed_type, status='ACTIVE'
+        farm=farm, feed_type=feed_type, status='ACTIVE'
     ).aggregate(Sum('quantity_kg'))['quantity_kg__sum'] or 0
 
     total_used_in_preparations = FeedPreparationIngredient.objects.filter(
-        preparation__lot=lot, material_name=feed_type, preparation__status='ACTIVE'
+        preparation__farm=farm, material_name=feed_type, preparation__status='ACTIVE'
     ).aggregate(Sum('quantity_used_kg'))['quantity_used_kg__sum'] or 0
 
-    inventory, _ = FeedInventory.objects.get_or_create(lot=lot, feed_type=feed_type)
+    inventory, _ = FeedInventory.objects.get_or_create(farm=farm, feed_type=feed_type)
     inventory.quantity_kg = max(0, float(total_purchased) - float(total_used_in_preparations))
     inventory.save()
 
-def recalculate_prepared_feed_inventory(lot, feed_name):
-    """Recalcule le stock d'aliment préparé (Source de Vérité)."""
-    total_produced = FeedPreparation.objects.filter(
-        lot=lot, feed_name=feed_name, status='ACTIVE'
+def _lots_with_reserve(farm, feed_name):
+    """Lots ayant une réserve d'aliment préparé propre pour ce nom (mélange ACTIVE avec lot)."""
+    return list(FeedPreparation.objects.filter(
+        farm=farm, feed_name=feed_name, status='ACTIVE', lot__isnull=False
+    ).values_list('lot_id', flat=True).distinct())
+
+def recalculate_prepared_feed_inventory(farm, lot, feed_name):
+    """Recalcule le stock d'aliment préparé.
+      - lot renseigné : réserve du lot = production du lot − distributions du lot
+        (seulement si le lot possède bien une réserve pour ce nom).
+      - lot None : stock général ferme = production sans lot − distributions des
+        lots SANS réserve propre.
+    Un recalcul « lot » rafraîchit aussi la ligne générale (le routage des
+    distributions du lot peut avoir changé)."""
+    if farm is None:
+        return
+
+    if lot is not None:
+        lot_id = lot.id if hasattr(lot, 'id') else lot
+        has_reserve = FeedPreparation.objects.filter(
+            farm=farm, lot_id=lot_id, feed_name=feed_name, status='ACTIVE'
+        ).exists()
+        if not has_reserve:
+            # Plus de réserve pour ce lot → on supprime la ligne (les distributions
+            # de ce lot sont routées vers le stock général).
+            PreparedFeedInventory.objects.filter(farm=farm, lot_id=lot_id, feed_name=feed_name).delete()
+        else:
+            produced = FeedPreparation.objects.filter(
+                farm=farm, lot_id=lot_id, feed_name=feed_name, status='ACTIVE'
+            ).aggregate(Sum('quantity_produced_kg'))['quantity_produced_kg__sum'] or 0
+            distributed = Feed.objects.filter(
+                lot_id=lot_id, feed_type=feed_name, status='ACTIVE'
+            ).aggregate(Sum('quantity_kg'))['quantity_kg__sum'] or 0
+            obj, _ = PreparedFeedInventory.objects.get_or_create(farm=farm, lot_id=lot_id, feed_name=feed_name)
+            obj.quantity_kg = max(0, float(produced) - float(distributed))
+            obj.save()
+        # rafraîchir la ligne générale ferme (routage potentiellement modifié)
+        recalculate_prepared_feed_inventory(farm, None, feed_name)
+        return
+
+    lots_reserved = _lots_with_reserve(farm, feed_name)
+    produced = FeedPreparation.objects.filter(
+        farm=farm, lot__isnull=True, feed_name=feed_name, status='ACTIVE'
     ).aggregate(Sum('quantity_produced_kg'))['quantity_produced_kg__sum'] or 0
+    distributed = Feed.objects.filter(
+        lot__farm=farm, feed_type=feed_name, status='ACTIVE'
+    ).exclude(lot_id__in=lots_reserved).aggregate(Sum('quantity_kg'))['quantity_kg__sum'] or 0
+    existing = PreparedFeedInventory.objects.filter(farm=farm, lot__isnull=True, feed_name=feed_name).first()
+    if produced == 0 and distributed == 0:
+        # Rien de général pour ce nom : ne pas créer de ligne parasite.
+        if existing:
+            existing.delete()
+        return
+    obj = existing or PreparedFeedInventory(farm=farm, lot=None, feed_name=feed_name)
+    obj.quantity_kg = max(0, float(produced) - float(distributed))
+    obj.save()
 
-    total_distributed = Feed.objects.filter(
-        lot=lot, feed_type=feed_name, status='ACTIVE'
-    ).aggregate(Sum('quantity_kg'))['quantity_kg__sum'] or 0
-
-    inventory, _ = PreparedFeedInventory.objects.get_or_create(lot=lot, feed_name=feed_name)
-    inventory.quantity_kg = max(0, float(total_produced) - float(total_distributed))
-    inventory.save()
-
-def recalculate_health_inventory(lot, product_name):
-    """Recalcule le stock de produits de santé avec une unité fixe."""
+def recalculate_health_inventory(farm, product_name):
+    """Recalcule le stock de produits de santé — niveau FERME."""
+    if farm is None:
+        return
     purchase_info = HealthPurchase.objects.filter(
-        lot=lot, product_name=product_name, status='ACTIVE'
+        farm=farm, product_name=product_name, status='ACTIVE'
     ).order_by('-date').first()
 
     if not purchase_info:
         # Si plus d'achats actifs, on peut mettre le stock à 0
-        HealthInventory.objects.filter(lot=lot, product_name=product_name).update(quantity=0)
+        HealthInventory.objects.filter(farm=farm, product_name=product_name).update(quantity=0)
         return
 
     total_purchased = HealthPurchase.objects.filter(
-        lot=lot, product_name=product_name, status='ACTIVE'
+        farm=farm, product_name=product_name, status='ACTIVE'
     ).aggregate(Sum('quantity'))['quantity__sum'] or 0
 
     total_consumed = HealthRecord.objects.filter(
-        lot=lot, product_name=product_name, status='ACTIVE'
+        lot__farm=farm, product_name=product_name, status='ACTIVE'
     ).aggregate(Sum('quantity'))['quantity__sum'] or 0
 
-    inventory, _ = HealthInventory.objects.get_or_create(lot=lot, product_name=product_name)
+    inventory, _ = HealthInventory.objects.get_or_create(farm=farm, product_name=product_name)
     inventory.quantity = max(0, float(total_purchased) - float(total_consumed))
     inventory.product_type = purchase_info.product_type
     inventory.unit = purchase_info.unit
@@ -190,8 +238,8 @@ def handle_chicken_movement_change(sender, instance, **kwargs):
 @receiver(post_save, sender=FeedPurchase)
 @receiver(post_delete, sender=FeedPurchase)
 def handle_feed_purchase_change(sender, instance, **kwargs):
-    if instance.lot:
-        recalculate_feed_inventory(instance.lot, instance.feed_type)
+    if instance.farm_id:
+        recalculate_feed_inventory(instance.farm, instance.feed_type)
 
     # Recharger pour avoir le lien expense à jour
     instance.refresh_from_db()
@@ -224,8 +272,8 @@ def handle_feed_purchase_change(sender, instance, **kwargs):
 @receiver(post_save, sender=HealthPurchase)
 @receiver(post_delete, sender=HealthPurchase)
 def handle_health_purchase_change(sender, instance, **kwargs):
-    if instance.lot:
-        recalculate_health_inventory(instance.lot, instance.product_name)
+    if instance.farm_id:
+        recalculate_health_inventory(instance.farm, instance.product_name)
 
     # Recharger pour avoir le lien expense à jour
     instance.refresh_from_db()
@@ -258,26 +306,30 @@ def handle_health_purchase_change(sender, instance, **kwargs):
 @receiver(post_save, sender=Feed)
 @receiver(post_delete, sender=Feed)
 def handle_feed_usage_change(sender, instance, **kwargs):
-    recalculate_prepared_feed_inventory(instance.lot, instance.feed_type)
+    # Distribution rattachée à un lot : on recalcule d'abord la réserve du lot
+    # (qui rafraîchit ensuite la ligne générale ferme via le helper).
+    farm = instance.lot.farm if instance.lot_id else None
+    recalculate_prepared_feed_inventory(farm, instance.lot, instance.feed_type)
 
 @receiver(post_save, sender=FeedPreparation)
 @receiver(post_delete, sender=FeedPreparation)
 def handle_feed_preparation_change(sender, instance, **kwargs):
-    recalculate_prepared_feed_inventory(instance.lot, instance.feed_name)
-    # Recalculate all affected raw materials
+    recalculate_prepared_feed_inventory(instance.farm, instance.lot, instance.feed_name)
+    # Recalculate all affected raw materials (niveau ferme)
     materials = instance.ingredients.values_list('material_name', flat=True).distinct()
     for mat in materials:
-        recalculate_feed_inventory(instance.lot, mat)
+        recalculate_feed_inventory(instance.farm, mat)
 
 @receiver(post_save, sender=FeedPreparationIngredient)
 @receiver(post_delete, sender=FeedPreparationIngredient)
 def handle_feed_preparation_ingredient_change(sender, instance, **kwargs):
-    recalculate_feed_inventory(instance.preparation.lot, instance.material_name)
+    recalculate_feed_inventory(instance.preparation.farm, instance.material_name)
 
 @receiver(post_save, sender=HealthRecord)
 @receiver(post_delete, sender=HealthRecord)
 def handle_health_usage_change(sender, instance, **kwargs):
-    recalculate_health_inventory(instance.lot, instance.product_name)
+    farm = instance.lot.farm if instance.lot_id else None
+    recalculate_health_inventory(farm, instance.product_name)
 
 @receiver(post_save, sender=Payroll)
 @receiver(post_delete, sender=Payroll)

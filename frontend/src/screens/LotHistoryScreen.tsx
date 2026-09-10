@@ -315,6 +315,15 @@ export const LotHistoryScreen = ({ route, navigation }: any) => {
       }
     } catch { /* best-effort */ }
 
+    if (Platform.OS === 'web') {
+      // RNW ne rend pas les alertes à 3 boutons : on enchaîne deux confirmations.
+      if (window.confirm("Modifier cette opération ? (OK = modifier, Annuler = autres choix)")) {
+        handleEditAction(item);
+      } else if (window.confirm("Annuler (supprimer) cette opération ?")) {
+        handleCancelAction(item);
+      }
+      return;
+    }
     Alert.alert("Options de l'action", 'Que souhaitez-vous faire ?', [
       { text: 'Fermer', style: 'cancel' },
       { text: 'Modifier', onPress: () => handleEditAction(item) },

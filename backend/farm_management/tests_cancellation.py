@@ -273,7 +273,7 @@ class CancellationSystemTestCase(TestCase):
             created_by=self.user
         )
 
-        inventory = FeedInventory.objects.get(lot=self.lot, feed_type='Ponte')
+        inventory = FeedInventory.objects.get(farm=self.farm, feed_type='Ponte')
         self.assertEqual(inventory.quantity_kg, 100)
 
         purchase.refresh_from_db()

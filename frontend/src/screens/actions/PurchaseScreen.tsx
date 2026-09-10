@@ -27,11 +27,18 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
     }
   }, [userRole]);
 
-  const [isEdit] = useState(!!item);
+  // Édition seulement si l'item a un id ; un item partiel {feed_type} sert juste
+  // à pré-remplir le nom (réapprovisionnement depuis la vue Stock).
+  const [isEdit] = useState(!!(item && item.id));
   const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
   const [productName, setProductName] = useState(item?.feed_type || item?.product_name || '');
   const [quantity, setQuantity] = useState(item?.quantity_kg?.toString() || item?.quantity?.toString() || '');
   const [totalPrice, setTotalPrice] = useState(item?.total_price?.toString() || '');
+  // Mode de saisie du prix : 'total' (prix total direct, historique) ou 'unit'
+  // (prix par unité → le système calcule le total). item.unit_price non-nul
+  // signifie que l'achat avait été saisi en mode « par unité ».
+  const [priceMode, setPriceMode] = useState<'total' | 'unit'>(item?.unit_price ? 'unit' : 'total');
+  const [unitPrice, setUnitPrice] = useState(item?.unit_price?.toString() || '');
   const [supplier, setSupplier] = useState(item?.supplier || '');
   const [productType, setProductType] = useState(item?.product_type || (type === 'health' ? 'Autre' : ''));
   const [unit, setUnit] = useState(item?.unit || (type === 'health' ? 'Flacon' : ''));
@@ -89,10 +96,27 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
     return localLots;
   }, [selectedFarmId, localLots]);
 
+  // Unité de référence pour le prix « par unité »
+  const priceUnit = type === 'feed' ? 'kg' : (unit || 'unité');
+  // Total calculé par le système en mode « par unité »
+  const computedTotal = useMemo(() => {
+    const q = parseFloat((quantity || '').toString().replace(/\s/g, '').replace(',', '.')) || 0;
+    const u = parseFloat((unitPrice || '').toString().replace(/\s/g, '').replace(',', '.')) || 0;
+    return q * u;
+  }, [quantity, unitPrice]);
+  // Prix total effectif selon le mode de saisie
+  const effectiveTotal = priceMode === 'unit'
+    ? computedTotal
+    : (parseFloat((totalPrice || '').toString().replace(/\s/g, '').replace(',', '.')) || 0);
+
   const handleSubmit = async () => {
     if (loading) return;
-    if (!productName || !quantity || !totalPrice || !selectedFarmId || !selectedLotId) {
-      Alert.alert(t('common.error'), 'Veuillez remplir tous les champs obligatoires, y compris la Ferme et le Lot.');
+    if (!productName || !quantity || !selectedFarmId) {
+      Alert.alert(t('common.error'), 'Veuillez remplir les champs obligatoires (produit, quantité, ferme).');
+      return;
+    }
+    if (priceMode === 'unit' ? !(parseFloat(unitPrice) > 0) : !(effectiveTotal > 0)) {
+      Alert.alert(t('common.error'), priceMode === 'unit' ? 'Veuillez saisir un prix par unité valide.' : 'Veuillez saisir le prix total.');
       return;
     }
 
@@ -100,10 +124,11 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
     const endpoint = type === 'feed' ? '/feed-purchases/' : '/health-purchases/';
     const payload = {
       farm: selectedFarmId,
-      lot: selectedLotId,
+      lot: selectedLotId || null,
       date,
       supplier,
-      total_price: parseFloat(totalPrice),
+      total_price: Math.round(effectiveTotal * 100) / 100,
+      unit_price: priceMode === 'unit' ? (Math.round(parseFloat(unitPrice) * 100) / 100) : null,
       ...(type === 'feed'
         ? { feed_type: productName, quantity_kg: parseFloat(quantity) }
         : { product_name: productName, quantity: parseFloat(quantity), product_type: productType || 'Autre', unit: unit || 'Flacon' }
@@ -164,14 +189,20 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
               </View>
             )}
 
-            {/* --- SÉLECTION LOT --- */}
+            {/* --- SÉLECTION LOT (optionnel : impute le coût à un lot) --- */}
             {selectedFarmId && !initialLotId && (
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Lot * <Text style={{ color: theme.colors.danger }}>obligatoire</Text></Text>
+                <Text style={styles.label}>Lot (optionnel — impute le coût à ce lot)</Text>
                 {currentFarmLots.length === 0 ? (
-                  <Text style={styles.noLotText}>Aucun lot actif dans cette ferme. Vérifiez que les lots sont synchronisés.</Text>
+                  <Text style={styles.noLotText}>Le stock ira à la ferme. Aucun lot actif pour l'imputation du coût.</Text>
                 ) : (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    <TouchableOpacity
+                      style={[styles.chip, !selectedLotId && styles.chipActive]}
+                      onPress={() => setSelectedLotId(null)}
+                    >
+                      <Text style={[styles.chipText, !selectedLotId && styles.chipTextActive]}>Ferme entière</Text>
+                    </TouchableOpacity>
                     {currentFarmLots.filter((l: any) => l.status !== 'ARCHIVE').map((lot: any) => (
                       <TouchableOpacity
                         key={lot.id}
@@ -193,7 +224,7 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
               <View style={[styles.infoBox]}>
                 <MaterialIcons name="info-outline" size={16} color={theme.colors.primary} />
                 <Text style={[styles.infoText]}>
-                  Achat lié au lot sélectionné. Le stock sera mis à jour uniquement pour ce lot.
+                  Le stock entre dans le stock général de la ferme. Le coût de cet achat est imputé au lot sélectionné.
                 </Text>
               </View>
             )}
@@ -207,25 +238,52 @@ export const PurchaseScreen = ({ route, navigation }: any) => {
               />
             </View>
 
-            <View style={styles.row}>
-              <View style={[styles.inputGroup, { flex: 1, marginRight: 10 }]}>
-                <Text style={styles.label}>{t('purchase.quantity')} {type === 'feed' ? '(kg)' : ''}</Text>
-                <Input
-                  placeholder="0"
-                  value={quantity}
-                  onChangeText={setQuantity}
-                  isNumeric
-                />
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>{t('purchase.quantity')} ({priceUnit})</Text>
+              <Input
+                placeholder="0"
+                value={quantity}
+                onChangeText={setQuantity}
+                isNumeric
+              />
+            </View>
+
+            {/* --- MODE DE SAISIE DU PRIX --- */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Prix</Text>
+              <View style={styles.segment}>
+                <TouchableOpacity
+                  style={[styles.segmentBtn, priceMode === 'total' && styles.segmentBtnActive]}
+                  onPress={() => setPriceMode('total')}
+                >
+                  <Text style={[styles.segmentText, priceMode === 'total' && styles.segmentTextActive]}>Prix total</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.segmentBtn, priceMode === 'unit' && styles.segmentBtnActive]}
+                  onPress={() => setPriceMode('unit')}
+                >
+                  <Text style={[styles.segmentText, priceMode === 'unit' && styles.segmentTextActive]}>Prix par {priceUnit}</Text>
+                </TouchableOpacity>
               </View>
-              <View style={[styles.inputGroup, { flex: 1 }]}>
-                <Text style={styles.label}>{t('purchase.totalPrice')} (GNF)</Text>
-                <Input
-                  placeholder="0"
-                  value={totalPrice}
-                  onChangeText={setTotalPrice}
-                  isNumeric
-                />
-              </View>
+
+              {priceMode === 'total' ? (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.label}>{t('purchase.totalPrice')} (GNF)</Text>
+                  <Input placeholder="0" value={totalPrice} onChangeText={setTotalPrice} isNumeric />
+                </View>
+              ) : (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.label}>Prix par {priceUnit} (GNF)</Text>
+                  <Input placeholder="0" value={unitPrice} onChangeText={setUnitPrice} isNumeric />
+                  <View style={styles.computedBox}>
+                    <MaterialIcons name="calculate" size={16} color={theme.colors.primary} />
+                    <Text style={styles.computedText}>
+                      Prix total : {computedTotal.toLocaleString('fr-FR')} GNF
+                      {quantity ? `  (${quantity} ${priceUnit} × ${unitPrice || 0})` : ''}
+                    </Text>
+                  </View>
+                </View>
+              )}
             </View>
 
             <View style={styles.inputGroup}>
@@ -297,6 +355,19 @@ const createStyles = (theme: any) => StyleSheet.create({
   chipText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
   chipTextActive: { color: '#fff', fontWeight: 'bold' },
   noLotText: { fontSize: 13, color: theme.colors.textSecondary, fontStyle: 'italic' },
+  segment: {
+    flexDirection: 'row', backgroundColor: theme.colors.background,
+    borderRadius: theme.borderRadius.m, borderWidth: 1, borderColor: theme.colors.border, padding: 3,
+  },
+  segmentBtn: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: theme.borderRadius.s },
+  segmentBtnActive: { backgroundColor: theme.colors.primary },
+  segmentText: { fontSize: 13, fontWeight: '700', color: theme.colors.textSecondary },
+  segmentTextActive: { color: '#fff' },
+  computedBox: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 8,
+    backgroundColor: theme.colors.primary + '15', borderRadius: theme.borderRadius.m, padding: 10,
+  },
+  computedText: { fontSize: 13, color: theme.colors.primary, marginLeft: 8, flex: 1, fontWeight: '700' },
   infoBox: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: theme.colors.primary + '15',

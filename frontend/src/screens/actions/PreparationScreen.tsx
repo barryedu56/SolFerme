@@ -15,20 +15,41 @@ import { useBreakpoint } from '../../hooks/useBreakpoint';
 export const PreparationScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
   const { t } = useTranslation();
-  const { userRole } = useAuth() as any;
+  const { userRole, userFarms } = useAuth() as any;
   const { isDesktop } = useBreakpoint();
   const styles = useMemo(() => createStyles(theme), [theme]);
-  const { lotId, farmId } = route.params || {};
+  const { item } = route.params || {};
+  const isEdit = !!(item && item.id);
+  const routeLotId = route.params?.lotId ?? item?.lot ?? item?.lot_id ?? null;
+
+  // Ferme de rattachement du mélange (obligatoire)
+  const farmId: number | undefined = route.params?.farmId ?? item?.farm ?? item?.farm_id
+    ?? (routeLotId ? userFarms?.find((f: any) => (f.lots || []).some((l: any) => l.id === routeLotId))?.id : undefined);
+
+  // Lot rattaché (optionnel) : réserve l'aliment produit à ce lot. null = ferme entière.
+  const [selectedLotId, setSelectedLotId] = useState<number | null>(routeLotId ?? null);
+
+  const farmLots = useMemo(
+    () => (userFarms?.find((f: any) => f.id === farmId)?.lots || []).filter((l: any) => l.status !== 'ARCHIVE'),
+    [userFarms, farmId]
+  );
 
   useEffect(() => {
     // Les employés peuvent préparer des aliments (FeedPreparationViewSet backend: IsAuthenticated)
     // La validation se fait via les permissions backend et le contrôle des stocks
   }, [userRole]);
 
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [feedName, setFeedName] = useState('');
-  const [totalQuantity, setTotalQuantity] = useState('');
-  const [ingredients, setIngredients] = useState([{ material_name: '', quantity_used_kg: '' }]);
+  const [date, setDate] = useState(item?.date || new Date().toISOString().split('T')[0]);
+  const [feedName, setFeedName] = useState(item?.feed_name || '');
+  const [totalQuantity, setTotalQuantity] = useState(item?.quantity_produced_kg?.toString() || '');
+  const [ingredients, setIngredients] = useState<{ material_name: string; quantity_used_kg: string }[]>(
+    item?.ingredients?.length
+      ? item.ingredients.map((i: any) => ({
+          material_name: i.material_name || '',
+          quantity_used_kg: (i.quantity_used_kg ?? '').toString(),
+        }))
+      : [{ material_name: '', quantity_used_kg: '' }]
+  );
   const [loading, setLoading] = useState(false);
   const [rawMaterials, setRawMaterials] = useState<any[]>([]);
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -47,12 +68,11 @@ export const PreparationScreen = ({ route, navigation }: any) => {
 
   const fetchRawMaterials = async () => {
     try {
-      // Récupération des matières premières par LOT uniquement
+      // Matières premières = stock général de la FERME
       const params: any = {};
-      if (lotId) params.lot = lotId;
-      else if (farmId) params.farm = farmId;
+      if (farmId) params.farm = farmId;
       const response = await repositoryProvider.api.get<any[]>('/feed-inventory/', { params });
-      setRawMaterials(response.data);
+      setRawMaterials(Array.isArray(response.data) ? response.data : (response.data as any)?.results || []);
     } catch (e) {
       console.error("Error fetching raw materials", e);
     }
@@ -97,8 +117,8 @@ export const PreparationScreen = ({ route, navigation }: any) => {
   const handleSubmit = async () => {
     if (loading) return;
 
-    if (!lotId) {
-      Alert.alert(t('common.error'), "Un lot doit être spécifié pour cette préparation.");
+    if (!farmId) {
+      Alert.alert(t('common.error'), "Ferme introuvable pour ce mélange.");
       return;
     }
 
@@ -129,9 +149,9 @@ export const PreparationScreen = ({ route, navigation }: any) => {
     }
 
     setLoading(true);
-    // Correction: farm retiré (FeedPreparation n'a pas de champ farm, seulement lot)
     const payload = {
-      lot: lotId || undefined,
+      farm: farmId,
+      lot: selectedLotId || null,
       feed_name: feedName,
       quantity_produced_kg: parseFloat(totalQuantity),
       date,
@@ -142,8 +162,13 @@ export const PreparationScreen = ({ route, navigation }: any) => {
     };
 
     try {
-      await repositoryProvider.api.post('/feed-preparations/', payload);
-      Alert.alert(t('common.success'), t('feed.preparationSuccess'));
+      if (isEdit) {
+        await repositoryProvider.api.put(`/feed-preparations/${item.id}/`, payload);
+        Alert.alert(t('common.success'), t('feed.updated'));
+      } else {
+        await repositoryProvider.api.post('/feed-preparations/', payload);
+        Alert.alert(t('common.success'), t('feed.preparationSuccess'));
+      }
       navigation.goBack();
     } catch (e: any) {
       Alert.alert(t('common.actionImpossible'), getErrorMessage(e, t('feed.preparationError')));
@@ -159,13 +184,41 @@ export const PreparationScreen = ({ route, navigation }: any) => {
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
             <MaterialIcons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>{t('feed.titlePreparation')}</Text>
+          <Text style={styles.headerTitle}>{isEdit ? t('common.edit') : t('feed.titlePreparation')}</Text>
           <View style={{ width: 40 }} />
         </View>
 
         <ScrollView contentContainerStyle={[styles.scroll, styles.scrollDesktop]} keyboardShouldPersistTaps="handled">
           <Card style={styles.infoCard}>
             <DatePicker value={date} onChange={setDate} />
+
+            {/* Rattachement du mélange : ferme entière (défaut) ou un lot précis */}
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Aliment préparé pour</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                <TouchableOpacity
+                  style={[styles.lotChip, selectedLotId == null && styles.lotChipActive]}
+                  onPress={() => setSelectedLotId(null)}
+                >
+                  <Text style={[styles.lotChipText, selectedLotId == null && styles.lotChipTextActive]}>Ferme entière</Text>
+                </TouchableOpacity>
+                {farmLots.map((lot: any) => (
+                  <TouchableOpacity
+                    key={lot.id}
+                    style={[styles.lotChip, selectedLotId === lot.id && styles.lotChipActive]}
+                    onPress={() => setSelectedLotId(lot.id)}
+                  >
+                    <Text style={[styles.lotChipText, selectedLotId === lot.id && styles.lotChipTextActive]}>{lot.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <Text style={styles.hint}>
+                {selectedLotId == null
+                  ? "L'aliment produit entre dans le stock général de la ferme."
+                  : "L'aliment produit est réservé à ce lot."}
+              </Text>
+            </View>
+
             <View style={styles.inputGroup}>
               <Text style={styles.label}>{t('feed.preparedName')}</Text>
               <Input
@@ -234,7 +287,7 @@ export const PreparationScreen = ({ route, navigation }: any) => {
           ))}
 
           <Button
-            title={t('feed.submitPreparation')}
+            title={isEdit ? t('common.update') : t('feed.submitPreparation')}
             onPress={handleSubmit}
             loading={loading}
             style={styles.submitBtn}
@@ -355,6 +408,14 @@ const createStyles = (theme: any) => StyleSheet.create({
     height: 50,
   },
   selectorText: { fontSize: 14, color: theme.colors.text },
+  lotChip: {
+    paddingHorizontal: 14, paddingVertical: 7, borderRadius: 18, marginRight: 8, marginTop: 4,
+    backgroundColor: theme.colors.background, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  lotChipActive: { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
+  lotChipText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
+  lotChipTextActive: { color: '#fff', fontWeight: 'bold' },
+  hint: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 6, fontStyle: 'italic' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },

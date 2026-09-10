@@ -25,6 +25,8 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
   const [quantity, setQuantity] = useState(item?.quantity_kg?.toString() || '');
   const [bags, setBags] = useState(item?.bags_count?.toString() || '');
   const [cost, setCost] = useState(item?.total_price?.toString() || item?.cost?.toString() || '');
+  const [priceMode, setPriceMode] = useState<'total' | 'unit'>(item?.unit_price ? 'unit' : 'total');
+  const [unitPrice, setUnitPrice] = useState(item?.unit_price?.toString() || '');
   const [supplier, setSupplier] = useState(item?.supplier || '');  // Correction: champ supplier ajouté pour achat
   const [loading, setLoading] = useState(false);
   const [isEdit, setIsEdit] = useState(!!item);
@@ -53,9 +55,10 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
 
   const fetchPreparedFeeds = async () => {
     try {
+      // Stock préparé disponible pour ce lot = sa réserve + le stock général de la ferme
       const [invRes, prepRes] = await Promise.all([
         repositoryProvider.api.get<any>('/prepared-feed-inventory/', { params: { lot: lotId } }).catch(() => ({ data: [] })),
-        repositoryProvider.api.get<any>('/feed-preparations/', { params: { lot: lotId } }).catch(() => ({ data: [] })),
+        repositoryProvider.api.get<any>('/feed-preparations/', { params: farmId ? { farm: farmId } : { lot: lotId } }).catch(() => ({ data: [] })),
       ]);
       const invData: any[] = Array.isArray(invRes.data) ? invRes.data : (invRes.data?.results || []);
       const prepData: any[] = Array.isArray(prepRes.data) ? prepRes.data : (prepRes.data?.results || []);
@@ -148,8 +151,16 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
     }
   };
 
+  const computedPurchaseTotal = (parseFloat((quantity || '').toString().replace(',', '.')) || 0)
+    * (parseFloat((unitPrice || '').toString().replace(',', '.')) || 0);
+  const effectivePurchaseTotal = priceMode === 'unit' ? computedPurchaseTotal : (parseFloat((cost || '').toString().replace(',', '.')) || 0);
+
   const handlePurchase = async () => {
-    if (!date || !quantity || !feedType || !cost) {
+    if (!date || !quantity || !feedType) {
+      toast.error(t('common.error'), t('feed.fillRequiredPurchase'));
+      return;
+    }
+    if (priceMode === 'unit' ? !(parseFloat(unitPrice) > 0) : !(effectivePurchaseTotal > 0)) {
       toast.error(t('common.error'), t('feed.fillRequiredPurchase'));
       return;
     }
@@ -158,7 +169,8 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
     const payload = {
       feed_type: feedType,
       quantity_kg: parseFloat(quantity),
-      total_price: parseFloat(cost),
+      total_price: Math.round(effectivePurchaseTotal * 100) / 100,
+      unit_price: priceMode === 'unit' ? (Math.round(parseFloat(unitPrice) * 100) / 100) : null,
       date,
       lot: lotId,
       farm: farmId,
@@ -306,18 +318,45 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
                     <View style={[styles.inputGroup, { flex: 1 }]}>
                     <View style={styles.labelRow}>
                       <MaterialIcons name="payments" size={18} color={theme.colors.primary} />
-                      <Text style={styles.label}>{t('feed.totalPrice')}</Text>
+                      <Text style={styles.label}>{priceMode === 'unit' ? 'Prix / kg' : t('feed.totalPrice')}</Text>
                     </View>
                     <Input
                       placeholder="0"
-                      value={cost}
-                      onChangeText={setCost}
+                      value={priceMode === 'unit' ? unitPrice : cost}
+                      onChangeText={priceMode === 'unit' ? setUnitPrice : setCost}
                       isNumeric
                       style={[styles.fieldInput, { textAlign: 'center', fontSize: 18 }]}
                     />
                   </View>
                 )}
              </View>
+
+             {activeTab === 'purchase' && (
+               <View style={styles.inputGroup}>
+                 <View style={styles.segment}>
+                   <TouchableOpacity
+                     style={[styles.segmentBtn, priceMode === 'total' && styles.segmentBtnActive]}
+                     onPress={() => setPriceMode('total')}
+                   >
+                     <Text style={[styles.segmentText, priceMode === 'total' && styles.segmentTextActive]}>Prix total</Text>
+                   </TouchableOpacity>
+                   <TouchableOpacity
+                     style={[styles.segmentBtn, priceMode === 'unit' && styles.segmentBtnActive]}
+                     onPress={() => setPriceMode('unit')}
+                   >
+                     <Text style={[styles.segmentText, priceMode === 'unit' && styles.segmentTextActive]}>Prix par kg</Text>
+                   </TouchableOpacity>
+                 </View>
+                 {priceMode === 'unit' && (
+                   <View style={styles.computedBox}>
+                     <MaterialIcons name="calculate" size={16} color={theme.colors.primary} />
+                     <Text style={styles.computedText}>
+                       Prix total : {computedPurchaseTotal.toLocaleString('fr-FR')} GNF
+                     </Text>
+                   </View>
+                 )}
+               </View>
+             )}
 
              {/* Correction: champ fournisseur ajouté pour l'onglet achat */}
              {activeTab === 'purchase' && (
@@ -486,6 +525,19 @@ const createStyles = (theme: any) => StyleSheet.create({
     fontWeight: 'bold',
     marginLeft: 6,
   },
+  segment: {
+    flexDirection: 'row', backgroundColor: theme.colors.background + '40',
+    borderRadius: theme.borderRadius.m, borderWidth: 1, borderColor: theme.colors.border, padding: 3,
+  },
+  segmentBtn: { flex: 1, paddingVertical: 9, alignItems: 'center', borderRadius: theme.borderRadius.s },
+  segmentBtnActive: { backgroundColor: theme.colors.primary },
+  segmentText: { fontSize: 13, fontWeight: '700', color: theme.colors.textSecondary },
+  segmentTextActive: { color: '#000000' },
+  computedBox: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 8,
+    backgroundColor: theme.colors.primary + '15', borderRadius: theme.borderRadius.m, padding: 10,
+  },
+  computedText: { fontSize: 13, color: theme.colors.primary, marginLeft: 8, flex: 1, fontWeight: '700' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   modalContent: { backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },

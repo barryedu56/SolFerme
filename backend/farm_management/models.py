@@ -245,27 +245,34 @@ class Expense(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='expenses_created')
 
 class FeedInventory(models.Model):
-    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='feed_inventory')
+    # Stock de matières premières — désormais au niveau FERME (stock général).
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_inventory')
     feed_type = models.CharField(max_length=255) # Now used for Raw Materials
     quantity_kg = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('lot', 'feed_type')
+        unique_together = ('farm', 'feed_type')
         verbose_name_plural = "Feed Inventories (Raw Materials)"
 
 class PreparedFeedInventory(models.Model):
-    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='prepared_feed_inventory')
+    # Aliment préparé. Toujours rattaché à une ferme ; `lot` optionnel :
+    #  - lot renseigné  → réserve d'aliment préparé propre à ce lot
+    #  - lot NULL        → stock préparé général de la ferme
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='prepared_feed_inventory')
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, null=True, blank=True, related_name='prepared_feed_inventory')
     feed_name = models.CharField(max_length=255)
     quantity_kg = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('lot', 'feed_name')
+        unique_together = ('farm', 'lot', 'feed_name')
         verbose_name_plural = "Prepared Feed Inventories"
 
 class FeedPreparation(models.Model):
-    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='feed_preparations')
+    # Mélange. `farm` obligatoire ; `lot` optionnel (réserve l'aliment produit à ce lot).
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_preparations')
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, null=True, blank=True, related_name='feed_preparations')
     feed_name = models.CharField(max_length=255)
     quantity_produced_kg = models.DecimalField(max_digits=12, decimal_places=2)
     date = models.DateField()
@@ -282,7 +289,8 @@ class FeedPreparationIngredient(models.Model):
     quantity_used_kg = models.DecimalField(max_digits=12, decimal_places=2)
 
 class HealthInventory(models.Model):
-    lot = models.ForeignKey(Lot, on_delete=models.CASCADE, related_name='health_inventory')
+    # Stock de produits santé — désormais au niveau FERME (stock général).
+    farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='health_inventory')
     product_name = models.CharField(max_length=255)
     product_type = models.CharField(max_length=100, default='Autre')
     quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -290,7 +298,7 @@ class HealthInventory(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = ('lot', 'product_name')
+        unique_together = ('farm', 'product_name')
 
 class FeedPurchase(models.Model):
     farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name='feed_purchases')
@@ -299,6 +307,10 @@ class FeedPurchase(models.Model):
     feed_type = models.CharField(max_length=255)
     quantity_kg = models.DecimalField(max_digits=12, decimal_places=2)
     total_price = models.DecimalField(max_digits=15, decimal_places=2)
+    # Prix par unité (kg) saisi par l'utilisateur quand il choisit le mode
+    # « prix par unité ». Purement informatif : total_price reste la source de
+    # vérité pour la finance. Null = l'achat a été saisi en « prix total ».
+    unit_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     supplier = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, choices=(('ACTIVE', 'Active'), ('ANNULEE', 'Annulée')), default='ACTIVE')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
@@ -314,6 +326,9 @@ class HealthPurchase(models.Model):
     quantity = models.DecimalField(max_digits=12, decimal_places=2) # Nombre d'unités achetées
     unit = models.CharField(max_length=50, default='Flacon')
     total_price = models.DecimalField(max_digits=15, decimal_places=2)
+    # Prix par unité (flacon, sachet…) saisi en mode « prix par unité ».
+    # Informatif ; total_price reste la source de vérité. Null = « prix total ».
+    unit_price = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     supplier = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, choices=(('ACTIVE', 'Active'), ('ANNULEE', 'Annulée')), default='ACTIVE')
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)

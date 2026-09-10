@@ -235,35 +235,38 @@ export class ApiRepository {
       const totalFeedPurchaseCost = feedPurchases.reduce((s: number, p: any) => s + (p.total_price || 0), 0);
       const totalHealthPurchaseCost = healthPurchases.reduce((s: number, p: any) => s + (p.total_price || 0), 0);
 
-      // Feed inventory (matières premières)
+      // Stock désormais au niveau FERME
+      const statFarmId = (lot as any).farm_id || (lot as any).farm;
+
+      // Feed inventory (matières premières) — niveau ferme
       const feedInventory = await queryAll<any>(
-        `SELECT * FROM feed_inventory WHERE lot_id = ?`,
-        [lotId]
+        `SELECT * FROM feed_inventory WHERE farm_id = ?`,
+        [statFarmId]
       );
-      const feedStock = feedInventory.reduce((s: number, fi: any) => s + (fi.quantity_kg || 0), 0);
-      const rawMaterialStock = feedStock;
+      const rawMaterialStock = feedInventory.reduce((s: number, fi: any) => s + (fi.quantity_kg || 0), 0);
       const rawMaterialsDetail = feedInventory.map((fi: any) => ({
         feed_type: fi.feed_type, total: fi.quantity_kg
       }));
 
-      // Prepared feed inventory
+      // Prepared feed inventory — réserve de ce lot + stock général ferme
       const preparedFeedInventory = await queryAll<any>(
-        `SELECT * FROM prepared_feed_inventory WHERE lot_id = ?`,
-        [lotId]
+        `SELECT * FROM prepared_feed_inventory WHERE farm_id = ? AND (lot_id = ? OR lot_id IS NULL)`,
+        [statFarmId, lotId]
       );
+      const feedStock = preparedFeedInventory.reduce((s: number, pf: any) => s + (pf.quantity_kg || 0), 0);
       const preparedFeedsDetail = preparedFeedInventory.map((pf: any) => ({
         feed_name: pf.feed_name, total: pf.quantity_kg
       }));
       const lastPreparations = await queryAll<any>(
-        `SELECT * FROM feed_preparations WHERE lot_id = ? AND status = 'ACTIF' ORDER BY date DESC LIMIT 1`,
-        [lotId]
+        `SELECT * FROM feed_preparations WHERE farm_id = ? AND (lot_id = ? OR lot_id IS NULL) AND status = 'ACTIF' ORDER BY date DESC LIMIT 1`,
+        [statFarmId, lotId]
       );
       const lastPreparationDate = lastPreparations.length > 0 ? lastPreparations[0].date : null;
 
-      // Health inventory
+      // Health inventory — niveau ferme
       const healthInventory = await queryAll<any>(
-        `SELECT * FROM health_inventory WHERE lot_id = ?`,
-        [lotId]
+        `SELECT * FROM health_inventory WHERE farm_id = ?`,
+        [statFarmId]
       );
       const healthStock = healthInventory.reduce((s: number, hi: any) => s + (hi.quantity || 0), 0);
       const healthDetail = healthInventory.map((hi: any) => ({
@@ -369,6 +372,10 @@ export class ApiRepository {
       const lotP = hasLotFilter ? lotIds : [];
       const farmW = effectiveFarmId ? 'AND farm_id = ?' : '';
       const farmP: any[] = effectiveFarmId ? [effectiveFarmId] : [];
+      // Inventaires (feed_inventory / health_inventory / prepared_feed_inventory)
+      // sont au niveau FERME → clause dédiée.
+      const invW = effectiveFarmId ? 'AND farm_id = ?' : '';
+      const invP: any[] = effectiveFarmId ? [effectiveFarmId] : [];
       // Filtre employés via ferme (pour payrolls/bonuses)
       const empW = effectiveFarmId
         ? 'AND employee_id IN (SELECT id FROM employees WHERE farm_id = ?)'
@@ -509,16 +516,16 @@ export class ApiRepository {
 	        [...lotP]
 	      );
 	      const rawMaterials = await queryAll<any>(
-	        `SELECT feed_type, SUM(quantity_kg) as total FROM feed_inventory WHERE 1=1 ${lotIn} GROUP BY feed_type`,
-	        [...lotP]
+	        `SELECT feed_type, SUM(quantity_kg) as total FROM feed_inventory WHERE 1=1 ${invW} GROUP BY feed_type`,
+	        [...invP]
 	      );
 	      const rawMaterialsDetail = rawMaterials.map((m: any) => ({
 	        feed_type: m.feed_type,
 	        total: m.total || 0,
 	      }));
 	      const preparedFeeds = await queryAll<any>(
-	        `SELECT feed_name, SUM(quantity_kg) as total FROM prepared_feed_inventory WHERE 1=1 ${lotIn} GROUP BY feed_name`,
-	        [...lotP]
+	        `SELECT feed_name, SUM(quantity_kg) as total FROM prepared_feed_inventory WHERE 1=1 ${invW} GROUP BY feed_name`,
+	        [...invP]
 	      );
 	      const preparedFeedsDetail = preparedFeeds.map((m: any) => ({
 	        feed_name: m.feed_name,
@@ -531,8 +538,8 @@ export class ApiRepository {
 	        [...lotP]
 	      );
 	      const healthInventory = await queryAll<any>(
-	        `SELECT product_name, SUM(quantity) as quantity, unit FROM health_inventory WHERE 1=1 ${lotIn} GROUP BY product_name, unit`,
-	        [...lotP]
+	        `SELECT product_name, SUM(quantity) as quantity, unit FROM health_inventory WHERE 1=1 ${invW} GROUP BY product_name, unit`,
+	        [...invP]
 	      );
 	      const healthInventoryDetail = healthInventory.map((h: any) => ({
 	        product_name: h.product_name,

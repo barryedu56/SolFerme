@@ -732,14 +732,19 @@ const validateFeedStockIntegrity = async (data?: any, existingRecord?: any): Pro
 
   const lotId = data.lot_id || data.lot || existingRecord?.lot_id;
   if (typeof lotId !== 'number') return;
+  const lotRow = await fetchRow<any>('lots', 'id = ?', [lotId]);
+  const farmId = lotRow?.farm_id;
+  if (!farmId) return;
 
   const feedType = data.feed_type;
   const qty = Number(data.quantity_kg || 0);
   const excludeId = existingRecord?.id;
 
+  // Stock d'aliment préparé = niveau FERME (réserves de lots + général).
   const allDistributions = await queryAll<any>(
-    `SELECT id, quantity_kg FROM feeds WHERE lot_id = ? AND feed_type = ? AND status = 'ACTIF'`,
-    [lotId, feedType]
+    `SELECT f.id, f.quantity_kg FROM feeds f JOIN lots l ON l.id = f.lot_id
+     WHERE l.farm_id = ? AND f.feed_type = ? AND f.status = 'ACTIF'`,
+    [farmId, feedType]
   );
   let totalDistributed = 0;
   for (const d of allDistributions) {
@@ -748,12 +753,12 @@ const validateFeedStockIntegrity = async (data?: any, existingRecord?: any): Pro
   totalDistributed += qty;
 
   const purchases = await queryAll<any>(
-    `SELECT SUM(quantity_kg) as total FROM feed_purchases WHERE lot_id = ? AND feed_type = ? AND status = 'ACTIF'`,
-    [lotId, feedType]
+    `SELECT SUM(quantity_kg) as total FROM feed_purchases WHERE farm_id = ? AND feed_type = ? AND status = 'ACTIF'`,
+    [farmId, feedType]
   );
   const preparations = await queryAll<any>(
-    `SELECT SUM(quantity_produced_kg) as total FROM feed_preparations WHERE lot_id = ? AND feed_name = ? AND status = 'ACTIF'`,
-    [lotId, feedType]
+    `SELECT SUM(quantity_produced_kg) as total FROM feed_preparations WHERE farm_id = ? AND feed_name = ? AND status = 'ACTIF'`,
+    [farmId, feedType]
   );
 
   const totalAvailable = Number(purchases[0]?.total || 0) + Number(preparations[0]?.total || 0);
@@ -768,14 +773,19 @@ const validateHealthStockIntegrity = async (data?: any, existingRecord?: any): P
 
   const lotId = data.lot_id || data.lot || existingRecord?.lot_id;
   if (typeof lotId !== 'number') return;
+  const lotRow = await fetchRow<any>('lots', 'id = ?', [lotId]);
+  const farmId = lotRow?.farm_id;
+  if (!farmId) return;
 
   const productName = data.product_name;
   const qty = Number(data.quantity || 0);
   const excludeId = existingRecord?.id;
 
+  // Stock de produits santé = niveau FERME.
   const allTreatments = await queryAll<any>(
-    `SELECT id, quantity FROM health_records WHERE lot_id = ? AND product_name = ? AND status = 'ACTIF'`,
-    [lotId, productName]
+    `SELECT hr.id, hr.quantity FROM health_records hr JOIN lots l ON l.id = hr.lot_id
+     WHERE l.farm_id = ? AND hr.product_name = ? AND hr.status = 'ACTIF'`,
+    [farmId, productName]
   );
   let totalUsed = 0;
   for (const t of allTreatments) {
@@ -784,8 +794,8 @@ const validateHealthStockIntegrity = async (data?: any, existingRecord?: any): P
   totalUsed += qty;
 
   const purchases = await queryAll<any>(
-    `SELECT SUM(quantity) as total FROM health_purchases WHERE lot_id = ? AND product_name = ? AND status = 'ACTIF'`,
-    [lotId, productName]
+    `SELECT SUM(quantity) as total FROM health_purchases WHERE farm_id = ? AND product_name = ? AND status = 'ACTIF'`,
+    [farmId, productName]
   );
   const totalAvailable = Number(purchases[0]?.total || 0);
 
@@ -1219,151 +1229,202 @@ const recalculateLotCostLocally = async (lotId: number): Promise<void> => {
   }
 };
 
-/**
- * Recalcule l'inventaire d'aliments préparés (prepared_feed_inventory) après
- * une préparation, une distribution, une modification ou une annulation.
- * Miroir du signal Django recalculate_prepared_feed_inventory.
- * Logique : SUM(quantity_produced_kg) des feed_preparations ACTIVE
- *           - SUM(quantity_kg) des feeds ACTIVE (distributions)
- */
-const recalculatePreparedFeedInventoryLocally = async (lotId?: number): Promise<void> => {
-  if (!lotId) return;
+/** Résout la ferme d'un lot (pour router les recalculs d'inventaire). */
+const farmIdForLot = async (lotId?: number | null): Promise<number | null> => {
+  if (!lotId) return null;
   try {
-    // Préparations actives par nom d'aliment
-    const preparations = await queryAll<any>(
-      `SELECT feed_name, SUM(quantity_produced_kg) as produced FROM feed_preparations WHERE lot_id = ? AND status = 'ACTIF' GROUP BY feed_name`,
-      [lotId]
+    const lot = await fetchRow<any>('lots', 'id = ?', [lotId]);
+    return lot?.farm_id ?? null;
+  } catch { return null; }
+};
+
+/**
+ * Recalcule prepared_feed_inventory pour une FERME.
+ * Miroir du signal Django recalculate_prepared_feed_inventory :
+ *  - réserve par lot   : production (mélange avec lot) − distributions de ce lot
+ *  - stock général      : production sans lot − distributions des lots sans réserve
+ */
+const recalculatePreparedFeedInventoryLocally = async (farmId?: number | null): Promise<void> => {
+  if (!farmId) return;
+  try {
+    const preps = await queryAll<any>(
+      `SELECT lot_id, feed_name, SUM(quantity_produced_kg) as produced
+       FROM feed_preparations WHERE farm_id = ? AND status = 'ACTIF' GROUP BY lot_id, feed_name`,
+      [farmId]
     );
-    // Distributions actives par type d'aliment
-    const distributions = await queryAll<any>(
-      `SELECT feed_type, SUM(quantity_kg) as consumed FROM feeds WHERE lot_id = ? AND status = 'ACTIF' GROUP BY feed_type`,
-      [lotId]
+    const dists = await queryAll<any>(
+      `SELECT f.lot_id, f.feed_type, SUM(f.quantity_kg) as consumed
+       FROM feeds f JOIN lots l ON l.id = f.lot_id
+       WHERE l.farm_id = ? AND f.status = 'ACTIF' GROUP BY f.lot_id, f.feed_type`,
+      [farmId]
     );
-    const consumedMap = new Map<string, number>();
-    for (const d of distributions) {
-      consumedMap.set(d.feed_type, Number(d.consumed || 0));
+
+    // Lots ayant une réserve propre, par nom d'aliment
+    const reservedByName = new Map<string, Set<number>>();
+    for (const p of preps) {
+      if (p.lot_id != null && p.feed_name) {
+        if (!reservedByName.has(p.feed_name)) reservedByName.set(p.feed_name, new Set());
+        reservedByName.get(p.feed_name)!.add(Number(p.lot_id));
+      }
     }
 
-    await runSqlAsync(`DELETE FROM prepared_feed_inventory WHERE lot_id = ?`, [lotId]);
+    await runSqlAsync(`DELETE FROM prepared_feed_inventory WHERE farm_id = ?`, [farmId]);
     emitDataChange({ tableName: 'prepared_feed_inventory', action: 'DELETE' });
-    for (const p of preparations) {
-      const consumed = consumedMap.get(p.feed_name) || 0;
+    const now = new Date().toISOString();
+
+    // Réserves de lot
+    for (const p of preps) {
+      if (p.lot_id == null || !p.feed_name) continue;
+      const consumed = dists
+        .filter((d: any) => Number(d.lot_id) === Number(p.lot_id) && d.feed_type === p.feed_name)
+        .reduce((s: number, d: any) => s + Number(d.consumed || 0), 0);
       const net = Math.max(0, Number(p.produced || 0) - consumed);
-      if (p.feed_name && net > 0) {
+      if (net > 0) {
         await insertOrReplaceRow('prepared_feed_inventory', {
-          lot_id: lotId,
-          feed_name: p.feed_name,
-          quantity_kg: net,
-          updated_at: new Date().toISOString(),
-          _needs_sync: 0,
+          farm_id: farmId, lot_id: Number(p.lot_id), feed_name: p.feed_name,
+          quantity_kg: net, updated_at: now, _needs_sync: 0,
         });
       }
     }
-    console.info(`[Offline] Prepared feed inventory recalculé pour lot #${lotId}: ${preparations.length} type(s)`);
+
+    // Stock général ferme (lot_id NULL) par nom
+    const generalNames = new Set<string>();
+    for (const p of preps) if (p.lot_id == null && p.feed_name) generalNames.add(p.feed_name);
+    for (const d of dists) if (d.feed_type) generalNames.add(d.feed_type);
+    for (const name of generalNames) {
+      const produced = preps
+        .filter((p: any) => p.lot_id == null && p.feed_name === name)
+        .reduce((s: number, p: any) => s + Number(p.produced || 0), 0);
+      const reservedLots = reservedByName.get(name) || new Set<number>();
+      const consumed = dists
+        .filter((d: any) => d.feed_type === name && !reservedLots.has(Number(d.lot_id)))
+        .reduce((s: number, d: any) => s + Number(d.consumed || 0), 0);
+      const net = Math.max(0, produced - consumed);
+      if (net > 0) {
+        await insertOrReplaceRow('prepared_feed_inventory', {
+          farm_id: farmId, lot_id: null, feed_name: name,
+          quantity_kg: net, updated_at: now, _needs_sync: 0,
+        });
+      }
+    }
   } catch (e: any) {
-    console.warn(`[Offline] Échec recalcul prepared_feed_inventory lot #${lotId}:`, e?.message);
+    console.warn(`[Offline] Échec recalcul prepared_feed_inventory ferme #${farmId}:`, e?.message);
   }
 };
 
 /**
- * Recalcule l'inventaire de matières premières (feed_inventory) après un achat,
- * une modification ou une annulation de feed_purchase.
- * Miroir du signal Django recalculate_feed_inventory.
- * Logique : SUM(quantity_kg) des feed_purchases ACTIVE par feed_type pour le lot.
+ * Recalcule feed_inventory (matières premières) pour une FERME.
+ * Miroir du signal Django : achats de la ferme − consommation dans ses mélanges.
  */
-const recalculateFeedInventoryLocally = async (lotId?: number): Promise<void> => {
-  if (!lotId) return;
+const recalculateFeedInventoryLocally = async (farmId?: number | null): Promise<void> => {
+  if (!farmId) return;
   try {
-    // Somme des achats actifs par type d'aliment (matières premières achetées)
     const purchases = await queryAll<any>(
-      `SELECT feed_type, SUM(quantity_kg) as total FROM feed_purchases WHERE lot_id = ? AND status = 'ACTIF' GROUP BY feed_type`,
-      [lotId]
+      `SELECT feed_type, SUM(quantity_kg) as total FROM feed_purchases WHERE farm_id = ? AND status = 'ACTIF' GROUP BY feed_type`,
+      [farmId]
     );
-
-    // Somme des ingrédients utilisés dans les préparations actives (consommation matières premières)
-    // Miroir exact du signal Django: total_used_in_preparations via FeedPreparationIngredient
     const ingredientsUsed = await queryAll<any>(
       `SELECT fpi.material_name, SUM(fpi.quantity_used_kg) as used
        FROM feed_preparation_ingredients fpi
        JOIN feed_preparations fp ON fpi.preparation_id = fp.id
-      WHERE fp.lot_id = ? AND fp.status = 'ACTIF'
+       WHERE fp.farm_id = ? AND fp.status = 'ACTIF'
        GROUP BY fpi.material_name`,
-      [lotId]
+      [farmId]
     );
     const ingredientsMap = new Map<string, number>();
-    for (const ing of ingredientsUsed) {
-      ingredientsMap.set(ing.material_name, Number(ing.used || 0));
-    }
+    for (const ing of ingredientsUsed) ingredientsMap.set(ing.material_name, Number(ing.used || 0));
 
-    // Remplacer l'inventaire existant pour ce lot
-    await runSqlAsync(`DELETE FROM feed_inventory WHERE lot_id = ?`, [lotId]);
+    await runSqlAsync(`DELETE FROM feed_inventory WHERE farm_id = ?`, [farmId]);
     emitDataChange({ tableName: 'feed_inventory', action: 'DELETE' });
+    const now = new Date().toISOString();
     for (const p of purchases) {
-      if (p.feed_type && p.total > 0) {
-        const usedInPreparations = ingredientsMap.get(p.feed_type) || 0;
-        const net = Math.max(0, Number(p.total || 0) - usedInPreparations);
-        if (net > 0) {
-          await insertOrReplaceRow('feed_inventory', {
-            lot_id: lotId,
-            feed_type: p.feed_type,
-            quantity_kg: net,
-            updated_at: new Date().toISOString(),
-            _needs_sync: 0,
-          });
-        }
-      }
-    }
-    console.info(`[Offline] Feed inventory recalculé pour lot #${lotId}: ${purchases.length} type(s)`);
-  } catch (e: any) {
-    console.warn(`[Offline] Échec recalcul feed_inventory lot #${lotId}:`, e?.message);
-  }
-};
-
-
-/**
- * Recalcule l'inventaire de produits de santé (health_inventory) après un achat,
- * un traitement, une modification ou une annulation.
- * Miroir du signal Django recalculate_health_inventory.
- * Logique : SUM(quantity) health_purchases ACTIVE - SUM(quantity) health_records ACTIVE
- */
-const recalculateHealthInventoryLocally = async (lotId?: number): Promise<void> => {
-  if (!lotId) return;
-  try {
-    // Achats par produit
-    const purchases = await queryAll<any>(
-      `SELECT product_name, product_type, unit, SUM(quantity) as total FROM health_purchases WHERE lot_id = ? AND status = 'ACTIF' GROUP BY product_name, product_type, unit`,
-      [lotId]
-    );
-    // Traitements par produit
-    const treatments = await queryAll<any>(
-      `SELECT product_name, SUM(quantity) as used FROM health_records WHERE lot_id = ? AND status = 'ACTIF' GROUP BY product_name`,
-      [lotId]
-    );
-    const usedMap = new Map<string, number>();
-    for (const t of treatments) {
-      usedMap.set(t.product_name, Number(t.used || 0));
-    }
-
-    await runSqlAsync(`DELETE FROM health_inventory WHERE lot_id = ?`, [lotId]);
-    emitDataChange({ tableName: 'health_inventory', action: 'DELETE' });
-    for (const p of purchases) {
-      const used = usedMap.get(p.product_name) || 0;
-      const net = Math.max(0, Number(p.total || 0) - used);
-      if (p.product_name && net > 0) {
-        await insertOrReplaceRow('health_inventory', {
-          lot_id: lotId,
-          product_name: p.product_name,
-          product_type: p.product_type || 'Autre',
-          quantity: net,
-          unit: p.unit || 'Flacon',
-          updated_at: new Date().toISOString(),
-          _needs_sync: 0,
+      if (!p.feed_type) continue;
+      const net = Math.max(0, Number(p.total || 0) - (ingredientsMap.get(p.feed_type) || 0));
+      if (net > 0) {
+        await insertOrReplaceRow('feed_inventory', {
+          farm_id: farmId, feed_type: p.feed_type, quantity_kg: net,
+          updated_at: now, _needs_sync: 0,
         });
       }
     }
-    console.info(`[Offline] Health inventory recalculé pour lot #${lotId}: ${purchases.length} produit(s)`);
   } catch (e: any) {
-    console.warn(`[Offline] Échec recalcul health_inventory lot #${lotId}:`, e?.message);
+    console.warn(`[Offline] Échec recalcul feed_inventory ferme #${farmId}:`, e?.message);
+  }
+};
+
+/**
+ * Recalcule health_inventory pour une FERME.
+ * Miroir du signal Django : achats de la ferme − soins des lots de la ferme.
+ */
+const recalculateHealthInventoryLocally = async (farmId?: number | null): Promise<void> => {
+  if (!farmId) return;
+  try {
+    const purchases = await queryAll<any>(
+      `SELECT product_name, product_type, unit, SUM(quantity) as total FROM health_purchases WHERE farm_id = ? AND status = 'ACTIF' GROUP BY product_name, product_type, unit`,
+      [farmId]
+    );
+    const treatments = await queryAll<any>(
+      `SELECT hr.product_name, SUM(hr.quantity) as used
+       FROM health_records hr JOIN lots l ON l.id = hr.lot_id
+       WHERE l.farm_id = ? AND hr.status = 'ACTIF' GROUP BY hr.product_name`,
+      [farmId]
+    );
+    const usedMap = new Map<string, number>();
+    for (const t of treatments) usedMap.set(t.product_name, Number(t.used || 0));
+
+    await runSqlAsync(`DELETE FROM health_inventory WHERE farm_id = ?`, [farmId]);
+    emitDataChange({ tableName: 'health_inventory', action: 'DELETE' });
+    const now = new Date().toISOString();
+    for (const p of purchases) {
+      const net = Math.max(0, Number(p.total || 0) - (usedMap.get(p.product_name) || 0));
+      if (p.product_name && net > 0) {
+        await insertOrReplaceRow('health_inventory', {
+          farm_id: farmId, product_name: p.product_name, product_type: p.product_type || 'Autre',
+          quantity: net, unit: p.unit || 'Flacon', updated_at: now, _needs_sync: 0,
+        });
+      }
+    }
+  } catch (e: any) {
+    console.warn(`[Offline] Échec recalcul health_inventory ferme #${farmId}:`, e?.message);
+  }
+};
+
+/**
+ * Aiguilleur : après une écriture offline, recalcule les inventaires de la
+ * bonne ferme selon la table touchée. Miroir des @receiver Django.
+ */
+const recalcInventoryForWrite = async (tableName: string, entity: any): Promise<void> => {
+  if (!entity) return;
+  const directFarm = Number(entity.farm_id ?? entity.farm) || null;
+  switch (tableName) {
+    case 'feed_purchases':
+      await recalculateFeedInventoryLocally(directFarm ?? await farmIdForLot(entity.lot_id ?? entity.lot));
+      break;
+    case 'health_purchases':
+      await recalculateHealthInventoryLocally(directFarm ?? await farmIdForLot(entity.lot_id ?? entity.lot));
+      break;
+    case 'feeds':
+      await recalculatePreparedFeedInventoryLocally(await farmIdForLot(entity.lot_id ?? entity.lot));
+      break;
+    case 'health_records':
+      await recalculateHealthInventoryLocally(await farmIdForLot(entity.lot_id ?? entity.lot));
+      break;
+    case 'feed_preparations': {
+      const farm = directFarm ?? await farmIdForLot(entity.lot_id ?? entity.lot);
+      await recalculatePreparedFeedInventoryLocally(farm);
+      await recalculateFeedInventoryLocally(farm);
+      break;
+    }
+    case 'feed_preparation_ingredients': {
+      let farm: number | null = null;
+      if (entity.preparation_id) {
+        const prep = await fetchRow<any>('feed_preparations', 'id = ?', [entity.preparation_id]);
+        farm = Number(prep?.farm_id) || await farmIdForLot(prep?.lot_id);
+      }
+      await recalculatePreparedFeedInventoryLocally(farm);
+      await recalculateFeedInventoryLocally(farm);
+      break;
+    }
   }
 };
 
@@ -1854,6 +1915,19 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
     // Le formulaire ne les envoie donc pas. Sans ce miroir, l'INSERT SQLite viole
     // `farm_id NOT NULL` (« Error finalizing statement ») → opération perdue hors-ligne,
     // et pour une vente à crédit : créance faussée (paiement initial jamais créé).
+    // 🔧 Mélange (feed_preparations) : farm_id NOT NULL en SQLite. Le formulaire
+    // envoie `farm` (mappé en farm_id) et parfois seulement `lot` → on dérive
+    // farm_id depuis le lot. Miroir de FeedPreparationSerializer.validate.
+    if (tableName === 'feed_preparations' && !(row as any).farm_id) {
+      const prepLotId = (row as any).lot_id || (row as any).lot;
+      if (prepLotId) {
+        try {
+          const prepLot = await fetchRow<any>('lots', 'id = ?', [prepLotId]);
+          if (prepLot?.farm_id) (row as any).farm_id = prepLot.farm_id;
+        } catch { /* best-effort */ }
+      }
+    }
+
     if (tableName === 'egg_conversions' || tableName === 'sale_payments') {
       let resolvedLotId = (row as any).lot_id || (row as any).lot;
       if (!resolvedLotId && (row as any).sale_id) {
@@ -1999,26 +2073,8 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
       }
     }
 
-    // 🔧 Recalcul inventaire local après achat (miroir des signaux Django)
-    if (tableName === 'feed_purchases') {
-      await recalculateFeedInventoryLocally((row as any)?.lot_id);
-    }
-    if (tableName === 'health_purchases') {
-      await recalculateHealthInventoryLocally((row as any)?.lot_id);
-    }
-    // 🔧 Recalcul inventaire après distribution (consomme le stock préparé)
-    if (tableName === 'feeds') {
-      await recalculatePreparedFeedInventoryLocally((row as any)?.lot_id);
-    }
-    // 🔧 Recalcul inventaire santé après traitement (consomme le stock)
-    if (tableName === 'health_records') {
-      await recalculateHealthInventoryLocally((row as any)?.lot_id);
-    }
-    // 🔧 Recalcul inventaire après préparation d'aliment (consomme matières premières, produit aliment préparé)
-    if (tableName === 'feed_preparations') {
-      await recalculatePreparedFeedInventoryLocally((row as any)?.lot_id);
-      await recalculateFeedInventoryLocally((row as any)?.lot_id);
-    }
+    // 🔧 Recalcul des inventaires (niveau ferme) après l'écriture — miroir des signaux Django
+    await recalcInventoryForWrite(tableName, row);
     // 🔧 Recalcul coût lot après ajout d'un frais (miroir signal Django)
     if (tableName === 'lot_expenses') {
       await recalculateLotCostLocally((row as any)?.lot_id);
@@ -2136,23 +2192,8 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
       await updateLotQuantityForSale(updated, current);
     }
 
-    // 🔧 Recalcul inventaire après modification d'un achat ou distribution/traitement
-    if (tableName === 'feed_purchases') {
-      await recalculateFeedInventoryLocally(updated.lot_id || current?.lot_id);
-    }
-    if (tableName === 'health_purchases') {
-      await recalculateHealthInventoryLocally(updated.lot_id || current?.lot_id);
-    }
-    if (tableName === 'feeds') {
-      await recalculatePreparedFeedInventoryLocally(updated.lot_id || current?.lot_id);
-    }
-    if (tableName === 'health_records') {
-      await recalculateHealthInventoryLocally(updated.lot_id || current?.lot_id);
-    }
-    if (tableName === 'feed_preparations') {
-      await recalculatePreparedFeedInventoryLocally(updated.lot_id || current?.lot_id);
-      await recalculateFeedInventoryLocally(updated.lot_id || current?.lot_id);
-    }
+    // 🔧 Recalcul des inventaires (niveau ferme) après modification
+    await recalcInventoryForWrite(tableName, { ...current, ...updated });
     // 🔧 Recalcul coût lot après modification d'un frais
     if (tableName === 'lot_expenses') {
       await recalculateLotCostLocally(updated.lot_id || current?.lot_id);
@@ -2254,23 +2295,8 @@ const handleOfflineWriteInner = async <T>(method: 'POST' | 'PUT' | 'PATCH' | 'DE
       if (tableName === 'sales') {
         await updateLotQuantityForSale(updated, current);
       }
-      // 🔧 Recalcul inventaire après annulation d'un achat
-      if (tableName === 'feed_purchases') {
-        await recalculateFeedInventoryLocally((current as any)?.lot_id);
-      }
-      if (tableName === 'health_purchases') {
-        await recalculateHealthInventoryLocally((current as any)?.lot_id);
-      }
-      if (tableName === 'feeds') {
-        await recalculatePreparedFeedInventoryLocally((current as any)?.lot_id);
-      }
-      if (tableName === 'health_records') {
-        await recalculateHealthInventoryLocally((current as any)?.lot_id);
-      }
-      if (tableName === 'feed_preparations') {
-        await recalculatePreparedFeedInventoryLocally((current as any)?.lot_id);
-        await recalculateFeedInventoryLocally((current as any)?.lot_id);
-      }
+      // 🔧 Recalcul des inventaires (niveau ferme) après annulation
+      await recalcInventoryForWrite(tableName, current);
       if (tableName === 'lot_expenses') {
         await recalculateLotCostLocally((current as any)?.lot_id);
       }
