@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, RefreshControl, ActivityIndicator, Alert, Modal, Platform } from 'react-native';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
@@ -10,6 +10,13 @@ import { formatNumber } from '../utils/formatters';
 import { generateInventoryPDF } from '../utils/reportGenerator';
 import { STOCK_THRESHOLDS } from '../constants/InventoryConstants';
 import { Screen, ScreenHeader, Card, StatTile, Chip, SectionHeader, Badge, space, radius } from '../components/ui';
+import { Input } from '../components/Input';
+import { Button } from '../components/Button';
+import { DatePicker } from '../components/DatePicker';
+import { toast } from '../utils/toast';
+import { getErrorMessage } from '../utils/errors';
+
+const parseNum = (v: string) => parseFloat((v || '').toString().replace(/\s/g, '').replace(',', '.')) || 0;
 
 const FEED_ICONS: Record<string, any> = { 'Maïs': 'corn', 'Tournesol': 'flower', 'Soja': 'leaf', 'Son': 'grain', 'Torto': 'seed-outline' };
 const getFeedIcon = (name: string) => FEED_ICONS[name] || 'package-variant';
@@ -145,8 +152,8 @@ export const InventoryScreen = ({ navigation }: any) => {
               <Badge label={st.label} color={st.color} />
               {!!onRestock && (
                 <Pressable onPress={onRestock} hitSlop={6} style={S.restockBtn}>
-                  <MaterialIcons name="add-shopping-cart" size={13} color={theme.colors.primary} />
-                  <Text style={S.restockText}>Réappro</Text>
+                  <MaterialIcons name="add" size={13} color={theme.colors.primary} />
+                  <Text style={S.restockText}>Ajouter</Text>
                 </Pressable>
               )}
             </View>
@@ -160,13 +167,65 @@ export const InventoryScreen = ({ navigation }: any) => {
     );
   };
 
-  // Ferme cible pour un réapprovisionnement : la ferme filtrée, sinon celle de l'item, sinon choix dans l'écran d'achat.
+  // Ferme cible : ferme filtrée, sinon celle de l'item.
   const restockFarmId = (item?: any): number | undefined =>
     (selectedFarm !== 'ALL' ? selectedFarm : undefined) ?? item?.farm ?? lotToFarm.get(item?.lot);
-  const goRestockFeed = (item?: any) =>
-    navigation.navigate('Purchase', { type: 'feed', farmId: restockFarmId(item), item: item?.feed_type ? { feed_type: item.feed_type } : undefined });
-  const goRestockHealth = (item?: any) =>
-    navigation.navigate('Purchase', { type: 'health', farmId: restockFarmId(item), item: item?.product_name ? { product_name: item.product_name, product_type: item.product_type, unit: item.unit } : undefined });
+
+  // ── Bon d'appro (multi-lignes) ──
+  const openAppro = (type: 'feed' | 'health') =>
+    navigation.navigate('Appro', { type, farmId: selectedFarm !== 'ALL' ? selectedFarm : undefined });
+
+  // ── Ajout rapide « + » sur une carte ──
+  const [quickAdd, setQuickAdd] = useState<{ type: 'feed' | 'health'; item: any } | null>(null);
+  const [qaQty, setQaQty] = useState('');
+  const [qaPrice, setQaPrice] = useState('');
+  const [qaMode, setQaMode] = useState<'total' | 'unit'>('total');
+  const [qaSupplier, setQaSupplier] = useState('');
+  const [qaDate, setQaDate] = useState(new Date().toISOString().split('T')[0]);
+  const [qaSaving, setQaSaving] = useState(false);
+
+  const openQuickAdd = (type: 'feed' | 'health', item: any) => {
+    setQaQty(''); setQaPrice(''); setQaMode('total'); setQaSupplier('');
+    setQaDate(new Date().toISOString().split('T')[0]);
+    setQuickAdd({ type, item });
+  };
+  const qaUnit = quickAdd?.type === 'feed' ? 'kg' : (quickAdd?.item?.unit || 'unité');
+  const qaComputedTotal = qaMode === 'unit' ? parseNum(qaQty) * parseNum(qaPrice) : parseNum(qaPrice);
+
+  const submitQuickAdd = async () => {
+    if (!quickAdd || qaSaving) return;
+    const farmId = restockFarmId(quickAdd.item);
+    if (!farmId) { Alert.alert(t('common.error'), "Ferme introuvable pour ce produit."); return; }
+    if (!(parseNum(qaQty) > 0) || !(qaComputedTotal > 0)) {
+      Alert.alert(t('common.error'), 'Renseignez une quantité et un prix valides.');
+      return;
+    }
+    setQaSaving(true);
+    const isFeed = quickAdd.type === 'feed';
+    const payload: any = {
+      farm: farmId,
+      lot: null,
+      date: qaDate,
+      supplier: qaSupplier || undefined,
+      total_price: Math.round(qaComputedTotal * 100) / 100,
+      unit_price: qaMode === 'unit' ? Math.round(parseNum(qaPrice) * 100) / 100 : null,
+      ...(isFeed
+        ? { feed_type: quickAdd.item.feed_type, quantity_kg: parseNum(qaQty) }
+        : { product_name: quickAdd.item.product_name, quantity: parseNum(qaQty), unit: quickAdd.item.unit || 'Flacon', product_type: quickAdd.item.product_type || 'Autre' }),
+    };
+    try {
+      await repositoryProvider.api.post(isFeed ? '/feed-purchases/' : '/health-purchases/', payload);
+      const nm = isFeed ? quickAdd.item.feed_type : quickAdd.item.product_name;
+      if (Platform.OS === 'web') toast.success(t('common.success'), `« ${nm} » réapprovisionné.`);
+      else toast.success(t('common.success'), `« ${nm} » réapprovisionné.`);
+      setQuickAdd(null);
+      fetchData();
+    } catch (e: any) {
+      Alert.alert(t('common.actionImpossible'), getErrorMessage(e, 'Échec du réapprovisionnement.'));
+    } finally {
+      setQaSaving(false);
+    }
+  };
 
 
   return (
@@ -229,10 +288,10 @@ export const InventoryScreen = ({ navigation }: any) => {
             <>
               {showFeed && (
                 <>
-                  <SectionHeader title={t('inventory.rawMaterials')} icon="grain" action={{ label: '+ Réapprovisionner', onPress: () => goRestockFeed() }} />
+                  <SectionHeader title={t('inventory.rawMaterials')} icon="grain" action={{ label: '+ Bon d\'appro', onPress: () => openAppro('feed') }} />
                   {sortedRaw.length > 0
-                    ? <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} onRestock={() => goRestockFeed(item)} />)}</View>
-                    : <Text style={S.emptyLine}>Aucune matière première. Touchez « Réapprovisionner » pour en acheter.</Text>}
+                    ? <View style={S.grid}>{sortedRaw.map((item, i) => <StockCard key={i} name={item.feed_type} qty={item.quantity_kg} unit={t('common.kg')} statusType="feed" icon={getFeedIcon(item.feed_type)} onRestock={() => openQuickAdd('feed', item)} />)}</View>
+                    : <Text style={S.emptyLine}>Aucune matière première. Touchez « Bon d'appro » pour en acheter.</Text>}
                 </>
               )}
               {showFeed && sortedPrep.length > 0 && (
@@ -243,16 +302,61 @@ export const InventoryScreen = ({ navigation }: any) => {
               )}
               {showHealth && (
                 <>
-                  <SectionHeader title={t('inventory.healthProductsTitle')} icon="medical-bag" action={{ label: '+ Réapprovisionner', onPress: () => goRestockHealth() }} />
+                  <SectionHeader title={t('inventory.healthProductsTitle')} icon="medical-bag" action={{ label: '+ Bon d\'appro', onPress: () => openAppro('health') }} />
                   {sortedHealth.length > 0
-                    ? <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} onRestock={() => goRestockHealth(item)} />)}</View>
-                    : <Text style={S.emptyLine}>Aucun produit santé. Touchez « Réapprovisionner » pour en acheter.</Text>}
+                    ? <View style={S.grid}>{sortedHealth.map((item, i) => <StockCard key={i} name={item.product_name} qty={item.quantity} unit={item.unit || t('common.unit')} statusType="health" icon="pill" sub={item.product_type} onRestock={() => openQuickAdd('health', item)} />)}</View>
+                    : <Text style={S.emptyLine}>Aucun produit santé. Touchez « Bon d'appro » pour en acheter.</Text>}
                 </>
               )}
             </>
           )}
         </>
       )}
+
+      {/* ── Ajout rapide sur un produit ── */}
+      <Modal visible={!!quickAdd} transparent animationType="slide" onRequestClose={() => setQuickAdd(null)}>
+        <View style={S.qaOverlay}>
+          <View style={S.qaCard}>
+            <View style={S.qaHead}>
+              <Text style={S.qaTitle} numberOfLines={1}>
+                Ajouter du « {quickAdd?.type === 'feed' ? quickAdd?.item?.feed_type : quickAdd?.item?.product_name} »
+              </Text>
+              <Pressable onPress={() => setQuickAdd(null)} hitSlop={8}>
+                <MaterialIcons name="close" size={24} color={theme.colors.text} />
+              </Pressable>
+            </View>
+
+            <View style={S.qaRow}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={S.qaLabel}>Quantité ({qaUnit})</Text>
+                <Input placeholder="0" value={qaQty} onChangeText={setQaQty} isNumeric />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={S.qaLabel}>{qaMode === 'unit' ? `Prix / ${qaUnit}` : 'Prix total'} (GNF)</Text>
+                <Input placeholder="0" value={qaPrice} onChangeText={setQaPrice} isNumeric />
+              </View>
+            </View>
+
+            <View style={S.qaSegment}>
+              <Pressable style={[S.qaSegBtn, qaMode === 'total' && S.qaSegBtnActive]} onPress={() => setQaMode('total')}>
+                <Text style={[S.qaSegText, qaMode === 'total' && S.qaSegTextActive]}>Prix total</Text>
+              </Pressable>
+              <Pressable style={[S.qaSegBtn, qaMode === 'unit' && S.qaSegBtnActive]} onPress={() => setQaMode('unit')}>
+                <Text style={[S.qaSegText, qaMode === 'unit' && S.qaSegTextActive]}>Prix par {qaUnit}</Text>
+              </Pressable>
+            </View>
+            {qaMode === 'unit' && (
+              <Text style={S.qaCalc}>= {qaComputedTotal.toLocaleString('fr-FR')} GNF</Text>
+            )}
+
+            <Text style={S.qaLabel}>Fournisseur (optionnel)</Text>
+            <Input placeholder="Nom du fournisseur" value={qaSupplier} onChangeText={setQaSupplier} />
+            <DatePicker label="Date" value={qaDate} onChange={setQaDate} />
+
+            <Button title="Ajouter au stock" onPress={submitQuickAdd} loading={qaSaving} style={{ marginTop: space.sm, height: 52, borderRadius: radius.lg }} />
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 };
@@ -276,4 +380,16 @@ const createStyles = (theme: any) => StyleSheet.create({
   },
   restockText: { fontSize: 10, fontWeight: '800', color: theme.colors.primary },
   emptyLine: { fontSize: 13, color: theme.colors.textSecondary, fontStyle: 'italic', marginBottom: space.md, paddingHorizontal: 4 },
+  qaOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  qaCard: { backgroundColor: theme.colors.background, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '88%' },
+  qaHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, gap: 8 },
+  qaTitle: { fontSize: 16, fontWeight: 'bold', color: theme.colors.text, flex: 1 },
+  qaRow: { flexDirection: 'row' },
+  qaLabel: { fontSize: 11, color: theme.colors.textSecondary, marginBottom: 4, fontWeight: '700', textTransform: 'uppercase' },
+  qaSegment: { flexDirection: 'row', backgroundColor: theme.colors.surface, borderRadius: radius.md, borderWidth: 1, borderColor: theme.colors.border, padding: 3, marginTop: 4 },
+  qaSegBtn: { flex: 1, paddingVertical: 8, alignItems: 'center', borderRadius: radius.sm },
+  qaSegBtnActive: { backgroundColor: theme.colors.primary },
+  qaSegText: { fontSize: 12, fontWeight: '700', color: theme.colors.textSecondary },
+  qaSegTextActive: { color: '#fff' },
+  qaCalc: { marginTop: 6, fontSize: 13, fontWeight: '700', color: theme.colors.primary, textAlign: 'right' },
 });

@@ -48,6 +48,7 @@ import { ActionSanteScreen } from '../screens/actions/SanteScreen';
 import { ActionMouvementScreen } from '../screens/actions/MouvementScreen';
 import { ActionEtatPoulesScreen } from '../screens/actions/EtatPoulesScreen';
 import { PurchaseScreen } from '../screens/actions/PurchaseScreen';
+import { ApproScreen } from '../screens/actions/ApproScreen';
 import { RemindersScreen } from '../screens/RemindersScreen';
 import { ActionReminderScreen } from '../screens/actions/ReminderScreen';
 import { AddExpenseScreen } from '../screens/actions/AddExpenseScreen';
@@ -595,6 +596,7 @@ export const AppNavigator = () => {
               <Stack.Screen name="TransactionsHistory" component={TransactionsHistoryScreen} />
               <Stack.Screen name="AddExpense" component={AddExpenseScreen} />
               <Stack.Screen name="Purchase" component={PurchaseScreen} />
+              <Stack.Screen name="Appro" component={ApproScreen} />
               <Stack.Screen name="HealthAlertDetail" component={HealthAlertDetailScreen} />
               <Stack.Screen name="HealthAlerts" component={HealthAlertsScreen} />
               <Stack.Screen name="Inventory" component={InventoryScreen} />

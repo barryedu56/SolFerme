@@ -6,7 +6,8 @@ export type RootStackParamList = {
   RootDrawer: undefined;
   TransactionsHistory: { lotId?: number; farmId?: number } | undefined;
   AddExpense: { farmId?: number } | undefined;
-  Purchase: { type?: 'feed' | 'health'; farmId?: number; lotId?: number } | undefined;
+  Purchase: { type?: 'feed' | 'health'; farmId?: number; lotId?: number; item?: any } | undefined;
+  Appro: { type?: 'feed' | 'health'; farmId?: number; prefillName?: string } | undefined;
   HealthAlertDetail: { alert: any } | undefined;
   Inventory: { lotId?: number; farmId?: number } | undefined;
   AttendanceHistory: { employeeId?: number } | undefined;
