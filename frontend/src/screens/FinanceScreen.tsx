@@ -89,11 +89,14 @@ export const FinanceScreen = ({ navigation }: any) => {
       const combined = (recent_transactions || []).map((tr: any) => ({
         id: tr.id, title: tr.title, amount: tr.amount, date: tr.date, type: tr.type, status: tr.status,
       }));
+      // Chiffres de tête = CUMULÉS (tout l'historique du périmètre). Le sélecteur
+      // de période ne pilote que le graphique. `total_*` (serveur récent) sinon
+      // repli sur `revenues/expenses` (calcul local, déjà cumulatif).
       setFinanceData({
-        revenues: summary.revenues || 0,
-        encaissements: summary.encaissements || 0,
-        creances: summary.creances || 0,
-        expenses: summary.expenses || 0,
+        revenues: summary.total_revenues ?? summary.revenues ?? 0,
+        encaissements: summary.total_encaissements ?? summary.encaissements ?? 0,
+        creances: summary.total_creances ?? summary.creances ?? 0,
+        expenses: summary.total_expenses ?? summary.expenses ?? 0,
         transactions: combined,
       });
 
@@ -216,9 +219,13 @@ export const FinanceScreen = ({ navigation }: any) => {
       )}
       {loadingFilters && <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginBottom: 8 }} />}
 
-      {/* Bénéfice net */}
+      {/* Bénéfice net (cumulé) */}
       <View style={[S.balance, { backgroundColor: theme.colors.primary }]}>
-        <Text style={S.balanceLabel}>{t('finance.netProfit')}</Text>
+        <Text style={S.balanceLabel}>
+          {t('finance.netProfit')}
+          {'  ·  '}
+          {selectedLot ? 'lot' : selectedFarm ? 'ferme' : 'toutes fermes'}
+        </Text>
         <Text style={[S.balanceValue, { color: benefice >= 0 ? '#1A1A1A' : '#7f1d1d' }]}>{formatCurrency(benefice)}</Text>
         <View style={S.balanceTrend}>
           <MaterialIcons name={trend >= 0 ? 'trending-up' : 'trending-down'} size={15} color="#1A1A1A" />

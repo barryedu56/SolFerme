@@ -410,6 +410,40 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
 
         period_total_expenses = float(period_standalone_expenses) + float(period_lot_investment) + float(period_feed_purchase_cost) + float(period_health_purchase_cost) + float(period_payroll_cost)
 
+        # ── Bénéfice net CUMULÉ (tout l'historique) pour le périmètre sélectionné ──
+        # Cohérent quel que soit le filtre : Toutes fermes = Σ fermes = Σ lots.
+        # Le sélecteur de période ne concerne que les graphiques et la tendance,
+        # pas les chiffres de tête (CA / dépenses / bénéfice net) qui sont réels.
+        life_sales = Sale.objects.filter(lot__in=all_lots, status='ACTIVE')
+        life_revenues = life_sales.aggregate(total=Sum('total_amount'))['total'] or 0
+        life_encaissements = life_sales.aggregate(total=Sum('amount_paid'))['total'] or 0
+        life_creances = float(life_revenues) - float(life_encaissements)
+
+        # Investissement des lots (achat des sujets + mise en place) — compté en entier
+        life_lot_investment = all_lots.aggregate(total=Sum('purchase_price'))['total'] or 0
+
+        life_feed_pq = FeedPurchase.objects.filter(status='ACTIVE')
+        life_health_pq = HealthPurchase.objects.filter(status='ACTIVE')
+        if lot_id:
+            life_feed_pq = life_feed_pq.filter(lot_id=lot_id)
+            life_health_pq = life_health_pq.filter(lot_id=lot_id)
+        else:
+            life_feed_pq = life_feed_pq.filter(farm__in=farms)
+            life_health_pq = life_health_pq.filter(farm__in=farms)
+        life_feed_cost = life_feed_pq.aggregate(total=Sum('total_price'))['total'] or 0
+        life_health_cost = life_health_pq.aggregate(total=Sum('total_price'))['total'] or 0
+
+        life_payroll_cost = Payroll.objects.filter(employee__farm__in=farms, status='ACTIVE').aggregate(total=Sum('amount_paid'))['total'] or 0
+
+        life_linked_ids = []
+        life_linked_ids.extend(FeedPurchase.objects.filter(farm__in=farms, expense__isnull=False).values_list('expense_id', flat=True))
+        life_linked_ids.extend(HealthPurchase.objects.filter(farm__in=farms, expense__isnull=False).values_list('expense_id', flat=True))
+        life_linked_ids.extend(Payroll.objects.filter(employee__farm__in=farms, expense__isnull=False).values_list('expense_id', flat=True))
+        life_standalone = Expense.objects.filter(farm__in=farms, status='ACTIVE').exclude(id__in=life_linked_ids).aggregate(total=Sum('amount'))['total'] or 0
+
+        life_total_expenses = float(life_standalone) + float(life_lot_investment) + float(life_feed_cost) + float(life_health_cost) + float(life_payroll_cost)
+        life_profit = float(life_revenues) - life_total_expenses
+
         # Revenue Trend (based on CA / total_amount)
         this_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         last_month_start = (this_month_start - timezone.timedelta(days=1)).replace(day=1)
@@ -452,6 +486,17 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
             'egg_revenues': float(egg_revenues_period),
             'chicken_revenues': float(chicken_revenues_period),
             'expenses': float(period_total_expenses),
+            # Cumulés (tout l'historique du périmètre sélectionné) — utilisés par l'écran Finance
+            'total_revenues': float(life_revenues),
+            'total_encaissements': float(life_encaissements),
+            'total_creances': float(life_creances),
+            'total_expenses': float(life_total_expenses),
+            'total_profit': float(life_profit),
+            'total_lot_investment': float(life_lot_investment),
+            'total_feed_cost': float(life_feed_cost),
+            'total_health_cost': float(life_health_cost),
+            'total_payroll_cost': float(life_payroll_cost),
+            'total_other_expenses': float(life_standalone),
             'feed_stock': float(feed_stock),
             'raw_material_stock': float(raw_material_stock),
             'raw_materials_detail': raw_materials_detail,
@@ -522,7 +567,9 @@ class FarmViewSet(IdempotentCreateMixin, viewsets.ModelViewSet):
 
         if user.role != 'PROPRIETAIRE':
             # Remove sensitive financial data for non-owners
-            sensitive_keys = ['revenues', 'encaissements', 'creances', 'egg_revenues', 'chicken_revenues', 'expenses', 'feeding_cost', 'health_cost', 'total_bonuses', 'payroll_mass']
+            sensitive_keys = ['revenues', 'encaissements', 'creances', 'egg_revenues', 'chicken_revenues', 'expenses', 'feeding_cost', 'health_cost', 'total_bonuses', 'payroll_mass',
+                              'total_revenues', 'total_encaissements', 'total_creances', 'total_expenses', 'total_profit',
+                              'total_lot_investment', 'total_feed_cost', 'total_health_cost', 'total_payroll_cost', 'total_other_expenses']
             for key in sensitive_keys:
                 summary.pop(key, None)
 
