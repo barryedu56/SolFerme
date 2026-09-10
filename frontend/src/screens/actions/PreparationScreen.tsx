@@ -11,6 +11,13 @@ import { repositoryProvider } from '../../repositories';
 import { MaterialIcons } from '@expo/vector-icons';
 import { getErrorMessage } from '../../utils/errors';
 import { useBreakpoint } from '../../hooks/useBreakpoint';
+import { toast } from '../../utils/toast';
+
+// RNW ne rend pas les Alert de manière fiable → toast sur web, Alert sur natif.
+const notify = (title: string, msg: string, kind: 'error' | 'success' = 'error') => {
+  if (Platform.OS === 'web') { kind === 'success' ? toast.success(title, msg) : toast.error(title, msg); }
+  else Alert.alert(title, msg);
+};
 
 export const PreparationScreen = ({ route, navigation }: any) => {
   const { theme } = useTheme();
@@ -118,33 +125,38 @@ export const PreparationScreen = ({ route, navigation }: any) => {
     if (loading) return;
 
     if (!farmId) {
-      Alert.alert(t('common.error'), "Ferme introuvable pour ce mélange.");
+      notify(t('common.error'), "Ferme introuvable pour ce mélange.");
       return;
     }
 
     const finalQty = parseFloat(totalQuantity);
     if (!date || !feedName || !totalQuantity || ingredients.some(i => !i.material_name || !i.quantity_used_kg)) {
-      Alert.alert(t('common.error'), t('feed.fillRequiredPreparation'));
+      notify(t('common.error'), t('feed.fillRequiredPreparation'));
       return;
     }
 
     if (finalQty <= 0) {
-      Alert.alert(t('common.error'), t('common.invalidQuantity'));
+      notify(t('common.error'), t('common.invalidQuantity'));
       return;
     }
 
-    // Validation: vérifier le stock de matières premières pour chaque ingrédient
-    for (const ing of ingredients) {
-      const materialName = ing.material_name;
-      const neededQty = parseFloat(ing.quantity_used_kg);
-      const material = rawMaterials.find((m: any) => m.feed_type === materialName);
-      const available = material ? parseFloat(material.quantity_kg || '0') : 0;
-      if (available < neededQty) {
-        Alert.alert(
-          t('common.error'),
-          `Stock insuffisant pour "${materialName}". Disponible: ${available} kg, requis: ${neededQty} kg.`
-        );
-        return;
+    // Pré-vérification du stock de matières premières — SEULEMENT à la création.
+    // En édition, les ingrédients actuels ont déjà été déduits du stock ; le
+    // contrôle client-side (qui ne les recrédite pas) rejetterait à tort un
+    // simple changement de date. Le backend valide correctement (exclude_id).
+    if (!isEdit) {
+      for (const ing of ingredients) {
+        const materialName = ing.material_name;
+        const neededQty = parseFloat(ing.quantity_used_kg);
+        const material = rawMaterials.find((m: any) => m.feed_type === materialName);
+        const available = material ? parseFloat(material.quantity_kg || '0') : 0;
+        if (available < neededQty) {
+          notify(
+            t('common.error'),
+            `Stock insuffisant pour "${materialName}". Disponible: ${available} kg, requis: ${neededQty} kg.`
+          );
+          return;
+        }
       }
     }
 
@@ -164,14 +176,14 @@ export const PreparationScreen = ({ route, navigation }: any) => {
     try {
       if (isEdit) {
         await repositoryProvider.api.put(`/feed-preparations/${item.id}/`, payload);
-        Alert.alert(t('common.success'), t('feed.updated'));
+        notify(t('common.success'), t('feed.updated'), 'success');
       } else {
         await repositoryProvider.api.post('/feed-preparations/', payload);
-        Alert.alert(t('common.success'), t('feed.preparationSuccess'));
+        notify(t('common.success'), t('feed.preparationSuccess'), 'success');
       }
       navigation.goBack();
     } catch (e: any) {
-      Alert.alert(t('common.actionImpossible'), getErrorMessage(e, t('feed.preparationError')));
+      notify(t('common.actionImpossible'), getErrorMessage(e, t('feed.preparationError')));
     } finally {
       setLoading(false);
     }
