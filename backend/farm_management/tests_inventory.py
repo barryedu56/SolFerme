@@ -415,6 +415,46 @@ class StockGeneralParFermeTestCase(TestCase):
         })
         self.assertFalse(s2.is_valid())
 
+    def test_melange_ne_peut_pas_antidater_avant_lachat_de_la_matiere(self):
+        """Reproduit le bug « Coquillage » : un mélange daté AVANT l'achat de sa
+        matière première ne doit plus pouvoir être créé — sinon la ferme se
+        retrouve avec un trou chronologique qui bloque ensuite tout nouvel achat
+        de cette matière (le contrôle chronologique des achats le détecte)."""
+        from datetime import date
+        from .serializers import FeedPreparationSerializer, FeedPurchaseSerializer
+        # Achat de Coquillage le 15/07 (après la date du mélange qu'on va tenter)
+        purchase = FeedPurchaseSerializer(data={
+            'farm': self.farm.id, 'feed_type': 'Coquillage', 'quantity_kg': 100,
+            'total_price': 500, 'date': date(2026, 7, 15).isoformat(),
+        })
+        self.assertTrue(purchase.is_valid(), purchase.errors)
+        purchase.save(created_by=self.user)
+
+        # Mélange antidaté au 10/07 (avant l'achat) utilisant 6kg de Coquillage → refusé
+        prep = FeedPreparationSerializer(data={
+            'lot': self.lotA.id, 'feed_name': 'Ponte', 'quantity_produced_kg': 6,
+            'date': date(2026, 7, 10).isoformat(),
+            'ingredients': [{'material_name': 'Coquillage', 'quantity_used_kg': 6}],
+        })
+        self.assertFalse(prep.is_valid())
+        self.assertIn('Coquillage', str(prep.errors))
+
+        # Une fois daté APRÈS l'achat (ou le même jour), il passe
+        prep2 = FeedPreparationSerializer(data={
+            'lot': self.lotA.id, 'feed_name': 'Ponte', 'quantity_produced_kg': 6,
+            'date': date(2026, 7, 20).isoformat(),
+            'ingredients': [{'material_name': 'Coquillage', 'quantity_used_kg': 6}],
+        })
+        self.assertTrue(prep2.is_valid(), prep2.errors)
+        prep2.save(created_by=self.user)
+
+        # Et un NOUVEL achat de Coquillage n'est plus bloqué par le mélange existant
+        purchase2 = FeedPurchaseSerializer(data={
+            'farm': self.farm.id, 'feed_type': 'Coquillage', 'quantity_kg': 10,
+            'total_price': 50, 'date': date(2026, 8, 1).isoformat(),
+        })
+        self.assertTrue(purchase2.is_valid(), purchase2.errors)
+
     def test_melange_activity_log_uses_business_date(self):
         """Un mélange antidaté apparaît dans l'historique à SA date, pas à aujourd'hui."""
         from datetime import date

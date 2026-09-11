@@ -132,6 +132,29 @@ def validate_inventory_integrity(farm_or_lot, item_type, name, exclude_id=None, 
         purchases = list(HealthPurchase.objects.filter(farm=farm, product_name=name, status='ACTIVE').order_by('date', 'id'))
         usages = list(HealthRecord.objects.filter(lot__farm=farm, product_name=name, status='ACTIVE').order_by('date', 'id'))
 
+    return _chronological_stock_sweep(farm, item_type, name, purchases, usages, exclude_id, mock_item, is_purchase)
+
+
+def validate_raw_material_integrity(farm, material_name, exclude_id=None, mock_item=None, is_purchase=True):
+    """Contrôle chronologique dédié aux MATIÈRES PREMIÈRES (feed_type des achats /
+    ingrédients de mélange), sans passer par l'aiguillage « aliment préparé » de
+    `validate_inventory_integrity` — qui interpréterait à tort une matière première
+    dont le nom coïnciderait avec un mélange existant comme une distribution
+    d'aliment préparé. Utilisé pour les ACHATS de matière première (is_purchase=True)
+    et pour la consommation d'un INGRÉDIENT de mélange (is_purchase=False)."""
+    if farm is None:
+        return True, None
+    purchases = list(FeedPurchase.objects.filter(farm=farm, feed_type=material_name, status='ACTIVE').order_by('date', 'id'))
+    prep_ings = FeedPreparationIngredient.objects.filter(
+        preparation__farm=farm, material_name=material_name, preparation__status='ACTIVE'
+    ).select_related('preparation')
+    usages = [_MockUsage(pi.preparation.date, float(pi.quantity_used_kg), pi.id) for pi in prep_ings]
+    return _chronological_stock_sweep(farm, 'FEED', material_name, purchases, usages, exclude_id, mock_item, is_purchase)
+
+
+def _chronological_stock_sweep(farm, item_type, name, purchases, usages, exclude_id, mock_item, is_purchase):
+    """Balayage chronologique commun achats(IN)/consommation(OUT), triés par date
+    puis IN-avant-OUT puis id. Rejette dès que le stock cumulé passe sous 0."""
     if exclude_id:
         if is_purchase: purchases = [p for p in purchases if p.id != exclude_id]
         else: usages = [u for u in usages if u.id != exclude_id]
@@ -1030,26 +1053,33 @@ class FeedPreparationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Ce lot est terminé. Réactivez-le pour effectuer des modifications.")
         ingredients = data.get('ingredients', [])
 
-        from .models import FeedInventory, FeedPreparationIngredient
-        # En édition, les ingrédients existants ont déjà été déduits du stock :
-        # on les recrédite avant de vérifier la disponibilité des nouveaux.
-        already_consumed = {}
+        from .models import FeedPreparationIngredient
+        # Contrôle CHRONOLOGIQUE (comme achats/distributions) au lieu d'une simple
+        # comparaison au stock instantané : sinon un mélange antidaté pouvait passer
+        # (le stock ACTUEL de la matière suffit) alors qu'à SA date métier la matière
+        # n'avait pas encore été achetée — la ferme se retrouvait avec un historique
+        # incohérent qui bloquait ensuite tout nouvel achat de cette même matière
+        # (le contrôle chronologique des achats détectait le trou dans le passé).
+        prep_date = data.get('date', self.instance.date if self.instance else None)
+
+        # En édition, recréditer les anciennes lignes d'ingrédient (une par matière —
+        # l'UI ne permet pas de dupliquer un ingrédient dans un même mélange).
+        old_ing_by_material: dict = {}
         if self.instance:
             for ing in FeedPreparationIngredient.objects.filter(preparation=self.instance):
-                already_consumed[ing.material_name] = already_consumed.get(ing.material_name, 0) + float(ing.quantity_used_kg)
+                old_ing_by_material.setdefault(ing.material_name, ing.id)
 
         for ing in ingredients:
             material_name = ing.get('material_name')
             qty_needed = float(ing.get('quantity_used_kg') or 0)
-
-            # Validation au niveau FERME (stock général de matières premières)
-            inventory = FeedInventory.objects.filter(farm=farm, feed_type=material_name).first()
-            available = float(inventory.quantity_kg) if inventory else 0
-            available += already_consumed.get(material_name, 0)
-            if available + 0.01 < qty_needed:
-                raise serializers.ValidationError(
-                    f"Stock insuffisant pour {material_name} dans la ferme. Disponible: {available}kg, requis: {qty_needed}kg"
-                )
+            mock = _MockUsage(prep_date, qty_needed)
+            ok, err = validate_raw_material_integrity(
+                farm, material_name,
+                exclude_id=old_ing_by_material.get(material_name),
+                mock_item=mock, is_purchase=False,
+            )
+            if not ok:
+                raise serializers.ValidationError(err)
         return data
 
     def create(self, validated_data):

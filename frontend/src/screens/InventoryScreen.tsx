@@ -198,9 +198,9 @@ export const InventoryScreen = ({ navigation }: any) => {
   const submitRestock = async () => {
     if (!detail || qaSaving || detail.kind === 'prepared') return;
     const farmId = restockFarmId(detail.item);
-    if (!farmId) { Alert.alert(t('common.error'), "Ferme introuvable pour ce produit."); return; }
+    if (!farmId) { toast.error(t('common.error'), "Ferme introuvable pour ce produit."); return; }
     if (!(qaEffectiveQty > 0) || !(qaComputedTotal > 0)) {
-      Alert.alert(t('common.error'), 'Renseignez une quantité et un prix valides.');
+      toast.error(t('common.error'), 'Renseignez une quantité et un prix valides.');
       return;
     }
     setQaSaving(true);
@@ -223,7 +223,7 @@ export const InventoryScreen = ({ navigation }: any) => {
       setDetail(null);
       fetchData();
     } catch (e: any) {
-      Alert.alert(t('common.actionImpossible'), getErrorMessage(e, 'Échec du réapprovisionnement.'));
+      toast.error(t('common.actionImpossible'), getErrorMessage(e, 'Échec du réapprovisionnement.'));
     } finally {
       setQaSaving(false);
     }
@@ -234,7 +234,7 @@ export const InventoryScreen = ({ navigation }: any) => {
   const refaireMelange = async (item: any) => {
     if (refaireLoading) return;
     const farmId = restockFarmId(item);
-    if (!farmId) { Alert.alert(t('common.error'), "Ferme introuvable pour ce mélange."); return; }
+    if (!farmId) { toast.error(t('common.error'), "Ferme introuvable pour ce mélange."); return; }
     setRefaireLoading(true);
     try {
       const res = await repositoryProvider.api.get<any[]>('/feed-preparations/', { params: { farm: farmId } });
@@ -245,7 +245,7 @@ export const InventoryScreen = ({ navigation }: any) => {
         .sort((a: any, b: any) => String(b.date || b.created_at || '').localeCompare(String(a.date || a.created_at || '')));
       const src = matches[0] || list.filter((p: any) => p.feed_name === item.feed_name).sort((a: any, b: any) => String(b.date || '').localeCompare(String(a.date || '')))[0];
       if (!src) {
-        Alert.alert(t('common.info'), "Aucun mélange précédent trouvé pour cet aliment. Créez-en un depuis Alimentation → Préparation.");
+        toast.info(t('common.info'), "Aucun mélange précédent trouvé pour cet aliment. Créez-en un depuis Alimentation → Préparation.");
         return;
       }
       setDetail(null);
@@ -262,7 +262,7 @@ export const InventoryScreen = ({ navigation }: any) => {
         },
       });
     } catch (e: any) {
-      Alert.alert(t('common.error'), getErrorMessage(e, "Impossible de récupérer le dernier mélange."));
+      toast.error(t('common.error'), getErrorMessage(e, "Impossible de récupérer le dernier mélange."));
     } finally {
       setRefaireLoading(false);
     }
