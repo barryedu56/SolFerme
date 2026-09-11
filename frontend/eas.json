@@ -8,6 +8,7 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "channel": "development",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
         "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",
@@ -22,6 +23,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
         "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",
@@ -36,6 +38,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_API_URL": "https://ahmad5.pythonanywhere.com/api",
         "EXPO_PUBLIC_SENTRY_DSN": "https://348011a5a2790e4435177db6dbde10cc@o4512033488699392.ingest.de.sentry.io/4512034243674192",

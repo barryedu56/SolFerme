@@ -5,6 +5,16 @@ export default {
     owner: "solferme",
     scheme: "solferme",
     version: "1.0.0",
+    // Mises à jour OTA (EAS Update) : un build envoie ses mises à jour JS tant que
+    // `version` ci-dessus ne change pas. Toute modification NATIVE (nouveau module,
+    // permission, plugin…) exige de monter `version` ET de refaire un vrai build —
+    // sinon l'app croit à tort qu'une mise à jour OTA suffit.
+    runtimeVersion: {
+      policy: "appVersion"
+    },
+    updates: {
+      url: "https://u.expo.dev/f267cdd8-f002-4d57-8a2c-ed67cc560e5d"
+    },
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "light",
