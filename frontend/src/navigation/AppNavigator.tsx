@@ -599,6 +599,9 @@ export const AppNavigator = () => {
               <Stack.Screen name="Appro" component={ApproScreen} />
               {/* Préparation accessible aussi hors du stack Fermes (ex: depuis Stock → « Refaire ce mélange ») */}
               <Stack.Screen name="Preparation" component={PreparationScreen} />
+              {/* Ventes accessibles aussi hors du stack Fermes (ex: depuis Finance → Historique → Modifier) */}
+              <Stack.Screen name="VenteEdit" component={ActionVenteScreen} />
+              <Stack.Screen name="VentePoulesEdit" component={ActionVentePoulesScreen} />
               <Stack.Screen name="HealthAlertDetail" component={HealthAlertDetailScreen} />
               <Stack.Screen name="HealthAlerts" component={HealthAlertsScreen} />
               <Stack.Screen name="Inventory" component={InventoryScreen} />

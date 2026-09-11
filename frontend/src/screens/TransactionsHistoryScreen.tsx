@@ -9,6 +9,7 @@ import { isNormalEgg, isBrokenEgg } from '../utils/inventory';
 import { SalePaymentsModal } from '../components/SalePaymentsModal';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { Screen, ScreenHeader, useContentWidth, Card, Chip, Badge, EmptyState, space, radius } from '../components/ui';
+import { toast } from '../utils/toast';
 
 export const TransactionsHistoryScreen = ({ navigation }: any) => {
   const { theme } = useTheme();
@@ -244,9 +245,9 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
         await repositoryProvider.api.delete(`/${item.module}/${item.original.id}/`);
         setModalVisible(false);
         fetchTransactions();
-        Alert.alert(t('common.success'), t('finance.cancelSuccess'));
+        toast.success(t('common.success'), t('finance.cancelSuccess'));
       } catch (error: any) {
-        Alert.alert(t('common.error'), error.response?.data?.detail || t('finance.cancelError'));
+        toast.error(t('common.error'), error.response?.data?.detail || t('finance.cancelError'));
       } finally {
         setLoading(false);
       }
@@ -278,6 +279,46 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
   const showDetails = (item: any) => {
     setSelectedTransaction(item);
     setModalVisible(true);
+  };
+
+  // Modification d'une opération depuis l'historique global (absente jusqu'ici :
+  // on ne pouvait que consulter le détail ou annuler). `item.module` et
+  // `item.original` viennent directement de fetchTransactions — pas besoin de
+  // ré-interpréter un libellé texte comme dans LotHistoryScreen.
+  const handleEdit = (item: any) => {
+    const { original, module, farmId, lotId } = item;
+    const params: any = { item: original, farmId };
+    let screen = '';
+
+    switch (module) {
+      case 'feed-purchases':
+        screen = 'Purchase';
+        params.type = 'feed';
+        break;
+      case 'health-purchases':
+        screen = 'Purchase';
+        params.type = 'health';
+        break;
+      case 'sales':
+        screen = original.product_type === 'CHICKEN' ? 'VentePoulesEdit' : 'VenteEdit';
+        params.lotId = lotId;
+        break;
+      case 'expenses':
+        screen = 'AddExpense';
+        break;
+      case 'payrolls':
+        toast.info(t('common.info'), "La modification d'un salaire depuis l'historique sera bientôt disponible. Annulez-le et recréez-le.");
+        return;
+      case 'sale-payments':
+        toast.info(t('common.info'), 'Pour modifier un paiement de vente, rendez-vous sur la carte de la vente correspondante et gérez ses paiements.');
+        return;
+      default:
+        toast.info(t('common.info'), "La modification de ce type d'opération n'est pas encore supportée.");
+        return;
+    }
+
+    setModalVisible(false);
+    navigation.navigate(screen, params);
   };
 
   const openPayments = (sale: any) => {
@@ -366,13 +407,22 @@ export const TransactionsHistoryScreen = ({ navigation }: any) => {
         )}
 
         {selectedTransaction.status === 'ACTIF' && (
-          <TouchableOpacity
-            style={styles.cancelButtonLarge}
-            onPress={() => handleCancel(selectedTransaction)}
-          >
-            <MaterialIcons name="cancel" size={20} color="#fff" />
-            <Text style={styles.cancelButtonLargeText}>{t('finance.cancelTransactionBtn')}</Text>
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 30, marginBottom: 20 }}>
+            <TouchableOpacity
+              style={[styles.cancelButtonLarge, styles.editButtonLarge, { flex: 1, marginTop: 0, marginBottom: 0 }]}
+              onPress={() => handleEdit(selectedTransaction)}
+            >
+              <MaterialIcons name="edit" size={20} color="#fff" />
+              <Text style={styles.cancelButtonLargeText}>{t('common.edit')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.cancelButtonLarge, { flex: 1, marginTop: 0, marginBottom: 0 }]}
+              onPress={() => handleCancel(selectedTransaction)}
+            >
+              <MaterialIcons name="cancel" size={20} color="#fff" />
+              <Text style={styles.cancelButtonLargeText}>{t('finance.cancelTransactionBtn')}</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </ScrollView>
     );
@@ -729,6 +779,9 @@ const createStyles = (theme: any, isDesktop: boolean) => StyleSheet.create({
     borderRadius: 12,
     marginTop: 30,
     marginBottom: 20,
+  },
+  editButtonLarge: {
+    backgroundColor: theme.colors.primary,
   },
   cancelButtonLargeText: {
     color: '#fff',
