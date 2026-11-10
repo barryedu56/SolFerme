@@ -19,7 +19,7 @@ après chaque changement frontend que tu veux voir en ligne.
 Depuis `frontend/` :
 
 ```bash
-npm run deploy
+EXPO_PUBLIC_API_URL=https://solferme.monbenef.com/api npm run deploy
 ```
 
 Cette commande enchaîne :
@@ -40,7 +40,8 @@ Durée : ~3-4 min. À la fin, l'URL et le `Current Version ID` s'affichent.
 ## Variables
 
 `npm run deploy` lit `frontend/.env` :
-- `EXPO_PUBLIC_API_URL` → l'API backend (PythonAnywhere)
+- `EXPO_PUBLIC_API_URL` → l'API backend. ⚠️ Le `.env` local pointe souvent vers une IP de dev :
+  pour la prod, lancer `EXPO_PUBLIC_API_URL=https://solferme.monbenef.com/api npm run deploy`
 - `EXPO_PUBLIC_SENTRY_DSN` → optionnel ; sinon le DSN par défaut dans `App.tsx`
   s'applique (non sensible).
 
