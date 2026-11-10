@@ -71,6 +71,45 @@ def validate_egg_stock_integrity(lot, product_type, exclude_id=None, mock_item=N
             return False, f"Le {it['date'].strftime('%d/%m/%Y')}, stock de casiers {label} insuffisant pour valider cette opération."
     return True, None
 
+def _first_new_shortage(baseline, proposed):
+    """Compare deux historiques triés [{'date','qty','type','key'}] (IN/OUT).
+
+    Renvoie le premier événement de `proposed` où le stock cumulé passe sous 0
+    ET devient pire qu'avant la modification (`baseline` au même instant), ou
+    None. Ainsi un historique déjà incohérent (p. ex. des mélanges datés avant
+    les achats de leurs ingrédients) ne bloque plus les opérations qui n'y sont
+    pour rien — un achat, qui ne fait qu'ajouter du stock, passe toujours —
+    tandis qu'une opération qui crée ou aggrave un manque reste refusée."""
+    from bisect import bisect_right
+    keys, cumul, stock = [], [], 0.0
+    for it in baseline:
+        stock += it['qty'] if it['type'] == 'IN' else -it['qty']
+        keys.append(it['key'])
+        cumul.append(stock)
+    stock = 0.0
+    for it in proposed:
+        stock += it['qty'] if it['type'] == 'IN' else -it['qty']
+        if stock < -0.01:
+            i = bisect_right(keys, it['key'])
+            before = cumul[i - 1] if i else 0.0
+            if stock < min(0.0, before) - 0.01:
+                return it, stock
+    return None
+
+
+def _timeline(ins, outs, in_qty, out_qty):
+    """Historique trié (date, entrées avant sorties, id) pour `_first_new_shortage`."""
+    combined = []
+    for p in ins:
+        combined.append({'date': p.date, 'qty': float(in_qty(p)), 'type': 'IN', 'id': getattr(p, 'id', 0)})
+    for u in outs:
+        combined.append({'date': u.date, 'qty': float(out_qty(u)), 'type': 'OUT', 'id': getattr(u, 'id', 0)})
+    for it in combined:
+        it['key'] = (it['date'], 0 if it['type'] == 'IN' else 1, it['id'] or float('inf'))
+    combined.sort(key=lambda x: x['key'])
+    return combined
+
+
 class _MockUsage:
     """Petit objet-usage synthétique pour les balayages chronologiques."""
     def __init__(self, date, qty, _id=0):
@@ -154,38 +193,30 @@ def validate_raw_material_integrity(farm, material_name, exclude_id=None, mock_i
 
 def _chronological_stock_sweep(farm, item_type, name, purchases, usages, exclude_id, mock_item, is_purchase):
     """Balayage chronologique commun achats(IN)/consommation(OUT), triés par date
-    puis IN-avant-OUT puis id. Rejette dès que le stock cumulé passe sous 0."""
+    puis IN-avant-OUT puis id. Rejette si la modification fait passer le stock
+    cumulé sous 0 là où il ne l'était pas déjà (voir `_first_new_shortage`)."""
+    qty = (lambda x: x.quantity_kg) if item_type == 'FEED' else (lambda x: x.quantity)
+    baseline = _timeline(purchases, usages, qty, qty)
     if exclude_id:
         if is_purchase: purchases = [p for p in purchases if p.id != exclude_id]
         else: usages = [u for u in usages if u.id != exclude_id]
     if mock_item:
-        if is_purchase: purchases.append(mock_item)
-        else: usages.append(mock_item)
+        if is_purchase: purchases = purchases + [mock_item]
+        else: usages = usages + [mock_item]
+    proposed = _timeline(purchases, usages, qty, qty)
 
-    combined = []
-    for p in purchases:
-        qty_in = float(p.quantity_kg if item_type == 'FEED' else p.quantity)
-        combined.append({'date': p.date, 'qty': qty_in, 'type': 'IN', 'id': getattr(p, 'id', 0)})
-    for u in usages:
-        qty = float(u.quantity_kg if item_type == 'FEED' else u.quantity)
-        combined.append({'date': u.date, 'qty': qty, 'type': 'OUT', 'id': getattr(u, 'id', 0)})
-
-    combined.sort(key=lambda x: (x['date'], 0 if x['type'] == 'IN' else 1, x['id'] or float('inf')))
-    stock = 0.0
-    for it in combined:
-        if it['type'] == 'IN': stock += it['qty']
-        else: stock -= it['qty']
-        if stock < -0.01:
-            if item_type == 'FEED':
-                unite = "kg"
-            else:
-                unite = "unités"
-                try:
-                    inv = HealthInventory.objects.filter(farm=farm, product_name=name).first()
-                    if inv: unite = inv.unit
-                except: pass
-            msg = f"Le {it['date'].strftime('%d/%m/%Y')}, stock de '{name}' insuffisant ({stock + it['qty']:.1f} {unite} disponibles, {it['qty']:.1f} requis)."
-            return False, msg
+    found = _first_new_shortage(baseline, proposed)
+    if found:
+        it, stock = found
+        if item_type == 'FEED':
+            unite = "kg"
+        else:
+            unite = "unités"
+            try:
+                inv = HealthInventory.objects.filter(farm=farm, product_name=name).first()
+                if inv: unite = inv.unit
+            except: pass
+        return False, f"Le {it['date'].strftime('%d/%m/%Y')}, stock de '{name}' insuffisant ({stock + it['qty']:.1f} {unite} disponibles, {it['qty']:.1f} requis)."
     return True, None
 
 def validate_prepared_feed_integrity(farm_or_lot, feed_name, exclude_id=None, mock_item=None, is_prod=True, lot=None):
@@ -210,27 +241,19 @@ def validate_prepared_feed_integrity(farm_or_lot, feed_name, exclude_id=None, mo
             .exclude(lot_id__in=reserved_lot_ids).order_by('date', 'id')
         )
 
+    baseline = _timeline(prods, distributions, lambda p: p.quantity_produced_kg, lambda d: d.quantity_kg)
     if exclude_id:
         if is_prod: prods = [p for p in prods if p.id != exclude_id]
         else: distributions = [d for d in distributions if d.id != exclude_id]
-
     if mock_item:
-        if is_prod: prods.append(mock_item)
-        else: distributions.append(mock_item)
+        if is_prod: prods = prods + [mock_item]
+        else: distributions = distributions + [mock_item]
+    proposed = _timeline(prods, distributions, lambda p: p.quantity_produced_kg, lambda d: d.quantity_kg)
 
-    combined = []
-    for p in prods:
-        combined.append({'date': p.date, 'qty': float(p.quantity_produced_kg), 'type': 'IN', 'id': getattr(p, 'id', 0)})
-    for d in distributions:
-        combined.append({'date': d.date, 'qty': float(d.quantity_kg), 'type': 'OUT', 'id': getattr(d, 'id', 0)})
-
-    combined.sort(key=lambda x: (x['date'], 0 if x['type'] == 'IN' else 1, x['id'] or float('inf')))
-    stock = 0.0
-    for it in combined:
-        if it['type'] == 'IN': stock += it['qty']
-        else: stock -= it['qty']
-        if stock < -0.01:
-            return False, f"Le {it['date'].strftime('%d/%m/%Y')}, stock de '{feed_name}' insuffisant ({stock + it['qty']:.1f} kg disponibles, {it['qty']:.1f} requis)."
+    found = _first_new_shortage(baseline, proposed)
+    if found:
+        it, stock = found
+        return False, f"Le {it['date'].strftime('%d/%m/%Y')}, stock de '{feed_name}' insuffisant ({stock + it['qty']:.1f} kg disponibles, {it['qty']:.1f} requis)."
     return True, None
 
 # --- SERIALIZERS ---
