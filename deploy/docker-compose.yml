@@ -1,0 +1,111 @@
+# Production SolFerme sur le serveur de Bénef (Hetzner) : MySQL + API Django
+# + rappels + sauvegarde. Le HTTPS est fait par le Caddy de Bénef, qui joint
+# l'API par le réseau Docker « deploy_default ». Voir DEPLOIEMENT_SERVEUR.md.
+#
+#   cd /root/SolFerme/deploy && docker compose up -d --build
+
+name: solferme
+
+services:
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-solferme}
+      MYSQL_USER: ${DB_USER:-solferme}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD manquant dans deploy/.env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD manquant dans deploy/.env}
+    # Réglages « petite machine » : la base est minuscule, on garde la RAM pour Bénef.
+    command:
+      - --performance-schema=OFF
+      - --innodb-buffer-pool-size=64M
+      - --max-connections=40
+      - --skip-name-resolve
+    volumes:
+      - mysqldata:/var/lib/mysql
+    # Nom unique : sur le réseau partagé avec Bénef, « db » désigne SA base PostgreSQL.
+    networks:
+      default:
+        aliases: [solferme-db]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    # Jamais exposée sur Internet : seulement depuis le serveur (tunnel SSH).
+    ports:
+      - "127.0.0.1:3306:3306"
+
+  backend:
+    build: ../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: solferme-db
+      DB_PORT: "3306"
+      DB_INIT_COMMAND: "SET sql_mode='STRICT_TRANS_TABLES'"
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: ${SOLFERME_DOMAIN:?SOLFERME_DOMAIN manquant}
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://${SOLFERME_DOMAIN}
+      # Caddy fait déjà la redirection HTTP -> HTTPS.
+      DJANGO_SECURE_SSL_REDIRECT: "False"
+      SERVE_MEDIA: "True"
+    volumes:
+      - media:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      default:
+      benef:
+        aliases: [solferme-backend]
+
+  # Rappels : notifications push + marquage en retard, toutes les 10 minutes
+  # (remplace la tâche « always-on » de PythonAnywhere).
+  scheduler:
+    build: ../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: solferme-db
+      DB_PORT: "3306"
+      DB_INIT_COMMAND: "SET sql_mode='STRICT_TRANS_TABLES'"
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: ${SOLFERME_DOMAIN}
+    command: >
+      sh -c 'until python manage.py migrate --check >/dev/null 2>&1; do sleep 10; done;
+      while true; do
+        python manage.py process_reminders;
+        sleep 600;
+      done'
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Sauvegarde MySQL chaque nuit vers 2 h, 14 jours gardés dans deploy/backups/
+  # (copiés ensuite sur Google Drive par /root/sauvegarde-drive.sh).
+  backup:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_PWD: ${DB_PASSWORD}
+      DB_USER: ${DB_USER:-solferme}
+      DB_NAME: ${DB_NAME:-solferme}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+      - ./backup.sh:/backup.sh:ro
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+networks:
+  # Réseau créé par le docker compose de Bénef (/root/B-nef/deploy).
+  benef:
+    external: true
+    name: deploy_default
+
+volumes:
+  mysqldata:
+  media:

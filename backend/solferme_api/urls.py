@@ -18,8 +18,19 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from django.urls import re_path
+from django.views.static import serve
+import os
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('farm_management.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+# En production (DEBUG=False), `static()` ne sert rien. Sur le serveur Hetzner,
+# le reverse-proxy (Caddy de Bénef) n'a pas accès aux fichiers de SolFerme :
+# Django sert donc lui-même les photos de profil (trafic très faible).
+if not settings.DEBUG and os.environ.get('SERVE_MEDIA') == 'True':
+    urlpatterns += [
+        re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    ]
