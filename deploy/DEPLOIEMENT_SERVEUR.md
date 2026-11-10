@@ -51,3 +51,15 @@ gunzip -c backups/solferme_AAAA-MM-JJ_HHMM.sql.gz \
   | docker compose exec -T db sh -c 'mysql --default-character-set=utf8mb4 -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
 docker compose start backend scheduler
 ```
+
+## E-mails (mot de passe oublié, formulaire de contact)
+
+Envoyés via **Brevo**, avec l'expéditeur `SolFerme <noreply@monbenef.com>` (le domaine est
+authentifié chez Brevo). Pour configurer ou changer les réglages, sur le serveur :
+
+```bash
+sh /root/SolFerme/deploy/configurer-email.sh
+```
+
+Le script propose de réutiliser le compte Brevo de Bénef, ce qui évite de retaper la clé. Il
+envoie ensuite un e-mail d'essai. Si l'essai échoue, il remet les anciens réglages.
