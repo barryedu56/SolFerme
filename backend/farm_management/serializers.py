@@ -390,6 +390,10 @@ class LotSerializer(serializers.ModelSerializer):
             'current_eggs_stock', 'current_broken_eggs_stock', 'total_casiers_produits',
             'has_data', 'lot_expenses'
         ]
+        # Calculé par Lot.save() (coût total / quantité initiale). L'app l'envoie
+        # aussi, NON arrondi (ex. 47 000 000 / 2 086 = 22531.1601…) → « no more
+        # than 10 digits » et la création du lot était refusée. Valeur client ignorée.
+        read_only_fields = ['real_cost_per_subject']
 
     def validate(self, data):
         farm = data.get('farm', self.instance.farm if self.instance else None)
