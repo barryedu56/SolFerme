@@ -36,7 +36,11 @@ services:
     ports:
       - "127.0.0.1:3306:3306"
 
-  backend:
+  # ⚠️ Ne PAS nommer ce service « backend » : sur le réseau partagé deploy_default,
+  # Docker publie le nom du service, et « backend » est déjà celui de Bénef. Le
+  # Caddy de Bénef enverrait alors une requête sur deux à SolFerme (incident du
+  # 10-11/11/2026 : Bénef « hors ligne » / « Impossible de charger tes activités »).
+  api:
     build: ../backend
     restart: unless-stopped
     env_file: .env

@@ -109,6 +109,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Trace côté serveur des écritures refusées (diagnostic des synchros).
+    'farm_management.middleware.RejectedWriteLogMiddleware',
 ]
 
 ROOT_URLCONF = 'solferme_api.urls'
@@ -299,3 +301,15 @@ else:
     SESSION_COOKIE_SECURE = False
     CSRF_COOKIE_SECURE = False
     SECURE_SSL_REDIRECT = False
+
+
+# Les refus d'écriture (voir farm_management/middleware.py) vont sur la sortie
+# standard → `docker compose logs api`.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {'console': {'class': 'logging.StreamHandler'}},
+    'loggers': {
+        'solferme.refus': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+    },
+}

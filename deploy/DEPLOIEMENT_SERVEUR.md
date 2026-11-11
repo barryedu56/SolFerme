@@ -15,7 +15,7 @@ Remplace PythonAnywhere depuis novembre 2026.
 `cd /root/SolFerme/deploy && docker compose ps`
 
 - **db** : MySQL 8.0 (port 3306 sur 127.0.0.1 seulement)
-- **backend** : Django + Gunicorn. Les migrations s'appliquent au démarrage
+- **api** : Django + Gunicorn. Les migrations s'appliquent au démarrage
 - **scheduler** : `process_reminders` toutes les 10 minutes (notifications push)
 - **backup** : un dump par nuit vers 2 h dans `deploy/backups/`, 14 jours gardés
 
@@ -46,10 +46,10 @@ ssh root@49.13.173.243 'cd /root/SolFerme/deploy && docker compose up -d --build
 
 ```bash
 cd /root/SolFerme/deploy
-docker compose stop backend scheduler
+docker compose stop api scheduler
 gunzip -c backups/solferme_AAAA-MM-JJ_HHMM.sql.gz \
   | docker compose exec -T db sh -c 'mysql --default-character-set=utf8mb4 -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"'
-docker compose start backend scheduler
+docker compose start api scheduler
 ```
 
 ## E-mails (mot de passe oublié, formulaire de contact)

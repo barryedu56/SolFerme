@@ -63,11 +63,11 @@ rm -f "$TMP"
 KEY=
 
 echo "Redémarrage de l'API…"
-docker compose up -d --no-build --no-deps --force-recreate backend scheduler >/dev/null 2>&1
+docker compose up -d --no-build --no-deps --force-recreate api scheduler >/dev/null 2>&1
 sleep 10
 
 echo "Envoi de l'e-mail d'essai…"
-if docker compose exec -T -e DEST="$DEST" backend python manage.py shell -c "
+if docker compose exec -T -e DEST="$DEST" api python manage.py shell -c "
 import os
 from django.core.mail import send_mail
 send_mail('SolFerme : e-mail d essai', 'Si tu lis ce message, l envoi des e-mails de SolFerme fonctionne (mot de passe oublié, contact).', None, [os.environ['DEST']])
@@ -78,7 +78,7 @@ else
   tail -n 1 .email-erreur | sed 's/xsmtpsib-[^ ]*/[clé masquée]/g'
   rm -f .email-erreur
   mv .env.avant-email .env
-  docker compose up -d --no-build --no-deps --force-recreate backend scheduler >/dev/null 2>&1
+  docker compose up -d --no-build --no-deps --force-recreate api scheduler >/dev/null 2>&1
   echo "ÉCHEC : l'envoi n'a pas marché. Les anciens réglages sont remis."
   exit 1
 fi

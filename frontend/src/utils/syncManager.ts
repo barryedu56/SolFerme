@@ -20,6 +20,7 @@ import {
   clearSyncQueue,
 } from '../database/localDatabase';
 import { emitDataChange } from './dataEvents';
+import { getErrorMessage } from './errors';
 import { getLocalReferenceTable, getTableNameFromEndpoint, mapForeignKeyFields, normalizeEndpoint, parseEndpoint } from '../utils/offlineSyncUtils';
 import { CANCELLABLE_TABLES, TABLE_MODULE_MAP, reconcileMissingInitialSalePayments } from '../repositories/dataSources/LocalApiFallback';
 
@@ -90,6 +91,14 @@ const isHttpErrorRecoverable = (error: any) => {
   if (!error?.response) return false;
   const status = error.response.status;
   return status >= 500 || status === 429;
+};
+
+/** Raison du refus serveur, gardée dans sync_queue.error_message pour que
+ * l'écran Sauvegarde puisse l'afficher (avant : seulement « Erreur client 400 »). */
+const describeRejection = (error: any): string => {
+  const status = error?.response?.status;
+  const reason = getErrorMessage(error, '');
+  return reason ? `HTTP ${status} — ${reason}`.slice(0, 500) : `Erreur client ${status}`;
 };
 
 const isClientError = (error: any) => {
@@ -240,6 +249,11 @@ const updateQueueItemsForMappedId = async (localId: number, tableName: string, s
 
 export class SyncManager {
   private isSyncing = false;
+
+  /** Une synchronisation est-elle en cours ? (écran Sauvegarde) */
+  public get busy(): boolean {
+    return this.isSyncing;
+  }
   private syncRequestedWhileBusy = false;
   private unsubscribe: (() => void) | null = null;
 
@@ -603,7 +617,7 @@ export class SyncManager {
               return;
             }
             if (isClientError(apiError)) {
-              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: `Erreur client ${apiError.response?.status}` }).catch(() => {});
+              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: describeRejection(apiError) }).catch(() => {});
               console.error(`[Sync] ❌ CREATE rejeté (4xx) ${item.endpoint}:`, apiError?.response?.data || apiError?.message);
             } else {
               await updateSyncQueueItem(item.id, { status: 'PENDING' }).catch(() => {});
@@ -655,7 +669,7 @@ export class SyncManager {
               return;
             }
             if (isClientError(apiError)) {
-              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: `Erreur client ${apiError.response?.status}` }).catch(() => {});
+              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: describeRejection(apiError) }).catch(() => {});
             } else {
               await updateSyncQueueItem(item.id, { status: 'PENDING' }).catch(() => {});
             }
@@ -713,7 +727,7 @@ export class SyncManager {
                 try { await deleteRow(item.table_name, item.local_id); } catch {}
               }
             } else if (isClientError(apiError)) {
-              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: `Erreur client ${status}` }).catch(() => {});
+              await updateSyncQueueItem(item.id, { status: 'FAILED', error_message: describeRejection(apiError) }).catch(() => {});
               console.error(`[Sync] ❌ DELETE rejeté (4xx) ${item.endpoint}`);
             } else {
               await updateSyncQueueItem(item.id, { status: 'PENDING' }).catch(() => {});
