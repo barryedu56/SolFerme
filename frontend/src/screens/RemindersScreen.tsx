@@ -10,8 +10,10 @@ import { syncReminders } from '../utils/reminderSync';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { Screen, ScreenHeader, useContentWidth, Card, Chip, Badge, EmptyState, space, radius } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const RemindersScreen = ({ navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
@@ -227,7 +229,7 @@ export const RemindersScreen = ({ navigation }: any) => {
         <ScreenHeader
           title={t('reminders.title')}
           large
-          onMenu={!isDesktop && Platform.OS !== 'web' ? () => navigation.openDrawer() : undefined}
+          onMenu={openMenu}
           actions={isOwner ? [{ icon: 'add', onPress: () => navigation.navigate('ActionReminder'), tint: theme.colors.text }] : []}
         />
       }

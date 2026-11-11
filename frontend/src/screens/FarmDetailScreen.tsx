@@ -10,8 +10,10 @@ import { formatNumber } from '../utils/formatters';
 import { calculatePerformance, getPerformanceLabel } from '../utils/performance';
 import { toast } from '../utils/toast';
 import { Screen, ScreenHeader, Card, Chip, StatTile, Badge, EmptyState, SectionHeader, space, radius } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const FarmDetailScreen = ({ route, navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { farmId, farmName } = route.params;
   const { t } = useTranslation();
   const { theme, isDarkMode } = useTheme();
@@ -206,7 +208,7 @@ export const FarmDetailScreen = ({ route, navigation }: any) => {
             ...(userRole !== 'EMPLOYE' ? [{ icon: 'edit' as const, onPress: () => navigation.navigate('CreateFarm', { farm }), tint: theme.colors.textSecondary }] : []),
             // Sur Web, la navigation passe par la DesktopSidebar : le tiroir mobile
             // n'existe plus visuellement, ce bouton ne doit donc pas y apparaître.
-            ...(Platform.OS !== 'web' ? [{ icon: 'more-vert' as const, onPress: () => navigation.openDrawer(), tint: theme.colors.text }] : []),
+            ...(openMenu ? [{ icon: 'more-vert' as const, onPress: openMenu, tint: theme.colors.text }] : []),
           ]}
         />
       }

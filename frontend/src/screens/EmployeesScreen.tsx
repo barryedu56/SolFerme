@@ -8,8 +8,10 @@ import { useBreakpoint } from '../hooks/useBreakpoint';
 import { formatCurrency } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
 import { Screen, ScreenHeader, useContentWidth, Card, StatTile, EmptyState, space, radius } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const EmployeesScreen = ({ navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { t } = useTranslation();
   const { userRole } = useAuth();
   const isOwner = userRole === 'PROPRIETAIRE';
@@ -109,6 +111,7 @@ export const EmployeesScreen = ({ navigation }: any) => {
           title={t('farms.employees')}
           subtitle={`${employees.length} ${t('farms.employees').toLowerCase()}`}
           large
+          onMenu={openMenu}
           actions={isOwner ? [{ icon: 'person-add', onPress: () => navigation.navigate('CreateEmployee', { farms }), tint: theme.colors.text }] : []}
         />
       }

@@ -7,6 +7,7 @@ import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { helpCategories, faqItems, HelpArticle, FAQItem, HelpCategory } from '../data/helpContent';
 import { Screen, ScreenHeader, Card, SectionHeader, EmptyState, space, radius, shadow } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 if (Platform.OS === 'android') {
   if (UIManager.setLayoutAnimationEnabledExperimental) {
@@ -17,6 +18,7 @@ if (Platform.OS === 'android') {
 const animate = () => LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
 
 export const HelpScreen = ({ navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { theme } = useTheme();
   const { t } = useTranslation();
   const { userRole } = useAuth();
@@ -291,7 +293,7 @@ export const HelpScreen = ({ navigation }: any) => {
   return (
     <Screen
       scroll={false}
-      header={<ScreenHeader title={t('settings.help')} large onMenu={Platform.OS !== 'web' ? () => navigation.openDrawer() : undefined} />}
+      header={<ScreenHeader title={t('settings.help')} large onMenu={openMenu} />}
     >
       <View style={styles.searchContainer}>
         <View style={[styles.searchInputWrapper, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}>

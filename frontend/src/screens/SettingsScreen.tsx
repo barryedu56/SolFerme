@@ -9,8 +9,10 @@ import { Card } from '../components/Card';
 import { MaterialIcons, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Screen, ScreenHeader, space, radius } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const SettingsScreen = ({ navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { themeMode, setThemeMode, isDarkMode, notifications, toggleNotifications, theme } = useTheme();
   const { language, setLanguage, t } = useTranslation();
   const { userName, userRole } = useAuth();
@@ -122,7 +124,7 @@ export const SettingsScreen = ({ navigation }: any) => {
     <Screen
       scroll
       width="narrow"
-      header={<ScreenHeader title={t('settings.title')} large onMenu={Platform.OS !== 'web' ? () => navigation.openDrawer() : undefined} />}
+      header={<ScreenHeader title={t('settings.title')} large onMenu={openMenu} />}
     >
       {/* Carte identité */}
       <Card style={styles.hero}>
