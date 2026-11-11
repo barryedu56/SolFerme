@@ -21,8 +21,10 @@ import { useBreakpoint } from '../hooks/useBreakpoint';
 import { getErrorMessage } from '../utils/errors';
 
 import { LinearGradient } from 'expo-linear-gradient';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const EmployeeProfileScreen = ({ navigation }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { theme, themeMode, setThemeMode, notifications, toggleNotifications, isDarkMode } = useTheme();
   const { logout, updateUser } = useAuth();
   const { t, language, setLanguage } = useTranslation();
@@ -283,8 +285,8 @@ export const EmployeeProfileScreen = ({ navigation }: any) => {
         >
           <View style={[styles.headerInner, contentW]}>
           <View style={styles.headerTop}>
-            {!isDesktop && Platform.OS !== 'web' && (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={styles.iconButton}>
+            {openMenu && (
+              <TouchableOpacity onPress={openMenu} style={styles.iconButton}>
                 <MaterialIcons name="menu" size={24} color="#000" />
               </TouchableOpacity>
             )}

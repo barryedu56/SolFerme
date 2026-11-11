@@ -17,8 +17,10 @@ import { getProfileImageUrl } from '../utils/media';
 import { getErrorMessage } from '../utils/errors';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Screen, useContentWidth, space, radius } from '../components/ui';
+import { useDrawerMenu } from '../hooks/useDrawerMenu';
 
 export const ProfileScreen = ({ navigation, route }: any) => {
+  const openMenu = useDrawerMenu(navigation);
   const { setThemeMode, isDarkMode, notifications, toggleNotifications, theme } = useTheme();
   const { setLanguage, t } = useTranslation();
   const { logout, updateUser } = useAuth();
@@ -245,8 +247,8 @@ export const ProfileScreen = ({ navigation, route }: any) => {
       <LinearGradient colors={[theme.colors.primary, theme.colors.primary + '80']} style={styles.upperHeader}>
         <View style={[styles.headerInner, contentW]}>
           <View style={styles.headerTop}>
-            {Platform.OS !== 'web' && (
-              <Pressable onPress={() => navigation.openDrawer()} style={styles.iconButton}>
+            {openMenu && (
+              <Pressable onPress={openMenu} style={styles.iconButton}>
                 <MaterialIcons name="menu" size={22} color="#000" />
               </Pressable>
             )}
