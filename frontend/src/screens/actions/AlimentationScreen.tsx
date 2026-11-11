@@ -66,8 +66,17 @@ export const ActionAlimentationScreen = ({ route, navigation }: any) => {
       // Fusionner : les entrées d'inventaire priment (elles ont quantity_kg),
       // les préparations servent de fallback (avec quantity_kg = 0 si absentes de l'inventaire)
       const invNames = new Set(invData.map((f: any) => f.feed_name));
+      // Ne proposer que les mélanges de CE lot, ou du stock général de la ferme
+      // (préparation sans lot). Avant, toutes les préparations de la ferme
+      // étaient ajoutées : les mélanges de la Salle B apparaissaient en
+      // distribuant dans la Salle A.
+      const prepLot = (p: any) => p.lot ?? p.lot_id ?? null;
+      const forThisLot = (p: any) =>
+        prepLot(p) === null || prepLot(p) === undefined || String(prepLot(p)) === String(lotId);
       const fallbackFromPreps = prepData
         .filter((p: any) => p.feed_name && !invNames.has(p.feed_name))
+        .filter((p: any) => p.status !== 'ANNULEE' && forThisLot(p))
+        .filter((p: any, i: number, arr: any[]) => arr.findIndex((q: any) => q.feed_name === p.feed_name) === i)
         .map((p: any) => ({ feed_name: p.feed_name, quantity_kg: 0, id: p.id }));
 
       setPreparedFeeds([...invData, ...fallbackFromPreps]);
