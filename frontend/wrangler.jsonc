@@ -6,6 +6,9 @@
     "enabled": true
   },
   "assets": {
-    "directory": "dist"
+    "directory": "dist",
+    // Application monopage : toute adresse inconnue (ex. /admin → console
+    // d'administration) renvoie index.html au lieu d'une erreur 404.
+    "not_found_handling": "single-page-application"
   }
 }
